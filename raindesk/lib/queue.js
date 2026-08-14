@@ -8,19 +8,30 @@
  */
 
 const MAX_JOBS = 200;
+const MAX_PENDING = 4; // bounded pending depth: each pending job pins up to ~40MB of PNG buffers
 
 class GenQueue {
   constructor() {
     this._tail = Promise.resolve();
     this._jobs = new Map();
     this._seq = 0;
+    this._pendingCount = 0;
   }
 
   /** Enqueue fn; returns the job id immediately. fn's result may carry imageUrl. */
   submit(fn, meta = {}) {
     const id = String(++this._seq);
+    if (this._pendingCount >= MAX_PENDING) {
+      // reject immediately as a settled error job (never throws; client sees
+      // a friendly message on its first poll instead of pinning buffers)
+      const job = { id, status: 'error', error: 'generation queue is full — try again in a moment', createdAt: Date.now(), meta };
+      this._jobs.set(id, job);
+      this._prune();
+      return id;
+    }
     const job = { id, status: 'pending', createdAt: Date.now(), meta };
     this._jobs.set(id, job);
+    this._pendingCount += 1;
     // _run never rejects, so the chain cannot break for later jobs.
     this._tail = this._tail.then(() => this._run(job, fn));
     this._prune();
@@ -41,6 +52,7 @@ class GenQueue {
       job.error = (e && e.message) ? String(e.message) : String(e);
       job.finishedAt = Date.now();
     }
+    this._pendingCount -= 1;
   }
 
   get(id) {
@@ -67,4 +79,4 @@ class GenQueue {
   }
 }
 
-module.exports = { GenQueue, MAX_JOBS };
+module.exports = { GenQueue, MAX_JOBS, MAX_PENDING };

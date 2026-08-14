@@ -181,7 +181,19 @@
 
   /* -------------------------------------------------------------- chat */
 
-  function sendChat(message) { return POST('/api/chat', { message }); }
+  function sendChat(message) {
+    // 125s > server's 120s pi timeout: the server's own friendly fallback
+    // reply wins when pi hangs; this client timeout only catches network-level
+    // hangs so the composer can never wedge on typing dots forever.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 125000);
+    return jsonFetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+      signal: ctl.signal,
+    }).finally(() => clearTimeout(timer));
+  }
 
   /* --------------------------------------------------- offline fallback */
 
