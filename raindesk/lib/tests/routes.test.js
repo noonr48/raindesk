@@ -241,6 +241,49 @@ test('positive flow: board, move, layer upload+serve, gen job, chat', async (t) 
   });
 });
 
+test('chat concurrency: 429 when 3 in flight; counter balances after validation throws', async (t) => {
+  // part 1: invalid body when idle → 400; the counter must stay balanced
+  // (increment-before-readJson + finally) so the next chat still succeeds.
+  await withServer(t, { agentImpl: agentEcho }, async (base) => {
+    const send = (m) => fetch(`${base}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: m }),
+    });
+    const bad = await send('');
+    assert.equal(bad.status, 400, 'empty message rejected');
+    const ok = await send('hi');
+    assert.equal(ok.status, 200, 'counter balanced after 400 path');
+    assert.equal((await ok.json()).reply, 'echo: hi');
+  });
+
+  // part 2: three concurrent chats hold all slots; the fourth gets 429;
+  // after release the counter drains and a fresh chat succeeds.
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let started = 0;
+  const slowAgent = { async chat() { started += 1; await gate; return 'ok'; } };
+  await withServer(t, { agentImpl: slowAgent }, async (base) => {
+    const send = (m) => fetch(`${base}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: m }),
+    });
+    const inFlight = [send('a'), send('b'), send('c')];
+    // deterministic gate: wait until all three have actually started (holding
+    // slots) instead of a fixed sleep — no timing flake on a loaded box.
+    const deadline = Date.now() + 5000;
+    while (started < 3 && Date.now() < deadline) await delay(5);
+    assert.equal(started, 3, 'three chats started and hold the slots');
+    const r4 = await send('d');
+    assert.equal(r4.status, 429, 'fourth concurrent chat refused');
+    assert.match((await r4.json()).error, /one moment/);
+    release();
+    for (const p of inFlight) assert.equal((await p).status, 200);
+    const r5 = await send('e');
+    assert.equal(r5.status, 200, 'slots drain after settle');
+    assert.equal(started, 4, 'exactly 4 agent invocations (three + one after)');
+  });
+});
+
 test('gen errors surface as status error with a message', async (t) => {
   const brokenComfy = {
     async runInpaint() { throw new Error('comfy exploded'); },
