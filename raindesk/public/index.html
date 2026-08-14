@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Raindesk — creative companion · After the Last Rain</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <!-- top bar: lane chip · shot title · undo -->
+  <header class="topbar">
+    <button id="laneChip" class="tb-btn" title="board lanes" aria-label="board lanes">◧</button>
+    <div id="shotTitle" class="tb-title">raindesk</div>
+    <button id="undoBtn" class="tb-btn" title="undo" aria-label="undo">↶</button>
+  </header>
+
+  <div id="hint" class="hint" aria-live="polite">board: … 👀</div>
+
+  <!-- three-line drawer handle -->
+  <button id="drawerHandle" class="drawer-handle" aria-label="open agent drawer">
+    <i></i><i></i><i></i>
+  </button>
+
+  <!-- right rail -->
+  <nav class="toolbar">
+    <button class="tool" data-tool="select" title="select / lasso"><span>≻</span><small>SELECT</small></button>
+    <button class="tool active" data-tool="pen" title="pen"><span>✒️</span><small>PEN</small></button>
+    <button class="tool" data-tool="layers" title="layers"><span>≡</span><small>LAYERS</small></button>
+  </nav>
+
+  <!-- pen popover -->
+  <div id="penpop" class="penpop">
+    <div class="row">
+      <button class="swatch on" data-color="#e07856" style="background:#e07856" aria-label="coral"></button>
+      <button class="swatch" data-color="#e8b04b" style="background:#e8b04b" aria-label="gold"></button>
+      <button class="swatch" data-color="#6f97a3" style="background:#6f97a3" aria-label="teal"></button>
+      <button class="swatch" data-color="#f3ead8" style="background:#f3ead8" aria-label="cream"></button>
+    </div>
+    <div class="row">
+      <input id="penWidth" type="range" min="1" max="24" step="1" value="4" aria-label="pen thickness">
+      <span id="penDotSize" class="pen-dot"></span>
+    </div>
+  </div>
+
+  <!-- take chip floats over the region -->
+  <div id="takeChip" class="take-chip"></div>
+
+  <!-- gen bar -->
+  <div class="genbar-wrap">
+    <div id="dock" class="commit-dock">
+      <button id="discardBtn" class="x-btn" title="discard take" aria-label="discard take">✕</button>
+      <button id="prevTake" class="ghost-btn" title="previous take" aria-label="previous take">‹</button>
+      <div id="takeLabel" class="take-label">take 1/1</div>
+      <button id="nextTake" class="ghost-btn" title="next take" aria-label="next take">›</button>
+      <button id="commitBtn" class="commit-btn">COMMIT → layer</button>
+    </div>
+    <div class="genbar">
+      <input id="prompt" type="text" placeholder="describe the change… (optional)"
+             autocomplete="off" maxlength="500">
+      <button id="genBtn" class="gen-btn">GEN</button>
+    </div>
+  </div>
+
+  <!-- layers panel -->
+  <div id="layersPanel" class="panel">
+    <h4 id="panelTitle">Layers</h4>
+    <div id="layerRows"></div>
+  </div>
+
+  <!-- lanes sheet -->
+  <div id="sheetScrim" class="sheet">
+    <div class="sheet-card" role="dialog" aria-label="board lanes">
+      <div class="sheet-head">
+        <h4>Board · lanes</h4>
+        <button id="sheetClose" class="tb-btn" aria-label="close">✕</button>
+      </div>
+      <div id="lanesList"></div>
+    </div>
+  </div>
+
+  <!-- agent drawer (chat + my gens) -->
+  <div id="drawer"></div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</div>
+
+<script src="js/canvas.js"></script>
+<script src="js/api.js"></script>
+<script src="js/chat.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
