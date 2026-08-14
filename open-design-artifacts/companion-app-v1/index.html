@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raindesk — Creative Companion · concept v1</title>
+<style>
+  :root{
+    --teal-9:#0e2129; --teal-8:#132b34; --teal-7:#1d3a46; --teal-5:#2e5666; --teal-3:#6f97a3;
+    --gold:#e8b04b; --gold-dim:#b8893a; --cream:#f3ead8; --cream-dim:#d8cdb6;
+    --coral:#e07856; --ink:#10181c;
+    --ui-font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--teal-9);color:var(--cream);font-family:var(--ui-font);padding:28px 16px 60px}
+  header.page{max-width:1200px;margin:0 auto 26px}
+  header.page h1{font-size:26px;letter-spacing:.5px;font-weight:800}
+  header.page h1 span{color:var(--gold)}
+  header.page p{color:var(--teal-3);margin-top:6px;font-size:14px;max-width:70ch;line-height:1.5}
+  .board{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;max-width:1200px;margin:0 auto}
+  .phone{width:300px;flex:0 0 auto}
+  .frame{width:300px;height:620px;border-radius:34px;border:3px solid #2a3f49;background:var(--teal-8);position:relative;overflow:hidden;box-shadow:0 18px 40px rgba(0,0,0,.45)}
+  .cap{margin-top:12px;font-size:13px;color:var(--cream-dim);line-height:1.45;padding:0 4px}
+  .cap b{color:var(--gold)}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:120px;height:22px;background:#0a1418;border-radius:0 0 14px 14px;z-index:60}
+  .statusbar{position:absolute;top:0;left:0;right:0;height:26px;display:flex;justify-content:space-between;align-items:center;padding:0 16px;font-size:10px;color:#9db6bd;z-index:50}
+  .canvas-scene{position:absolute;inset:0;background:linear-gradient(180deg,#264450 0%,#1b333d 46%,#132830 100%)}
+  /* stylized rain-city placeholder scene (SVG-drawn, no external images) */
+  .topbar{position:absolute;top:26px;left:0;right:0;height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;z-index:40}
+  .tb-btn{width:32px;height:32px;border-radius:10px;background:rgba(14,33,41,.72);border:1px solid #33505c;display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--cream-dim)}
+  .tb-title{font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--cream);background:rgba(14,33,41,.72);border:1px solid #33505c;border-radius:10px;padding:7px 12px}
+  .drawer-handle{position:absolute;left:0;top:120px;width:26px;padding:14px 5px;background:rgba(14,33,41,.85);border:1px solid #33505c;border-left:none;border-radius:0 12px 12px 0;z-index:45;display:flex;flex-direction:column;gap:5px;align-items:center}
+  .drawer-handle i{display:block;width:14px;height:2px;background:var(--gold);border-radius:2px}
+  .toolbar{position:absolute;right:10px;bottom:16px;display:flex;flex-direction:column;gap:10px;z-index:45}
+  .tool{width:46px;height:46px;border-radius:14px;background:rgba(14,33,41,.82);border:1px solid #33505c;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--cream-dim);font-size:18px;position:relative}
+  .tool small{font-size:8px;letter-spacing:.3px;margin-top:2px;color:#7d9aa2}
+  .tool.active{border-color:var(--gold);color:var(--gold);background:rgba(58,44,16,.85)}
+  .tool .dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--gold)}
+  .genbar{position:absolute;left:44px;right:72px;bottom:16px;z-index:44;display:flex;gap:8px}
+  .genbar input{flex:1;background:rgba(14,33,41,.85);border:1px solid #33505c;border-radius:12px;color:var(--cream);font-size:11px;padding:10px 12px;font-family:var(--ui-font)}
+  .genbar input::placeholder{color:#6f8b94}
+  .gen-btn{border:none;border-radius:12px;background:var(--gold);color:#241a06;font-weight:800;font-size:11px;padding:0 14px;letter-spacing:.3px}
+  .gen-btn.ghost{background:rgba(14,33,41,.85);border:1px solid var(--gold-dim);color:var(--gold)}
+  .sel{position:absolute;z-index:30}
+  .sel path{fill:rgba(232,176,75,.14);stroke:var(--gold);stroke-width:2;stroke-dasharray:7 5}
+  .overlay-patch{position:absolute;z-index:32;border:2px dashed var(--gold);background:linear-gradient(160deg,rgba(111,151,163,.55),rgba(46,86,102,.55));backdrop-filter:blur(1px);border-radius:10px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px}
+  .overlay-patch span{font-size:9px;background:rgba(14,33,41,.85);border-radius:8px;padding:3px 8px;color:var(--gold);letter-spacing:.4px}
+  .commit-dock{position:absolute;left:12px;right:64px;bottom:72px;z-index:46;display:flex;gap:8px;align-items:center}
+  .commit-btn{flex:1;border:none;border-radius:12px;background:var(--gold);color:#241a06;font-weight:800;font-size:12px;padding:12px 0;letter-spacing:.4px}
+  .x-btn{width:42px;height:42px;border-radius:12px;background:rgba(14,33,41,.85);border:1px solid #33505c;color:var(--coral);font-size:16px}
+  .drawer{position:absolute;inset:0;z-index:70;background:rgba(10,20,24,.55);display:flex}
+  .drawer-panel{width:252px;height:100%;background:var(--teal-8);border-right:1px solid #2a4450;display:flex;flex-direction:column}
+  .drawer-tabs{display:flex;gap:6px;padding:34px 10px 8px;border-bottom:1px solid #223842}
+  .dtab{flex:1;text-align:center;font-size:11px;font-weight:700;padding:8px 0;border-radius:9px;color:#7d9aa2;letter-spacing:.3px}
+  .dtab.active{background:rgba(58,44,16,.5);color:var(--gold);border:1px solid var(--gold-dim)}
+  .chat{flex:1;overflow:hidden;padding:10px;display:flex;flex-direction:column;gap:8px;justify-content:flex-end}
+  .bubble{max-width:86%;border-radius:14px;padding:8px 10px;font-size:11px;line-height:1.45}
+  .bubble.agent{background:#1d3a46;color:var(--cream);border:1px solid #2e5666;align-self:flex-start;border-bottom-left-radius:4px}
+  .bubble.user{background:#3a2c10;color:#ffe9c2;border:1px solid var(--gold-dim);align-self:flex-end;border-bottom-right-radius:4px}
+  .bubble .att{margin-top:6px;display:flex;gap:5px}
+  .bubble .att div{width:44px;height:44px;border-radius:8px;background:linear-gradient(160deg,#2e5666,#132830);border:1px solid #33505c}
+  .typing{align-self:flex-start;font-size:10px;color:#7d9aa2;padding:4px 10px}
+  .composer{display:flex;gap:6px;padding:8px 10px 14px;border-top:1px solid #223842}
+  .composer input{flex:1;background:#0e2129;border:1px solid #33505c;border-radius:11px;color:var(--cream);font-size:11px;padding:9px 10px;font-family:var(--ui-font)}
+  .composer button{width:36px;height:36px;border-radius:11px;border:none;background:var(--gold);font-size:14px}
+  /* layers screen */
+  .panel{position:absolute;left:10px;right:10px;bottom:14px;top:auto;background:rgba(16,32,39,.94);border:1px solid #33505c;border-radius:16px;z-index:47;padding:12px}
+  .panel h4{font-size:10px;letter-spacing:.6px;color:#7d9aa2;text-transform:uppercase;margin-bottom:8px}
+  .layer{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:10px;font-size:11px;color:var(--cream-dim)}
+  .layer.on{background:rgba(58,44,16,.4);border:1px solid var(--gold-dim);color:var(--cream)}
+  .layer .sw{width:30px;height:22px;border-radius:6px;border:1px solid #33505c;flex:0 0 auto}
+  .layer .eye{margin-left:auto;font-size:12px}
+  .layer .tag{font-size:8px;padding:2px 6px;border-radius:6px;background:#24404c;letter-spacing:.3px}
+  .layer .tag.temp{background:#3a2c10;color:var(--gold)}
+  .lanes{display:flex;gap:6px;margin-top:10px}
+  .lane{flex:1;text-align:center;font-size:9px;padding:7px 0;border-radius:9px;background:#1d3a46;color:#9db6bd;letter-spacing:.3px;border:1px solid #2e5666}
+  .lane.hot{border-color:var(--gold-dim);color:var(--gold)}
+  .penpop{position:absolute;top:80px;right:64px;z-index:48;background:rgba(16,32,39,.95);border:1px solid #33505c;border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px}
+  .penpop .row{display:flex;gap:6px;align-items:center}
+  .penpop .swatch{width:20px;height:20px;border-radius:50%;border:2px solid transparent}
+  .penpop .swatch.on{border-color:var(--cream)}
+  .penpop .th{flex:1;height:4px;border-radius:4px;background:#33505c;position:relative}
+  .penpop .th i{position:absolute;top:-5px;width:14px;height:14px;border-radius:50%;background:var(--gold);border:2px solid #0e2129}
+  .hint{position:absolute;top:74px;left:50%;transform:translateX(-50%);z-index:46;background:rgba(14,33,41,.9);border:1px solid #33505c;color:#9db6bd;font-size:10px;padding:6px 12px;border-radius:10px;letter-spacing:.3px}
+  footer.page{max-width:1200px;margin:30px auto 0;color:#5d7880;font-size:12px;line-height:1.6}
+</style>
+</head>
+<body>
+
+<header class="page" data-od-id="intro">
+  <h1>Raindesk <span>·</span> the creative companion — concept v1</h1>
+  <p>Phone-first concept-art studio for <b>After the Last Rain</b>. You review and draw; the agent generates, iterates and keeps you company. Full-screen canvas, three-line drawer for the agent, lasso + pen, layers with temp-overlay generations you commit when they're right. Palette worn from the film: rain-teal · lantern-gold · cream.</p>
+</header>
+
+<div class="board" data-od-id="mockups">
+
+  <!-- SCREEN 1: THE PAGE -->
+  <div class="phone" data-od-id="screen-page">
+    <div class="frame">
+      <div class="notch"></div>
+      <div class="statusbar"><span>21:04</span><span>📶 🔋</span></div>
+      <div class="canvas-scene">
+        <svg viewBox="0 0 300 620" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+          <circle cx="210" cy="150" r="60" fill="#e8b04b" opacity=".18"/>
+          <path d="M0 300 L40 260 L80 290 L120 240 L170 285 L220 250 L260 290 L300 255 L300 620 L0 620 Z" fill="#0b1a21"/>
+          <path d="M0 380 L50 350 L95 375 L140 330 L190 372 L240 340 L300 372 L300 620 L0 620 Z" fill="#0e2129"/>
+          <rect x="52" y="300" width="10" height="22" fill="#e8b04b" opacity=".8"/>
+          <rect x="86" y="330" width="8" height="18" fill="#e8b04b" opacity=".65"/>
+          <rect x="160" y="318" width="9" height="16" fill="#e8b04b" opacity=".7"/>
+          <rect x="228" y="356" width="8" height="14" fill="#e8b04b" opacity=".5"/>
+          <g stroke="#9db6bd" stroke-width="1" opacity=".25">
+            <line x1="20" y1="80" x2="14" y2="130"/><line x1="60" y1="60" x2="54" y2="110"/>
+            <line x1="110" y1="90" x2="104" y2="140"/><line x1="160" y1="70" x2="154" y2="120"/>
+            <line x1="210" y1="100" x2="204" y2="150"/><line x1="255" y1="75" x2="249" y2="125"/>
+          </g>
+          <ellipse cx="150" cy="620" rx="220" ry="90" fill="#264450" opacity=".5"/>
+        </svg>
+      </div>
+      <div class="topbar">
+        <div class="tb-btn">◧</div>
+        <div class="tb-title">S03 · the pull-in · v2</div>
+        <div class="tb-btn">↶</div>
+      </div>
+      <div class="hint">board: 3 in development · 2 set · 1 unplanned 👀</div>
+      <div class="drawer-handle"><i></i><i></i><i></i></div>
+      <div class="toolbar">
+        <div class="tool">≻<small>SELECT</small></div>
+        <div class="tool active">✒️<small>PEN</small><div class="dot"></div></div>
+        <div class="tool">≡<small>LAYERS</small></div>
+      </div>
+      <div class="genbar">
+        <input placeholder="describe the change… (optional)">
+        <button class="gen-btn">GEN</button>
+      </div>
+    </div>
+    <div class="cap"><b>1 · The page.</b> Full-screen canvas — no chrome, no mini-previews. Three-line handle opens the agent drawer. Right rail: lasso (free-select only), pen, layers, generate. The board hint fades after a few seconds.</div>
+  </div>
+
+  <!-- SCREEN 2: DRAWER / AGENT CHAT -->
+  <div class="phone" data-od-id="screen-drawer">
+    <div class="frame">
+      <div class="notch"></div>
+      <div class="statusbar"><span>21:05</span><span>📶 🔋</span></div>
+      <div class="canvas-scene" style="filter:brightness(.6)"></div>
+      <div class="drawer">
+        <div class="drawer-panel">
+          <div class="drawer-tabs">
+            <div class="dtab active">💬 agent</div>
+            <div class="dtab">⚡ my gens</div>
+          </div>
+          <div class="chat">
+            <div class="bubble agent">shot 3's blocking feels tight to me — Tate should reach further so the grab reads in silhouette 🎬</div>
+            <div class="bubble user">yeah but keep her coat loose</div>
+            <div class="bubble agent">always 🧥 generating 3 takes with the locked Anna refs…</div>
+            <div class="bubble agent"><div class="att"><div></div><div></div><div></div></div>take B is my favourite — coat's doing the thing ✨</div>
+            <div class="typing">raindesk is drawing…</div>
+          </div>
+          <div class="composer"><input placeholder="bounce an idea…"><button>➤</button></div>
+        </div>
+        <div style="flex:1"></div>
+      </div>
+    </div>
+    <div class="cap"><b>2 · The drawer.</b> Three-line tab slides the agent over the canvas. Two tabs inside: chat, and <b>my gens</b> — your own prompt panel with the current references pinned. Agent stays here even while its sub-agents work.</div>
+  </div>
+
+  <!-- SCREEN 3: LASSO → GENERATE → OVERLAY → COMMIT -->
+  <div class="phone" data-od-id="screen-generate">
+    <div class="frame">
+      <div class="notch"></div>
+      <div class="statusbar"><span>21:07</span><span>📶 🔋</span></div>
+      <div class="canvas-scene">
+        <svg viewBox="0 0 300 620" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+          <circle cx="210" cy="150" r="60" fill="#e8b04b" opacity=".18"/>
+          <path d="M0 300 L40 260 L80 290 L120 240 L170 285 L220 250 L260 290 L300 255 L300 620 L0 620 Z" fill="#0b1a21"/>
+          <path d="M0 380 L50 350 L95 375 L140 330 L190 372 L240 340 L300 372 L300 620 L0 620 Z" fill="#0e2129"/>
+        </svg>
+      </div>
+      <div class="topbar">
+        <div class="tb-btn">◧</div>
+        <div class="tb-title">S03 · lasso → gen</div>
+        <div class="tb-btn">↶</div>
+      </div>
+      <svg class="sel" style="left:88px;top:300px;width:130px;height:150px" viewBox="0 0 130 150">
+        <path d="M70 8 C 115 4, 126 44, 118 78 C 112 108, 96 142, 58 140 C 22 138, 8 108, 14 74 C 20 42, 30 12, 70 8 Z"/>
+      </svg>
+      <div class="overlay-patch" style="left:92px;top:306px;width:118px;height:134px"><span>temp · v3 ⟳</span></div>
+      <div class="commit-dock">
+        <button class="x-btn">✕</button>
+        <button class="commit-btn">COMMIT v3 → layer</button>
+      </div>
+      <div class="genbar" style="bottom:128px">
+        <input value="raise the elbow, keep coat loose">
+        <button class="gen-btn ghost">⟳ GEN</button>
+      </div>
+    </div>
+    <div class="cap"><b>3 · The loop.</b> Free-lasso a region (active layer matters) → generation reads everything <i>around</i> the selection → result paints as a <b>temp overlay in place</b>, never a mini box. Tap <b>⟳ GEN</b> again for another take; <b>COMMIT</b> merges the winner into the layer. ✕ drops it, no shame.</div>
+  </div>
+
+  <!-- SCREEN 4: LAYERS + LANES -->
+  <div class="phone" data-od-id="screen-layers">
+    <div class="frame">
+      <div class="notch"></div>
+      <div class="statusbar"><span>21:09</span><span>📶 🔋</span></div>
+      <div class="canvas-scene" style="filter:brightness(.75)"></div>
+      <div class="topbar">
+        <div class="tb-btn">◧</div>
+        <div class="tb-title">S03 · layers</div>
+        <div class="tb-btn">↶</div>
+      </div>
+      <div class="penpop" data-od-id="pen-popover">
+        <div class="row">
+          <div class="swatch on" style="background:#e07856"></div>
+          <div class="swatch" style="background:#e8b04b"></div>
+          <div class="swatch" style="background:#6f97a3"></div>
+          <div class="swatch" style="background:#f3ead8"></div>
+        </div>
+        <div class="row"><div class="th"><i style="left:30%"></i></div></div>
+      </div>
+      <div class="panel">
+        <h4>Layers · S03</h4>
+        <div class="layer"><div class="sw" style="background:linear-gradient(160deg,#264450,#132830)"></div>base · ref plate <span class="tag">LOCK</span><span class="eye">👁</span></div>
+        <div class="layer on"><div class="sw" style="background:#3a2c10"></div>your red-lines <span class="tag">PEN</span><span class="eye">👁</span></div>
+        <div class="layer"><div class="sw" style="background:linear-gradient(160deg,#6f97a3,#2e5666)"></div>gen A · elbow fix <span class="tag temp">TEMP</span><span class="eye">👁</span></div>
+        <div class="layer"><div class="sw" style="background:linear-gradient(160deg,#6f97a3,#2e5666)"></div>gen B · coat pass <span class="tag temp">TEMP</span><span class="eye">👁</span></div>
+        <div class="lanes">
+          <div class="lane">📌 set<br>2</div>
+          <div class="lane hot">🎨 in dev<br>3</div>
+          <div class="lane">👀 unplanned<br>1</div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>4 · Layers &amp; lanes.</b> Pen popover at top (colour · thickness). Layer stack with gen temps clearly marked; lasso+gen targets the selected layer. The board lanes ride along as quiet counters at the bottom — glance, never manage.</div>
+  </div>
+
+</div>
+
+<footer class="page" data-od-id="notes">
+  Open Design artifact · <code>companion-app-v1</code> · concept draft for owner review — layout and interaction model specified by owner 2026-08-14; visuals stylized placeholders (SVG), final app renders real generations from ComfyUI. Self-contained: no external assets, no fonts, no lorem.
+</footer>
+
+</body>
+</html>
