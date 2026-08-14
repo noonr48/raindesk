@@ -19,8 +19,8 @@
  * Static: public/ with MIME map, path-traversal-proof (normalize + prefix).
  * Safety: no shell anywhere (pi gets argv/stdin, ComfyUI gets
  * JSON/multipart); PNG magic + size validated on every upload; generation
- * serialized one-at-a-time by lib/queue.js; chat capped at 3 concurrent
- * pi spawns so the endpoint cannot be used to fork-bomb the host.
+ * serialized one-at-a-time by lib/queue.js; chat caps concurrent pi spawns
+ * (bounds resource use on the trusted network — not a hard security limit).
  */
 
 const http = require('http');
@@ -285,16 +285,19 @@ async function handleApi(req, res, url, deps) {
     if (chatInFlight >= CHAT_CONCURRENCY) {
       throw new HttpError(429, 'companion is talking with you already — one moment 🌧️');
     }
-    const body = await readJson(req, 1024 * 1024);
-    if (typeof body.message !== 'string' || !body.message.trim()) {
-      throw new HttpError(400, 'message is required');
-    }
-    if (body.message.length > CHAT_MESSAGE_LIMIT) {
-      throw new HttpError(413, 'message too long');
-    }
+    // Increment BEFORE the awaited readJson so the check-then-act window
+    // cannot admit unbounded concurrent spawns; the finally balances every
+    // post-increment path including body-validation throws.
     chatInFlight += 1;
     let reply;
     try {
+      const body = await readJson(req, 1024 * 1024);
+      if (typeof body.message !== 'string' || !body.message.trim()) {
+        throw new HttpError(400, 'message is required');
+      }
+      if (body.message.length > CHAT_MESSAGE_LIMIT) {
+        throw new HttpError(413, 'message too long');
+      }
       reply = await agentImpl.chat(body.message);
     } finally {
       chatInFlight -= 1;

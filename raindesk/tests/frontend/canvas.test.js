@@ -303,6 +303,38 @@ test('take stack: re-GEN pushes, prev/next cycle, discard clears session+lasso',
   assert.equal(core.activeLayer().id, base.id, 'active layer untouched by discard');
 });
 
+test('reversed-point lasso with identical region rect still resets the session (coordinate identity is the sole discriminator)', () => {
+  const core = new RainCanvasCore({ width: 64, height: 64 });
+  const base = core.ensureBase();
+  core.setLayerBuffer(base.id, solidRGBA(64, 64, [5, 5, 5]));
+
+  const pts = circlePoints(32, 32, 12);
+  core.beginLasso();
+  for (const p of pts) core.extendLasso(p);
+  core.closeLasso();
+  core.beginTakeSession(core.exportGenAssets({ feather: 4 }));
+  core.pushTake(solidRGBA(core.session.region.w, core.session.region.h, [255, 0, 0]));
+  assert.equal(core.session.takes.length, 1);
+
+  // Same set of points, reversed order: identical bbox → identical %8-padded
+  // region rect and identical point COUNT; only the per-index coordinates
+  // differ. Count-only identity would wrongly CONTINUE the old session;
+  // coordinate identity must reset it.
+  const reversed = pts.slice().reverse();
+  core.beginLasso();
+  for (const p of reversed) core.extendLasso(p);
+  core.closeLasso();
+  const sameRectAssets = core.exportGenAssets({ feather: 4 });
+  assert.deepEqual(
+    { x: sameRectAssets.region.x, y: sameRectAssets.region.y, w: sameRectAssets.region.w, h: sameRectAssets.region.h },
+    { x: core.session.region.x, y: core.session.region.y, w: core.session.region.w, h: core.session.region.h },
+    'precondition: reversed lasso yields the identical region rect',
+  );
+  core.beginTakeSession(sameRectAssets);
+  assert.equal(core.session.takes.length, 0, 'identical count+region but different coordinates resets the session');
+  assert.deepEqual(core.session.lassoPoints, reversed, 'new session stores the new geometry');
+});
+
 test('commit without a session throws; pushTake size is validated', () => {
   const core = new RainCanvasCore({ width: 32, height: 32 });
   core.ensureBase();
