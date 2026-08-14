@@ -36,6 +36,27 @@ skeletal arms 2-3x his scale like a rib cage; gore stays out in favour of
 psychology, scale, implication; the 13-beat collapse order is fixed.
 `;
 
+/**
+ * Resolve the pi binary absolutely. Non-interactive server environments may
+ * lack ~/.local/bin on PATH (managed processes get a bare env), which would
+ * make spawn('pi') ENOENT. Prefer the well-known user-local install, then
+ * system paths, then fall back to PATH lookup for interactive shells.
+ */
+function resolvePiBinary() {
+  const home = process.env.HOME || '/home/studio';
+  const candidates = [
+    path.join(home, '.local', 'share', 'pi-studio-runtime', 'bin', 'pi'),
+    path.join(home, '.local', 'bin', 'pi'),
+    '/usr/local/bin/pi',
+    '/usr/bin/pi',
+  ];
+  for (const c of candidates) {
+    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch (_e) { /* next */ }
+  }
+  return 'pi';
+}
+const PI_BINARY = resolvePiBinary();
+
 /** Load the creative preset from the first candidate file that exists. */
 function loadPreset(candidates = PRESET_CANDIDATES) {
   for (const p of candidates) {
@@ -53,19 +74,53 @@ function loadPreset(candidates = PRESET_CANDIDATES) {
  * Send one message to the companion; resolves with the reply string.
  * opts: { binary (default 'pi'), timeoutMs (default 120000) } — seams for tests.
  */
+/**
+ * Build the pi argv for one companion turn. Message rides as the positional
+ * argv (spawn has no shell — no injection surface; cap length defensively).
+ */
+function buildArgv(message, systemPromptArg) {
+  const msg = String(message ?? '').slice(0, 8000);
+  return ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills',
+    '--append-system-prompt', systemPromptArg, msg];
+}
+
+/**
+ * Parse the last assistant text reply from a --mode json NDJSON event stream.
+ * Returns null when no assistant text was produced.
+ */
+function parseReply(jsonStreamText) {
+  let last = null;
+  for (const line of String(jsonStreamText).split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    let e;
+    try { e = JSON.parse(t); } catch (_err) { continue; }
+    if (e && e.type === 'message_end' && e.message && e.message.role === 'assistant') {
+      const texts = (e.message.content || [])
+        .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+        .map((b) => b.text);
+      if (texts.length) last = texts.join(' ');
+    }
+  }
+  return last;
+}
+
 function chat(message, opts = {}) {
   const timeoutMs = opts.timeoutMs || CHAT_TIMEOUT_MS;
-  const binary = opts.binary || 'pi';
+  const binary = opts.binary || PI_BINARY;
   const preset = loadPreset();
   // With a preset FILE we pass its path; otherwise the preset text inline.
-  // Either way no user text ever touches argv.
+  // Either way no user text ever touches a shell.
   const systemPromptArg = preset.fromFile ? preset.path : preset.text;
 
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(binary, ['-p', '--mode', 'text', '--no-session',
-        '--append-system-prompt', systemPromptArg], { stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(binary, buildArgv(message, systemPromptArg),
+        { stdio: ['pipe', 'pipe', 'pipe'] });
+      // Message rides argv; end stdin immediately so a piped-stdin reader
+      // (pi auto-reads piped stdin) sees EOF instead of blocking.
+      child.stdin.end();
     } catch (_e) {
       resolve(FALLBACK_REPLY);
       return;
@@ -87,13 +142,13 @@ function chat(message, opts = {}) {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', () => { /* diagnostics intentionally ignored */ });
     child.on('error', () => finish(FALLBACK_REPLY)); // e.g. ENOENT when pi absent
-    child.on('close', () => finish(out.trim() || FALLBACK_REPLY));
+    // --mode json streams NDJSON; the reply is the last assistant message_end
+    child.on('close', () => finish(parseReply(out) || FALLBACK_REPLY));
     child.stdin.on('error', () => { /* EPIPE after early exit; close() follows */ });
-    child.stdin.end(String(message ?? ''), 'utf8');
   });
 }
 
 module.exports = {
-  chat, loadPreset, PRESET_PATH, PRESET_CANDIDATES,
+  chat, loadPreset, buildArgv, parseReply, PRESET_PATH, PRESET_CANDIDATES,
   FALLBACK_REPLY, FALLBACK_PRESET, CHAT_TIMEOUT_MS,
 };

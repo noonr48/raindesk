@@ -60,3 +60,33 @@ test('embedded fallback preset knows the film constraints from BOARD.md', () => 
   assert.match(agent.FALLBACK_PRESET, /Hethrn/);
   assert.match(agent.FALLBACK_PRESET, /gore stays out/i);
 });
+
+test('buildArgv uses json mode headless invocation with argv message', () => {
+  const argv = agent.buildArgv('hello there', '/tmp/preset.txt');
+  assert.deepEqual(argv, [
+    '-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills',
+    '--append-system-prompt', '/tmp/preset.txt', 'hello there',
+  ]);
+});
+
+test('buildArgv caps message length defensively', () => {
+  const long = 'x'.repeat(20000);
+  const argv = agent.buildArgv(long, '/tmp/p.txt');
+  assert.equal(argv[argv.length - 1].length, 8000);
+});
+
+test('parseReply extracts the LAST assistant text from an NDJSON stream', () => {
+  const stream = [
+    JSON.stringify({ type: 'session', id: 's1' }),
+    JSON.stringify({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } }),
+    JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: 'first draft' }] } }),
+    'not-json-garbage-line',
+    JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'rain hissing on black water' }] } }),
+    JSON.stringify({ type: 'agent_end' }),
+  ].join('\n');
+  assert.equal(agent.parseReply(stream), 'rain hissing on black water');
+  // assistant with only thinking blocks yields no reply
+  const onlyThinking = JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'x' }] } });
+  assert.equal(agent.parseReply(onlyThinking), null);
+  assert.equal(agent.parseReply(''), null);
+});
