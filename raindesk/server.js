@@ -1,7 +1,10 @@
 'use strict';
 
 /**
- * Raindesk backend — node:http only, zero deps, loopback 127.0.0.1:17600.
+ * Raindesk backend — node:http only, zero deps. Binds all interfaces
+ * (0.0.0.0:17600 by default, override with RAINDESK_HOST) so the owner's
+ * phone/laptop reach it over the tailnet — same exposure model as the
+ * estate's vault-app. Unauthenticated by design: trusted home network only.
  *
  * REST (JSON):
  *   GET  /api/board
@@ -14,9 +17,10 @@
  *   POST /api/chat            { message } -> { reply }
  *
  * Static: public/ with MIME map, path-traversal-proof (normalize + prefix).
- * Safety: loopback bind; no shell anywhere (pi gets stdin, ComfyUI gets
+ * Safety: no shell anywhere (pi gets argv/stdin, ComfyUI gets
  * JSON/multipart); PNG magic + size validated on every upload; generation
- * serialized one-at-a-time by lib/queue.js.
+ * serialized one-at-a-time by lib/queue.js; chat capped at 3 concurrent
+ * pi spawns so the endpoint cannot be used to fork-bomb the host.
  */
 
 const http = require('http');
@@ -40,6 +44,8 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const JSON_BODY_LIMIT = 64 * 1024 * 1024;
 const UPLOAD_BODY_LIMIT = MAX_PNG_BYTES + 1024 * 1024; // PNG + multipart overhead
 const CHAT_MESSAGE_LIMIT = 16 * 1024;
+const CHAT_CONCURRENCY = 3; // each chat spawns a pi process — cap concurrent spawns
+let chatInFlight = 0;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -276,6 +282,9 @@ async function handleApi(req, res, url, deps) {
   }
 
   if (method === 'POST' && route === '/api/chat') {
+    if (chatInFlight >= CHAT_CONCURRENCY) {
+      throw new HttpError(429, 'companion is talking with you already — one moment 🌧️');
+    }
     const body = await readJson(req, 1024 * 1024);
     if (typeof body.message !== 'string' || !body.message.trim()) {
       throw new HttpError(400, 'message is required');
@@ -283,7 +292,13 @@ async function handleApi(req, res, url, deps) {
     if (body.message.length > CHAT_MESSAGE_LIMIT) {
       throw new HttpError(413, 'message too long');
     }
-    const reply = await agentImpl.chat(body.message);
+    chatInFlight += 1;
+    let reply;
+    try {
+      reply = await agentImpl.chat(body.message);
+    } finally {
+      chatInFlight -= 1;
+    }
     return sendJson(res, 200, { reply });
   }
 

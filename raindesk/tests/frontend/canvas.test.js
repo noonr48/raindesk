@@ -282,6 +282,20 @@ test('take stack: re-GEN pushes, prev/next cycle, discard clears session+lasso',
   assert.equal(s.takeIndex, 0);
   assert.equal(core.prevTake(), null, 'no prev past oldest');
 
+  // regression: a RE-DRAWN lasso with an equal point count but different
+  // coordinates must NOT continue the old session (identity is geometry,
+  // not count) — the take stack resets instead of blending through the
+  // stale coverage mask. Runs after the prev/next cycle so that flow keeps
+  // its original 2-take stack; discardTakes below then clears this new session.
+  const shifted = pts.map((p) => ({ x: p.x + 8, y: p.y + 8 }));
+  core.beginLasso();
+  for (const p of shifted) core.extendLasso(p);
+  core.closeLasso();
+  const shiftedAssets = core.exportGenAssets({ feather: 4 });
+  core.beginTakeSession(shiftedAssets);
+  assert.equal(core.session.takes.length, 0, 'different lasso geometry resets the take session');
+  assert.notDeepEqual(core.session.region, assets.region, 'region follows the new lasso');
+
   core.discardTakes();
   assert.equal(core.session, null, 'discard clears session');
   assert.equal(core.lasso, null, 'discard clears lasso');
