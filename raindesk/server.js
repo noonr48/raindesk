@@ -32,7 +32,7 @@ const comfy = require('./lib/comfy');
 const agent = require('./lib/agent');
 const { GenQueue } = require('./lib/queue');
 
-const HOST = '127.0.0.1';
+const HOST = process.env.RAINDESK_HOST || '0.0.0.0'; // tailnet-reachable (phone/laptop); vault-app/mockup precedent
 const PORT = 17600;
 
 const PUBLIC_DIR = path.join(__dirname, 'public');

@@ -69,10 +69,14 @@ test('buildArgv uses json mode headless invocation with argv message', () => {
   ]);
 });
 
-test('buildArgv caps message length defensively', () => {
+test('buildArgv caps message length defensively (emoji-safe truncation)', () => {
   const long = 'x'.repeat(20000);
   const argv = agent.buildArgv(long, '/tmp/p.txt');
-  assert.equal(argv[argv.length - 1].length, 8000);
+  assert.equal(argv[argv.length - 1].length, agent.MESSAGE_MAX);
+  // a trailing lone high surrogate at the cap is stripped, never dangles
+  const lone = 'a'.repeat(agent.MESSAGE_MAX - 1) + '\uD83D';
+  const cappedLone = agent.buildArgv(lone, '/tmp/p.txt');
+  assert.equal(cappedLone[cappedLone.length - 1].length, agent.MESSAGE_MAX - 1);
 });
 
 test('parseReply extracts the LAST assistant text from an NDJSON stream', () => {

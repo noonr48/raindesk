@@ -26,6 +26,7 @@
 
   const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const LAYER_KINDS = ['base', 'pen', 'temp', 'gen'];
+  const MAX_UNDO = 100; // bounded undo: oldest records fall off; earliest actions become permanent
   const INF = 1e7;
 
   let CRC_TABLE = null;
@@ -432,6 +433,7 @@
       const layer = this._newLayer(name, kind);
       this._layers.push(layer);
       this._undo.push({ type: 'addLayer', layerId: layer.id, prevActive: this.activeLayerId });
+      if (this._undo.length > MAX_UNDO) this._undo.shift();
       this.activeLayerId = layer.id;
       return layer;
     }
@@ -495,6 +497,7 @@
       layer.strokes.push(s);
       rasterStrokeInto(layer.data, this.width, this.height, s);
       this._undo.push({ type: 'stroke', layerId, strokeId: s.id });
+      if (this._undo.length > MAX_UNDO) this._undo.shift();
       return s;
     }
 
@@ -590,9 +593,12 @@
       const r = assets.region;
       const pts = this.effectiveLassoPoints();
       const s = this.session;
-      const same = s && s.region.x === r.x && s.region.y === r.y &&
-        s.region.w === r.w && s.region.h === r.h &&
-        s.lassoPoints.length === pts.length;
+      // identity = same region AND same lasso geometry (a re-drawn lasso with
+      // a coincidentally equal point count must NOT continue the old session)
+      const samePts = !!s && pts.length === s.lassoPoints.length &&
+        pts.every((p, i) => p.x === s.lassoPoints[i].x && p.y === s.lassoPoints[i].y);
+      const same = samePts && s.region.x === r.x && s.region.y === r.y &&
+        s.region.w === r.w && s.region.h === r.h;
       if (!same) {
         this.session = {
           region: { x: r.x, y: r.y, w: r.w, h: r.h },
@@ -681,6 +687,7 @@
         prev,
         session: { ...s, takes: s.takes.slice() },
       });
+      if (this._undo.length > MAX_UNDO) this._undo.shift();
       this.session = null;
       return true;
     }

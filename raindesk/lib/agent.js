@@ -78,8 +78,12 @@ function loadPreset(candidates = PRESET_CANDIDATES) {
  * Build the pi argv for one companion turn. Message rides as the positional
  * argv (spawn has no shell — no injection surface; cap length defensively).
  */
+const MESSAGE_MAX = 16000; // aligned with server CHAT_MESSAGE_LIMIT (16*1024) minus slack
+
 function buildArgv(message, systemPromptArg) {
-  const msg = String(message ?? '').slice(0, 8000);
+  let msg = String(message ?? '').slice(0, MESSAGE_MAX);
+  // never split a surrogate pair at the cap (emoji-safe truncation)
+  if (msg.length && /[\uD800-\uDBFF]$/.test(msg)) msg = msg.slice(0, -1);
   return ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills',
     '--append-system-prompt', systemPromptArg, msg];
 }
@@ -96,10 +100,13 @@ function parseReply(jsonStreamText) {
     let e;
     try { e = JSON.parse(t); } catch (_err) { continue; }
     if (e && e.type === 'message_end' && e.message && e.message.role === 'assistant') {
-      const texts = (e.message.content || [])
-        .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
-        .map((b) => b.text);
-      if (texts.length) last = texts.join(' ');
+      try {
+        const content = Array.isArray(e.message.content) ? e.message.content : [];
+        const texts = content
+          .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+          .map((b) => b.text);
+        if (texts.length) last = texts.join(' ');
+      } catch (_err) { /* malformed entry — keep scanning; never throw from close() */ }
     }
   }
   return last;
@@ -150,5 +157,5 @@ function chat(message, opts = {}) {
 
 module.exports = {
   chat, loadPreset, buildArgv, parseReply, PRESET_PATH, PRESET_CANDIDATES,
-  FALLBACK_REPLY, FALLBACK_PRESET, CHAT_TIMEOUT_MS,
+  FALLBACK_REPLY, FALLBACK_PRESET, CHAT_TIMEOUT_MS, MESSAGE_MAX,
 };
