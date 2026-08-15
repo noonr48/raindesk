@@ -103,6 +103,7 @@
   async function openShot(id) {
     if (!state.board || !Array.isArray(state.board.shots)) return;
     if (state.shot && state.shot.id === id) return;
+    if (state.making) { toast('wait for the take — switching mid-gen would drop it 🌧️'); return; }
     const shot = state.board.shots.find((s) => s.id === id);
     if (!shot) return;
     state.shot = shot;

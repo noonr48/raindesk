@@ -65,6 +65,7 @@ class GenQueue {
     if (!job) return null;
     const out = { id: job.id, status: job.status };
     if (job.status === 'done' && job.imageUrl) out.imageUrl = job.imageUrl;
+    if (job.status === 'done' && job.result && typeof job.result.comfyUrl === 'string') out.comfyUrl = job.result.comfyUrl;
     if (job.status === 'error') out.error = job.error || 'generation failed';
     return out;
   }

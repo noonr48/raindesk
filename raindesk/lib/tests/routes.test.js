@@ -53,6 +53,13 @@ function fakeComfy(delayMs = 20) {
   };
 }
 
+/** Mirror-capable fake: like fakeComfy but serves real bytes via fetchImageBytes. */
+function fakeComfyMirroring(delayMs = 20) {
+  const comfy = fakeComfy(delayMs);
+  comfy.fetchImageBytes = async () => PNG;
+  return comfy;
+}
+
 const agentEcho = { chat: async (m) => `echo: ${m}` };
 
 test('negative routes: 404s and bad uploads', async (t) => {
@@ -238,6 +245,33 @@ test('positive flow: board, move, layer upload+serve, gen job, chat', async (t) 
     });
     assert.equal(res.status, 200);
     assert.equal((await res.json()).reply, 'echo: hi friend');
+  });
+});
+
+test('mirrored gen: same-origin /api/assets imageUrl, comfyUrl preserved, bytes served 200', async (t) => {
+  await withServer(t, { comfyImpl: fakeComfyMirroring(), agentImpl: agentEcho }, async (base) => {
+    const res = await fetch(`${base}/api/gen`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shotId: 'S01', prompt: 'x',
+        regionPng: PNG.toString('base64'), maskPng: PNG.toString('base64'),
+      }),
+    });
+    const { jobId } = await res.json();
+    let view = { status: 'pending' };
+    for (let i = 0; i < 200 && view.status === 'pending'; i++) {
+      view = await (await fetch(`${base}/api/gen/${jobId}`)).json();
+      await delay(5);
+    }
+    assert.equal(view.status, 'done');
+    assert.match(view.imageUrl, /^\/api\/assets\/S01\//, 'phone-safe same-origin URL');
+    assert.equal(view.comfyUrl, 'http://127.0.0.1:8188/view?filename=out.png&subfolder=&type=output', 'comfy origin preserved');
+    // the mirrored bytes actually serve from the app itself
+    const img = await fetch(`${base}${view.imageUrl}`);
+    assert.equal(img.status, 200);
+    assert.equal(img.headers.get('content-type'), 'image/png');
+    const body = Buffer.from(await img.arrayBuffer());
+    assert.ok(body.equals(PNG), 'served bytes round-trip');
   });
 });
 
