@@ -51,7 +51,7 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 ## 5 · Repo map
 
 ```
-raindesk/            the app (server.js, lib/, public/, tests/, docs)
+raindesk/            the app (server.js, lib/, public/, tests/)
   BUILD_BRIEF.md     mission contract + acceptance criteria
   DEEP_REVIEW.md     closeout review sheet (paste-or-fail)
 packet/              the film's canonical planning docs (story bibles, locked decisions)
