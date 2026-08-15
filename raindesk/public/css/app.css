@@ -35,7 +35,7 @@ input { font-family: inherit; }
 
 /* ------------------------------------------------------------ stage */
 
-#stage { position: absolute; inset: 0; background: #0b1a21; }
+#stage { position: absolute; inset: 0; background: linear-gradient(180deg, #16333e, #081217); }
 #canvas { position: absolute; inset: 0; touch-action: none; display: block; }
 #canvas.crosshair { cursor: crosshair; }
 
@@ -373,10 +373,20 @@ body.drawer-open .drawer-handle { display: none; }
 /* ≥1024px: drawer docks as a right rail — stage shrinks, no overlay/scrim. */
 @media (min-width: 1024px) {
   body.drawer-open #stage { right: var(--drawer-w); }
-  body.drawer-open .topbar,
-  body.drawer-open .genbar-wrap,
-  body.drawer-open .panel { right: calc(var(--drawer-w) + 10px); }
-  body.drawer-open .toolbar { right: calc(var(--drawer-w) + 10px); }
+
+  /* overlays anchor to the ARTBOARD rect (--art-x, published by render()) —
+     art-x already shrinks with the docked drawer, so no double offsets here */
+  .topbar { left: calc(var(--art-x, 10px) + 12px); right: calc(var(--art-x, 10px) + 12px); }
+  .toolbar { right: calc(var(--art-x, 10px) + 14px); }
+  .penpop { right: calc(var(--art-x, 10px) + 78px); }
+  .genbar-wrap { left: calc(var(--art-x, 10px) + 14px); right: calc(var(--art-x, 10px) + 78px); }
+  .panel { left: calc(var(--art-x, 10px) + 14px); right: calc(var(--art-x, 10px) + 14px); }
+
+  /* desktop-scale the primary controls (phone sizing floats lost at 1920w) */
+  .genbar input { font-size: 13px; padding: 13px 14px; }
+  .gen-btn { font-size: 13px; padding: 0 22px; }
+  .tb-title { font-size: 13px; }
+  .tool { width: 58px; height: 58px; }
 
   .chat-drawer { inset: 0 auto 0 auto; left: auto; right: 0; width: var(--drawer-w); }
   .chat-drawer .chat-scrim { display: none; }
