@@ -79,7 +79,7 @@
     const composer = el('div', 'composer');
     const input = el('input', 'composer-input');
     input.type = 'text';
-    input.placeholder = 'bounce an idea…';
+    input.placeholder = 'talk through the shot…';
     input.setAttribute('aria-label', 'message the agent');
     const send = el('button', 'composer-send', '➤');
     send.setAttribute('aria-label', 'send');
@@ -87,7 +87,7 @@
 
     panel.append(tabs, chatList, gensList, typing, composer);
     chatList.appendChild(el('div', 'bubble agent',
-      "hey — i'm raindesk 🌧️ lasso a region, tap GEN, and i'll paint takes right on the canvas"));
+      "i'm here when you want a second pair of eyes 🌧️ draw over the frame, lasso what feels off, or just tell me what you're reaching for"));
 
     function isOpen() { return root.classList.contains('open'); }
     function open(which) {
