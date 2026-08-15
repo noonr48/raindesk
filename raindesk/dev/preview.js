@@ -88,6 +88,16 @@ function capture(browser, name, width, height) {
   });
 }
 
+async function stopChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGTERM');
+  await Promise.race([
+    new Promise((resolve) => child.once('close', resolve)),
+    sleep(1000),
+  ]);
+  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+}
+
 async function main() {
   if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
     throw new Error('RAINDESK_PREVIEW_PORT must be a valid TCP port');
@@ -120,18 +130,14 @@ async function main() {
     console.log(`  desktop: ${desktop}`);
     // eslint-disable-next-line no-console
     console.log(`  mobile:  ${mobile}`);
+  } catch (err) {
+    if (server.exitCode && server.exitCode !== 0 && serverStderr) {
+      err.message += ` | mock server: ${serverStderr.slice(-800)}`;
+    }
+    throw err;
   } finally {
-    if (!server.killed) server.kill('SIGTERM');
-    await Promise.race([
-      new Promise((resolve) => server.once('close', resolve)),
-      sleep(1000),
-    ]);
-    if (!server.killed) server.kill('SIGKILL');
+    await stopChild(server);
     fs.rmSync(tempData, { recursive: true, force: true });
-  }
-
-  if (server.exitCode && server.exitCode !== 0) {
-    throw new Error(`mock server exited ${server.exitCode}: ${serverStderr.slice(-800)}`);
   }
 }
 
@@ -143,4 +149,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { findChromium, waitForServer, capture };
+module.exports = { findChromium, waitForServer, capture, stopChild };
