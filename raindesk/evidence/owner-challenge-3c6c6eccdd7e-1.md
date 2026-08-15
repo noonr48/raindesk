@@ -66,3 +66,19 @@ plus the git SHA at the time:
   `file-inspection-test_run-14cb2d6e7d11f06f`
 - round-3 repairs certification @ 959768c (44/44, exit 0): receipt
   `file-inspection-test_run-3271342c33b6edbe`
+- round-4 repairs certification @ 94f6976 (44/44, exit 0): receipt
+  `file-inspection-test_run-cf735f1943232b54` (outputDigest 52947b31…)
+- round-6 stateful-gate re-anchor @ 94f6976 frozen tree (44/44, exit 0):
+  receipt `file-inspection-test_run-0c3f7480ea96deeb` (outputDigest b789af9d…)
+
+## Wave-cycle termination trigger (round-7 correction)
+
+The round-6 closeout's trigger ("next REAL repo mutation") was too narrow:
+an owner ROLL executed through the live API (POST /api/shot/S01/layer — the
+take7 mechanism) swaps the challenge's subject imagery entirely inside
+gitignored raindesk/data/ with zero repo mutation. Corrected trigger: a fresh
+review pair re-binds on ANY state-affecting mutation of the challenge
+surface — (1) any repo commit; (2) any live-API layer/board change under
+raindesk/data/ (served state); (3) any owner-verdict event on the taste
+question (vault 7a61439f). Prose closeouts, ledger appends, and /tmp review
+artifacts are not state-affecting for this purpose.
