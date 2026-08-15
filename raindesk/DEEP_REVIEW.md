@@ -29,9 +29,9 @@ Instructions (the HOW — from BUILD_BRIEF + owner directives):
 ## EVIDENCE (R-G2)
 
 RAN (last action): receipted suite (below, run after this file's commit) → pasted in closing message.
-GREEN: `ℹ tests 35 / ℹ pass 35 / ℹ fail 0` — receipted at HEAD.
+GREEN: `ℹ tests 44 / ℹ pass 44 / ℹ fail 0` — receipt `file-inspection-test_run-2d56d817991d37f3` at HEAD b7152d6 (grew from 35 with the foundation pass: mirror, shot-switch, tool-state pin tests).
 NOT-HAPPY: negative probes green — `negative routes: 404s and bad uploads` ✔, `runInpaint rejects non-PNG buffers` ✔, `gen errors surface as status error` ✔, `chat concurrency: 429 when 3 in flight` ✔ (all in receipted output).
-PROOF-CREATION: 35 tests created this mission, incl. `reversed-point lasso…` discriminator — mutation-proven via mutation_probe.py (count-only mutation → 1 fail → reverted).
+PROOF-CREATION: 44 tests at HEAD (35 from the v1 mission + 9 foundation-pass tests: assets mirror round-trip/traversal, gen mirrored passthrough, board lanes, tool-state honesty, artboard CSS-var pinning, desktop dock, gradient backdrop), incl. `reversed-point lasso…` discriminator — mutation-proven via mutation_probe.py (count-only mutation → 1 fail → reverted).
 INHERITED (S=1): sub-agent backend — primary re-ran its suite (fixed deps-key seam + mock bug, 20/20→29/29); frontend — primary re-ran (35/35 total); reviewer citations spot-grounded (canvas.js:596-601, server.js:285-303 re-read by primary).
 
 ## WIRING (R-G2.5)
@@ -61,7 +61,7 @@ REVIEWER (GATED): dispatched xna-reviewer ×2 final waves (spec + adversarial), 
 TRACE:
 | clause | change | evidence |
 |---|---|---|
-| build/test/review/refine/desktop/agents/autonomy | raindesk/ app, 10 commits, 35 tests, 6 waves, live server | receipt 6a33323aad2d6d84; LIVE 200; vault 5aba67d5; strict packets in transcript |
+| build/test/review/refine/desktop/agents/autonomy | raindesk/ app, 13 commits, 44 tests, 8 waves, live server | receipt 6a33323aad2d6d84 + 2d56d817991d37f3; LIVE 200; vault 5aba67d5; strict packets in transcript |
 
 RESIDUALS:
 - durability R1: server survives manual restart only — fires when SSbenbi3 reboots → fix = systemd user unit (owner-approved service install).
