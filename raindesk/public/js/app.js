@@ -108,6 +108,8 @@
     // ≥1024px the drawer docks right: shrink the stage instead of overlaying.
     state.drawer.on('open', () => { document.body.classList.add('drawer-open'); resize(); });
     state.drawer.on('close', () => { document.body.classList.remove('drawer-open'); resize(); });
+    // desktop: the companion docks open by default — the artboard owns the layout
+    if (window.matchMedia('(min-width: 1024px)').matches) state.drawer.open('agent');
 
     updateTitle();
     updateHint();
@@ -630,7 +632,20 @@
     const oy = (H - ch) / 2;
     state.fit = { scale, ox, oy };
 
-    dctx.fillStyle = '#0b1a21';
+    // publish the artboard rect so overlays can anchor to the ART, not the
+    // viewport (desktop fit: no UI floating in dead side pillars). --art-x
+    // already shrinks with the docked drawer, since it is computed from the
+    // reduced stage rect.
+    const app = $('app');
+    app.style.setProperty('--art-x', (ox / dpr) + 'px');
+    app.style.setProperty('--art-w', (cw / dpr) + 'px');
+    app.style.setProperty('--art-b', ((oy + ch) / dpr) + 'px');
+
+    // scene-matched backdrop gradient (reads as studio wall, not dead void)
+    const bg = dctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#16333e');
+    bg.addColorStop(1, '#081217');
+    dctx.fillStyle = bg;
     dctx.fillRect(0, 0, W, H);
 
     octx.putImageData(new ImageData(frameBuffer(), CANVAS_W, CANVAS_H), 0, 0);
