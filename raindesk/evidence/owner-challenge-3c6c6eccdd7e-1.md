@@ -61,24 +61,32 @@ plus the git SHA at the time:
 - post-mutation first run @ b7152d6 (44/44, exit 0): receipt
   `file-inspection-test_run-2d56d817991d37f3`
 - post-repair certification @ 1574bcf (44/44, exit 0): receipt
-  `file-inspection-test_run-f243bcfff4849822` (outputDigest 190a41de…)
+  `file-inspection-test_run-f243bcfff4849822`
 - round-2 repairs certification @ c59f23c (44/44, exit 0): receipt
   `file-inspection-test_run-14cb2d6e7d11f06f`
 - round-3 repairs certification @ 959768c (44/44, exit 0): receipt
   `file-inspection-test_run-3271342c33b6edbe`
 - round-4 repairs certification @ 94f6976 (44/44, exit 0): receipt
-  `file-inspection-test_run-cf735f1943232b54` (outputDigest 52947b31…)
+  `file-inspection-test_run-cf735f1943232b54`
 - round-6 stateful-gate re-anchor @ 94f6976 frozen tree (44/44, exit 0):
-  receipt `file-inspection-test_run-0c3f7480ea96deeb` (outputDigest b789af9d…)
+  receipt `file-inspection-test_run-0c3f7480ea96deeb`
+- round-7 close certification @ f2e4f37 (44/44, exit 0): receipt
+  `file-inspection-test_run-863363e2e6fd5a3a`
 
-## Wave-cycle termination trigger (round-7 correction)
+## Wave-cycle termination trigger (round-7/8 corrections)
 
 The round-6 closeout's trigger ("next REAL repo mutation") was too narrow:
 an owner ROLL executed through the live API (POST /api/shot/S01/layer — the
 take7 mechanism) swaps the challenge's subject imagery entirely inside
-gitignored raindesk/data/ with zero repo mutation. Corrected trigger: a fresh
-review pair re-binds on ANY state-affecting mutation of the challenge
-surface — (1) any repo commit; (2) any live-API layer/board change under
-raindesk/data/ (served state); (3) any owner-verdict event on the taste
-question (vault 7a61439f). Prose closeouts, ledger appends, and /tmp review
-artifacts are not state-affecting for this purpose.
+gitignored raindesk/data/ with zero repo mutation. Round-8 adversarial
+review tightened the predicate further: bind on SERVED STATE, not on
+transport. Corrected trigger: a fresh review pair re-binds on ANY
+state-affecting mutation of the challenge surface — (1) any repo commit;
+(2) any change to served state (data/board.json, data/shots/*, layer
+files under data/shots/, data/assets/*) regardless of how it arrives:
+in-app API, direct filesystem write, or RAINDESK_DATA_DIR rehome;
+(3) any owner-verdict event on the taste question (vault 7a61439f).
+Non-activating by classification: transient generation take-previews
+(mirrored assets fetched for display only — saveLayer, shots.js:85, is
+the sole activeLayer setter), prose closeouts, ledger appends, and /tmp
+review artifacts.
