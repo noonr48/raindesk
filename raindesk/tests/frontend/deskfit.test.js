@@ -17,6 +17,18 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..', '..');
 const appJs = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8');
 const appCss = fs.readFileSync(path.join(ROOT, 'public', 'css', 'app.css'), 'utf8');
+const appHtml = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+
+test('initial tool state matches the visually-active tool (UI honesty pin)', () => {
+  // GPT Pro finding: HTML marked PEN active while state.tool began 'select'.
+  // The initializer must agree with the active button in index.html.
+  const activeBtn = appHtml.match(/class="tool active"[^>]*data-tool="([a-z]+)"/) ||
+    appHtml.match(/data-tool="([a-z]+)"[^>]*class="tool active"/);
+  assert.ok(activeBtn, 'index.html must mark exactly one tool active');
+  const initTool = appJs.match(/tool:\s*'([a-z]+)',/);
+  assert.ok(initTool, 'app.js state must declare an initial tool');
+  assert.equal(initTool[1], activeBtn[1], 'state.tool must equal the visually-active tool');
+});
 
 test('render() publishes the artboard rect as CSS vars', () => {
   assert.match(appJs, /--art-x/, 'app.js must publish --art-x');

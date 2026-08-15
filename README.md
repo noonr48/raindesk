@@ -36,17 +36,21 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 3. **Receipts over narration** — every "done" claim carries a machine receipt (oracle-ledger test runs, pixel diffs, form-checked reviewer packets). See `raindesk/DEEP_REVIEW.md` for a full paste-or-fail closeout sheet.
 4. **Lessons are durable** — every session's mechanisms land in cross-session memory (e.g. the two-message dispatch protocol that makes machine-gated reviewer packets reliable).
 
-## 4 · Roadmap — the owner's creative process, as direction (DRAFT — ratification pending)
+## 4 · Roadmap — the owner's creative process, as direction (v1.1 — amended after external review)
 
-*Captured verbatim from the owner, 2026-08-15. This section is the design contract for v1.1+; it is marked DRAFT until the owner ratifies the wording.*
+*Captured verbatim from the owner, 2026-08-15; amended the same day after the GPT Pro external review (owner mandate: "take whatever you think is good… and autonomously proceed").*
 
-1. **Layer-by-layer generation.** The agent should build images in separable passes — background → characters → effects — each a generatable, editable layer, not one monolithic generation.
-2. **Concepts first, shapes first.** Early-stage work should happen in basic shapes / silhouettes / blocking — a cheap medium for "thinking together" — before any detailed rendering.
-3. **Character design anchors.** Locked character sheets (Anna, Tate, Hethrn, …) condition every generation so identity holds across shots.
-4. **Micro ↔ macro switching.** The workflow must move freely between whole-composition takes (macro) and detail surgery on one hand/eye/lantern (micro) without losing state.
-5. **Non-linear, messy-process-tolerant.** The owner's process is explicitly "all over the place." The agent — not the owner — carries the state: what's decided, what's open, where things stand. Jumping between shots/ideas must never lose work or context.
-6. **The agent gets eyes and hands (v1.1).** Today the companion *advises*; next it *sees* the canvas and *drives* generation — "bounce an idea, the agent sketches three takes" becomes literal.
-7. **Open taste question — default imagery.** The current placeholder/demo art is not loved. Deciding the default visual register (and whether defaults should even exist, vs. always starting from owner shape-sketches) is an explicit open problem, not an accident.
+**Adopted from the review (VC-G5 amendment):** every mark is an instruction, not artwork (markup layer ≠ art layer); every AI result is a reversible take, never a destructive edit; the app — not ComfyUI, not a flattened PNG — is the authoritative document compositor; animation-native frame dimensions (16:9, not the square placeholder); one unified intent composer (the agent infers prompt/correction/question from canvas state); the agent may silently prepare, never silently decide; "Keep this / Another / Not this" replaces commit language; return-state continuity (exact shot, viewport, open loops, resume line); a typed operation registry instead of ad-hoc workflows; a fidelity ladder (thumbnail → blocking → cleanup → style frame → animation anchor); markup/control layers interpreted semantically (shape-first via control-layer interpreter); dropped the variable-reward framing (return because state is preserved and something useful is ready — not slot-machine pulls).
+
+1. **Layer-by-layer generation.** Separable passes — background → characters → effects — each a generatable, editable layer; lazy semantic separation (split subjects only once composition is picked).
+2. **Concepts first, shapes first.** Basic shapes/silhouettes/blocking as a cheap shared thinking medium; shapes are constraints the agent interprets (silhouette/pose/depth/line control), never pixels that must survive into output.
+3. **Character design anchors.** Locked character sheets condition every generation; identity survives across shots.
+4. **Micro ↔ macro switching.** Whole-composition takes and detail surgery flow freely; nothing is lost crossing levels.
+5. **Non-linear, messy-process-tolerant.** The agent carries all state (sequence timeline + per-keyframe revision graph + open-loop ledger); jumping around loses nothing.
+6. **The agent gets eyes and hands.** Context compiler (shot context packet from the decision-structured docs), visual observer (clean/markup/mask/reference channels), typed operations, candidate critic (scope/canon/continuity checks), project librarian (decisions, rejections with reasons, next useful action).
+7. **Open taste question — default imagery.** Unresolved: the register of default imagery, or whether every shot should start from an agent blocking pass instead of any canned default.
+
+**Shipped in the 2026-08-15 foundation pass:** tool-state honesty fix (UI pin test), same-origin asset mirroring (phone-safe delivery via /api/assets), real shot switching (click chips/title, `[`/`]` keys, last-shot restore).
 
 ## 5 · Repo map
 
