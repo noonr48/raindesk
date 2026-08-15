@@ -20,7 +20,7 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 | Capability | Detail |
 |---|---|
 | Full-screen layered canvas | 1024×1024 artboard, contain-fit; phone + desktop layouts (desktop: docked companion drawer) |
-| **Lasso → GEN → commit** | Free-lasso a region → GEN runs **local ComfyUI SDXL inpaint** (z-anime-base-aio-bf16) that redraws *only* the circled region, painted **in place** as a temp overlay — never a mini-preview. Tap GEN again for another take; **COMMIT** merges the winner into the layer; ✕ discards free. |
+| **Lasso → GEN → commit** | Free-lasso a region → GEN runs **local ComfyUI SDXL inpaint** (Illustrious-XL-v0.1) that redraws *only* the circled region, painted **in place** as a temp overlay — never a mini-preview. Tap GEN again for another take; **COMMIT** merges the winner into the layer; ✕ discards free. |
 | Proven locality | Live receipt: inside-mask pixel Δ167.7/255, outside Δ2.95/255 — it redraws what you circled and preserves the rest |
 | Pen & layers | 4-color pen with thickness, layer stack (base/pen/gen), visibility, bounded undo |
 | Companion chat | A real agent (headless pi runtime, json-mode) wearing a friend-toned creative preset; knows the film's locked constraints; never times out silently (120 s → warm fallback); concurrency-capped |
