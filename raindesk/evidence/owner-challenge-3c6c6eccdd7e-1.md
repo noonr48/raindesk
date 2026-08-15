@@ -62,3 +62,7 @@ plus the git SHA at the time:
   `file-inspection-test_run-2d56d817991d37f3`
 - post-repair certification @ 1574bcf (44/44, exit 0): receipt
   `file-inspection-test_run-f243bcfff4849822` (outputDigest 190a41de…)
+- round-2 repairs certification @ c59f23c (44/44, exit 0): receipt
+  `file-inspection-test_run-14cb2d6e7d11f06f`
+- round-3 repairs certification @ 959768c (44/44, exit 0): receipt
+  `file-inspection-test_run-3271342c33b6edbe`

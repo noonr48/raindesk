@@ -70,7 +70,7 @@ RESIDUALS:
 
 ACTIVATION:
 - raindesk-server: LIVE now — wrapper pid 684087 / node listener 684095 (restarted 2026-08-16 03:29:55 +0930 after checkpoint swap 8324d00; live-gen proof in evidence/owner-challenge-3c6c6eccdd7e-1.md). The old v1-mission pid 2143874 is retired. companion-mockup-v1: INERT artifact of the v1 mission, not part of the live app; the process earlier believed to be it (pid 1927) is actually the Vault messaging app (vault-app) and was deliberately left running.
-- design-mockup server (open-design-artifacts companion-app-v1 mockup, NOT the app): LIVE — python3 -m http.server on 0.0.0.0:17590 (pids 290558/290567, up >28h), static reference only (no /api, no writes); INERT with respect to raindesk machinery, candidate for retirement at the reviewer-loop stage.
+- design-mockup server (open-design-artifacts companion-app-v1 mockup, NOT the app): LIVE — python3 -m http.server on 0.0.0.0:17590 (pids 290558/290567), same all-interface reachability as the app (static files only, no /api, no writes); INERT with respect to raindesk machinery, candidate for retirement at the reviewer-loop stage.
 
 TRIAD:
 (a) changed: raindesk app (16 files), 5 repair commits, 1 test commit.
