@@ -36,7 +36,7 @@ INHERITED (S=1): sub-agent backend — primary re-ran its suite (fixed deps-key 
 
 ## WIRING (R-G2.5)
 
-CONSUMERS: grep systemd user+system dirs + crontab for `raindesk` → zero hits; consumers = managed-process registry (agent_process_status: running pid 2143874) + Vault msg 5aba67d5 + this repo. Frontend fetches only `/api/*` same-origin.
+CONSUMERS: grep systemd user+system dirs + crontab for `raindesk` → zero hits; consumers = managed-process registry (at v1 close: pid 2143874; since 2026-08-16 checkpoint-swap restart: wrapper 684087 / node listener 684095) + Vault msg 5aba67d5 + this repo. Frontend fetches only `/api/*` same-origin.
 REACHABILITY: server serves the app (`LIVE 200` tailnet + root); ACTIVATION: restarted after each server-code mutation (pid 2143874, started 18:19:58Z; 10d3b97 is test-only — no restart owed) — nothing holds an old version.
 TWINS: preset candidates `raindesk/presets/creative.txt` (canonical) + `lib/presets/creative.txt` (landing) — agent.js prefers first-existing, tested (`loadPreset prefers a preset file…`).
 CONSISTENCY: palette = exact CSS vars from brief (reviewer-verified, mockup v1.1 lineage); naming (lib/ singular modules, tests colocated) uniform.
@@ -69,7 +69,7 @@ RESIDUALS:
 - exposure R3: unauthenticated tailnet bind → fires if network context changes; hardening option filed.
 
 ACTIVATION:
-- raindesk-server: LIVE now (pid 2143874). companion-mockup-v1 (old mockup): still running for owner reference; INERT artifact, may be stopped anytime.
+- raindesk-server: LIVE now — wrapper pid 684087 / node listener 684095 (restarted 2026-08-16 03:29:55 +0930 after checkpoint swap 8324d00; live-gen proof in evidence/owner-challenge-3c6c6eccdd7e-1.md). The old v1-mission pid 2143874 is retired. companion-mockup-v1: INERT artifact of the v1 mission, not part of the live app; the process earlier believed to be it (pid 1927) is actually the Vault messaging app (vault-app) and was deliberately left running.
 
 TRIAD:
 (a) changed: raindesk app (16 files), 5 repair commits, 1 test commit.
