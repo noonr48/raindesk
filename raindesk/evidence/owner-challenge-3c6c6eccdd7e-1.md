@@ -51,11 +51,9 @@ raindesk mockup. Left running deliberately.
 
 Receipt-id provenance: the hex ids below are harness test-run receipt ids
 (minted by the SLOANE testing tool — decorative labels; the machine-local
-run ledger records each run's timestamp/count/exit-code but carries NO id
+run ledger records each run's timestamp/exit-code but carries NO id
 field, so ids are reproducible neither from this repo nor from the
-ledger). The repo-reproducible proof is the command + git SHA + the
-ledger run timestamp:
-The repo-reproducible proof for each is the command
+ledger). The repo-reproducible proof for each is the command
 `node --test tests/frontend/*.test.js lib/tests/*.test.js` in raindesk/
 plus the git SHA at the time:
 
