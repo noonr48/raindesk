@@ -33,7 +33,7 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 
 1. **Mission contract first** — acceptance criteria in `raindesk/BUILD_BRIEF.md` before any code.
 2. **Sub-agent waves** — typed builders with non-overlapping write leases; independent adversarial reviewers with strict output contracts; repair cycles gated by the reviewers' verdicts.
-3. **Receipts over narration** — every "done" claim carries a machine receipt (oracle-ledger test runs, pixel diffs, form-checked reviewer packets). See `raindesk/DEEP_REVIEW.md` for a full paste-or-fail closeout sheet.
+3. **Receipts over narration** — every "done" claim carries a machine receipt (oracle-ledger test runs, pixel diffs, form-checked reviewer packets; harness-minted receipt ids — provenance note in `raindesk/evidence/owner-challenge-3c6c6eccdd7e-1.md`). See `raindesk/DEEP_REVIEW.md` for a full paste-or-fail closeout sheet.
 4. **Lessons are durable** — every session's mechanisms land in cross-session memory (e.g. the two-message dispatch protocol that makes machine-gated reviewer packets reliable).
 
 ## 4 · Roadmap — the owner's creative process, as direction (v1.1 — amended after external review)

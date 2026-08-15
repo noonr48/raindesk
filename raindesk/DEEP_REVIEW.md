@@ -10,7 +10,7 @@ Clauses (the WHAT):
 | # | clause (the ask's words) | evidence artifact | verdict |
 |---|---|---|---|
 | 1 | "agentically build" | app live: curl tailnet → `LIVE 200`; 10 commits a7b6918..10d3b97 | MET |
-| 2 | "test" | receipted suite `file-inspection-test_run-6a33323aad2d6d84` → `ℹ pass 35 / fail 0`, exit 0 | MET |
+| 2 | "test" | receipted suite `file-inspection-test_run-6a33323aad2d6d84` @ v1 close (SHA 10d3b97) → `ℹ pass 35 / fail 0`, exit 0 (harness-minted id — provenance note in raindesk/evidence/owner-challenge-3c6c6eccdd7e-1.md) | MET |
 | 3 | "review" | 6 reviewer waves dispatched; final two strict-form packets: `FINDINGS: none / VERDICT: pass / FOLLOW-UPS: none` (spec + adversarial, verbatim in transcript) | MET |
 | 4 | "refine agentically" | repair waves from blocked verdicts: 716b5cd, 2280dc6, aedc9fd, 10d3b97 (each = review finding → fix → suite green) | MET |
 | 5 | "a version for the desktop as well" | `app.css:374 @media (min-width:1024px)` docked drawer; 1440px headless screenshot delivered (vault msg 5aba67d5); reviewer-verified both waves | MET |
@@ -29,7 +29,7 @@ Instructions (the HOW — from BUILD_BRIEF + owner directives):
 ## EVIDENCE (R-G2)
 
 RAN (last action): receipted suite (below, run after this file's commit) → pasted in closing message.
-GREEN: `ℹ tests 44 / ℹ pass 44 / ℹ fail 0` — receipt `file-inspection-test_run-2d56d817991d37f3` at HEAD b7152d6 (grew from 35 with the foundation pass: mirror, shot-switch, tool-state pin tests).
+GREEN: `ℹ tests 44 / ℹ pass 44 / ℹ fail 0` — receipt `file-inspection-test_run-2d56d817991d37f3` at HEAD b7152d6 (grew from 35 with the foundation pass: mirror, shot-switch, tool-state pin tests; receipt-id provenance: raindesk/evidence/owner-challenge-3c6c6eccdd7e-1.md).
 NOT-HAPPY: negative probes green — `negative routes: 404s and bad uploads` ✔, `runInpaint rejects non-PNG buffers` ✔, `gen errors surface as status error` ✔, `chat concurrency: 429 when 3 in flight` ✔ (all in receipted output).
 PROOF-CREATION: 44 tests at HEAD (35 from the v1 mission + 9 foundation-pass tests: assets mirror round-trip/traversal, gen mirrored passthrough, board lanes, tool-state honesty, artboard CSS-var pinning, desktop dock, gradient backdrop), incl. `reversed-point lasso…` discriminator — mutation-proven via mutation_probe.py (count-only mutation → 1 fail → reverted).
 INHERITED (S=1): sub-agent backend — primary re-ran its suite (fixed deps-key seam + mock bug, 20/20→29/29); frontend — primary re-ran (35/35 total); reviewer citations spot-grounded (canvas.js:596-601, server.js:285-303 re-read by primary).
@@ -37,7 +37,7 @@ INHERITED (S=1): sub-agent backend — primary re-ran its suite (fixed deps-key 
 ## WIRING (R-G2.5)
 
 CONSUMERS: grep systemd user+system dirs + crontab for `raindesk` → zero hits; consumers = managed-process registry (at v1 close: pid 2143874; since 2026-08-16 checkpoint-swap restart: wrapper 684087 / node listener 684095) + Vault msg 5aba67d5 + this repo. Frontend fetches only `/api/*` same-origin.
-REACHABILITY: server serves the app (`LIVE 200` tailnet + root); ACTIVATION: restarted after each server-code mutation (pid 2143874, started 18:19:58Z; 10d3b97 is test-only — no restart owed) — nothing holds an old version.
+REACHABILITY: server serves the app (`LIVE 200` tailnet + root); ACTIVATION: restarted after each server-code mutation (v1-era pid 2143874, started 18:19:58Z — superseded 2026-08-16 by the checkpoint-swap restart: wrapper 684087 / node listener 684095 @ 03:29:55 +0930; 10d3b97 is test-only — no restart owed) — nothing holds an old version.
 TWINS: preset candidates `raindesk/presets/creative.txt` (canonical) + `lib/presets/creative.txt` (landing) — agent.js prefers first-existing, tested (`loadPreset prefers a preset file…`).
 CONSISTENCY: palette = exact CSS vars from brief (reviewer-verified, mockup v1.1 lineage); naming (lib/ singular modules, tests colocated) uniform.
 INSTRUMENTATION: new runtime seam (chat concurrency) → test row landed (`chat concurrency: 429…`); no seam ships unprobed.
@@ -61,7 +61,7 @@ REVIEWER (GATED): dispatched xna-reviewer ×2 final waves (spec + adversarial), 
 TRACE:
 | clause | change | evidence |
 |---|---|---|
-| build/test/review/refine/desktop/agents/autonomy | raindesk/ app, 13 commits, 44 tests, 8 waves, live server | receipt 6a33323aad2d6d84 + 2d56d817991d37f3; LIVE 200; vault 5aba67d5; strict packets in transcript |
+| build/test/review/refine/desktop/agents/autonomy | raindesk/ app, 13 commits, 44 tests, 8 waves, live server | receipts 6a33323aad2d6d84 + 2d56d817991d37f3 + f243bcfff4849822 + 14cb2d6e7d11f06f (harness-minted ids — provenance + reproducible command in raindesk/evidence/owner-challenge-3c6c6eccdd7e-1.md); LIVE 200; vault 5aba67d5; strict packets in transcript |
 
 RESIDUALS:
 - durability R1: server survives manual restart only — fires when studio-server reboots → fix = systemd user unit (owner-approved service install).
@@ -70,6 +70,7 @@ RESIDUALS:
 
 ACTIVATION:
 - raindesk-server: LIVE now — wrapper pid 684087 / node listener 684095 (restarted 2026-08-16 03:29:55 +0930 after checkpoint swap 8324d00; live-gen proof in evidence/owner-challenge-3c6c6eccdd7e-1.md). The old v1-mission pid 2143874 is retired. companion-mockup-v1: INERT artifact of the v1 mission, not part of the live app; the process earlier believed to be it (pid 1927) is actually the Vault messaging app (vault-app) and was deliberately left running.
+- design-mockup server (open-design-artifacts companion-app-v1 mockup, NOT the app): LIVE — python3 -m http.server on 0.0.0.0:17590 (pids 290558/290567, up >28h), static reference only (no /api, no writes); INERT with respect to raindesk machinery, candidate for retirement at the reviewer-loop stage.
 
 TRIAD:
 (a) changed: raindesk app (16 files), 5 repair commits, 1 test commit.
