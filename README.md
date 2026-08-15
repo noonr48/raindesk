@@ -4,7 +4,7 @@
 
 Raindesk exists because of one observation: the owner is an excellent **reviewer** and reluctant **producer**. Blank pages stop work; button-chains stop work; tab-switching stops work. So the machine does the producing, the owner reacts — and the reaction *is* the creative act. The product goal is not "a drawing tool"; it is **a place the owner wants to be, where staying costs 30 seconds and still moves the film forward.**
 
-> Status: **v1 shipped 2026-08-14**, autonomously built (owner-approved brief → sub-agent build waves → independent review gates). 39 automated tests, mutation-proven regression tests, receipted verification discipline (see *How we work*). This README is also the surface for **external AI review (GPT Pro)** — questions we want answered are at the bottom.
+> Status: **v1 shipped 2026-08-14**, autonomously built (owner-approved brief → sub-agent build waves → independent review gates). 43 automated tests, mutation-proven regression tests, receipted verification discipline (see *How we work*). This README is also the surface for **external AI review (GPT Pro)** — questions we want answered are at the bottom.
 
 ---
 
@@ -25,7 +25,7 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 | Pen & layers | 4-color pen with thickness, layer stack (base/pen/gen), visibility, bounded undo |
 | Companion chat | A real agent (headless pi runtime, json-mode) wearing a friend-toned creative preset; knows the film's locked constraints; never times out silently (120 s → warm fallback); concurrency-capped |
 | Board lanes | Shots move `set / in dev / unplanned` — glanceable counters, agent-maintained |
-| Test discipline | 39 node:test suites; regression tests are **mutation-proven** (we break the code deliberately to prove the test bites — `killproof_deskfit.py`); receipted runs after every mutation |
+| Test discipline | 43 node:test suites; regression tests are **mutation-proven** (we break the code deliberately to prove the test bites — `killproof_deskfit.py`); receipted runs after every mutation |
 
 **Stack (deliberately boring):** zero-dependency Node http backend; vanilla-JS DOM-free canvas core with its own PNG codec; ComfyUI over HTTP only; one-shot headless `pi` turns for the companion. Loopback/tailnet-bound, trusted-home-network exposure model (same as the estate's other tools).
 
