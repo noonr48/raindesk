@@ -50,8 +50,11 @@ raindesk mockup. Left running deliberately.
 ## Suite receipts
 
 Receipt-id provenance: the hex ids below are harness test-run receipt ids
-(minted by the SLOANE testing tool; the oracle ledger that stores them is
-machine-local and gitignored — ids are not reproducible from this repo).
+(minted by the SLOANE testing tool — decorative labels; the machine-local
+run ledger records each run's timestamp/count/exit-code but carries NO id
+field, so ids are reproducible neither from this repo nor from the
+ledger). The repo-reproducible proof is the command + git SHA + the
+ledger run timestamp:
 The repo-reproducible proof for each is the command
 `node --test tests/frontend/*.test.js lib/tests/*.test.js` in raindesk/
 plus the git SHA at the time:
@@ -74,6 +77,8 @@ plus the git SHA at the time:
   `file-inspection-test_run-863363e2e6fd5a3a`
 - round-8 close certification @ b1e4793 (44/44, exit 0): receipt
   `file-inspection-test_run-7ad258a9a4fcb0c7`
+- round-9 close certification @ feb803a (44/44, exit 0): receipt
+  `file-inspection-test_run-7e5a33d9cf30e580`
 
 ## Wave-cycle termination trigger (round-7/8/9 corrections)
 
@@ -86,10 +91,11 @@ review found that wording UNDECIDABLE: data/assets/* appeared in both the
 bound class and the non-activating class with no tiebreak. Corrected
 trigger — classes DISJOINT BY PATH: a fresh review pair re-binds on
 (1) any repo commit, including an uncommitted working-tree change to
-server OR CLIENT code — or to require-cached server assets such as
-lib/workflows/*.json (comfy.js:82, restart-served) — that a process
-restart or the next page load would serve (public/** is served
-per-request with no cache headers); (2) any change to
+server OR CLIENT code, or to any served asset — require-cached ones
+(lib/workflows/*.json, comfy.js:82, restart-served) or per-request-read
+ones (lib/presets/*.txt, fs.readFileSync per chat, agent.js:64) — that a
+process restart, the next page load, or the next request would serve
+(public/** is served per-request with no cache headers); (2) any change to
 AUTHORITATIVE served state — exactly data/board.json (including its
 atomic tmp+rename write sibling) and data/shots/**
 (shot meta, layer files, activeLayer) — regardless of how it arrives
