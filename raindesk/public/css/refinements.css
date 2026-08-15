@@ -133,6 +133,11 @@
 /* ------------------------------------------------ phone workspace */
 
 @media (max-width: 1023.98px) {
+  /* Match the stage's dark foot so shortening the canvas never creates a band. */
+  #app {
+    background: #081217;
+  }
+
   /*
    * The art is square. Centering it in the entire tall phone viewport left a
    * large dead band above it. Shorten only the stage so contain-fit naturally
@@ -208,5 +213,33 @@
   .gens-list {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  /*
+   * app.css predates the docked companion and anchors right-side controls to
+   * the browser edge. When the drawer is open, include its width so the UI is
+   * centered on the reduced stage/artboard rather than drifting under chat.
+   */
+  body.drawer-open .topbar {
+    left: calc(var(--art-x, 10px) + 12px);
+    right: calc(var(--drawer-w) + var(--art-x, 10px) + 12px);
+  }
+
+  body.drawer-open .toolbar {
+    right: calc(var(--drawer-w) + var(--art-x, 10px) + 14px);
+  }
+
+  body.drawer-open .penpop {
+    right: calc(var(--drawer-w) + var(--art-x, 10px) + 78px);
+  }
+
+  body.drawer-open .genbar-wrap {
+    left: calc(var(--art-x, 10px) + 14px);
+    right: calc(var(--drawer-w) + var(--art-x, 10px) + 78px);
+  }
+
+  body.drawer-open .panel {
+    left: calc(var(--art-x, 10px) + 14px);
+    right: calc(var(--drawer-w) + var(--art-x, 10px) + 14px);
   }
 }
