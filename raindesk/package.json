@@ -1,0 +1,12 @@
+{
+  "name": "raindesk-local",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Raindesk local creative companion and storyboard canvas",
+  "scripts": {
+    "start": "node server.js",
+    "dev:mock": "node dev/mock-server.js",
+    "preview": "node dev/preview.js",
+    "test": "node --test lib/tests tests/frontend"
+  }
+}
