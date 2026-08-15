@@ -1,0 +1,49 @@
+name: Raindesk preview
+
+on:
+  pull_request:
+    paths:
+      - 'raindesk/**'
+      - '.github/workflows/raindesk-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: raindesk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check development harness
+        run: |
+          node --check dev/mock-server.js
+          node --check dev/preview.js
+          node --check lib/mock-runtime.js
+
+      - name: Run Raindesk tests
+        run: npm test
+
+      - name: Render desktop and mobile previews
+        run: npm run preview
+
+      - name: Upload preview screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-preview
+          path: raindesk/artifacts/preview/*.png
+          if-no-files-found: warn
+          retention-days: 7
