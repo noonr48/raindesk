@@ -72,21 +72,36 @@ plus the git SHA at the time:
   receipt `file-inspection-test_run-0c3f7480ea96deeb`
 - round-7 close certification @ f2e4f37 (44/44, exit 0): receipt
   `file-inspection-test_run-863363e2e6fd5a3a`
+- round-8 close certification @ b1e4793 (44/44, exit 0): receipt
+  `file-inspection-test_run-7ad258a9a4fcb0c7`
 
-## Wave-cycle termination trigger (round-7/8 corrections)
+## Wave-cycle termination trigger (round-7/8/9 corrections)
 
 The round-6 closeout's trigger ("next REAL repo mutation") was too narrow:
 an owner ROLL executed through the live API (POST /api/shot/S01/layer — the
 take7 mechanism) swaps the challenge's subject imagery entirely inside
-gitignored raindesk/data/ with zero repo mutation. Round-8 adversarial
-review tightened the predicate further: bind on SERVED STATE, not on
-transport. Corrected trigger: a fresh review pair re-binds on ANY
-state-affecting mutation of the challenge surface — (1) any repo commit;
-(2) any change to served state (data/board.json, data/shots/*, layer
-files under data/shots/, data/assets/*) regardless of how it arrives:
-in-app API, direct filesystem write, or RAINDESK_DATA_DIR rehome;
-(3) any owner-verdict event on the taste question (vault 7a61439f).
-Non-activating by classification: transient generation take-previews
-(mirrored assets fetched for display only — saveLayer, shots.js:85, is
-the sole activeLayer setter), prose closeouts, ledger appends, and /tmp
-review artifacts.
+gitignored raindesk/data/ with zero repo mutation. Round-8 tightened the
+predicate to served-state-regardless-of-transport. Round-9 adversarial
+review found that wording UNDECIDABLE: data/assets/* appeared in both the
+bound class and the non-activating class with no tiebreak. Corrected
+trigger — classes DISJOINT BY PATH: a fresh review pair re-binds on
+(1) any repo commit, including an uncommitted working-tree change to
+server OR CLIENT code — or to require-cached server assets such as
+lib/workflows/*.json (comfy.js:82, restart-served) — that a process
+restart or the next page load would serve (public/** is served
+per-request with no cache headers); (2) any change to
+AUTHORITATIVE served state — exactly data/board.json (including its
+atomic tmp+rename write sibling) and data/shots/**
+(shot meta, layer files, activeLayer) — regardless of how it arrives
+(in-app API, direct filesystem write, or RAINDESK_DATA_DIR rehome; a
+rehomed/empty data dir that lazily self-seeds a fresh baseline,
+board.js:52-58 write at :57, counts as such a change); (3) any owner-verdict event on
+the taste question (vault 7a61439f — machine-local channel, observable
+only in the Vault app and session transcripts, same honesty class as the
+receipt ids above).
+data/assets/** is a NON-ACTIVATING display cache by path: gen mirrors
+are written there (server.js /api/gen -> assets.store) and served to
+phones; the authoritative imagery is what data/shots/*.json references
+via layers/activeLayer (saveLayer, shots.js:85, is the sole setter).
+Prose closeouts, ledger appends, /tmp review artifacts, and test-file-only
+edits (tests/**, lib/tests/**) are non-activating.
