@@ -37,9 +37,9 @@
   const DEFAULT_PROMPT = 'continue this shot seamlessly, keep the film style and lighting';
   const PEN_COLORS = ['#e07856', '#e8b04b', '#6f97a3', '#f3ead8'];
 
-  const core = new RC.RainCanvasCore({ width: CANVAS_W, height: CANVAS_H });
+  let core = new RC.RainCanvasCore({ width: CANVAS_W, height: CANVAS_H });
   const state = {
-    tool: 'select',
+    tool: 'pen', // must match the .tool.active button in index.html (deskfit test pins this)
     pen: { color: PEN_COLORS[0], width: 4 },
     board: null,
     shot: null,
@@ -75,21 +75,19 @@
 
   function shotLabel() { return state.shot ? state.shot.id : 'shot'; }
 
-  async function init() {
-    const { board, offline } = await API.getBoardOrDemo();
-    state.board = board;
-    state.offline = offline;
-    state.shot = (board.shots.find((s) => s.lane === 'in_dev') || board.shots[0] || null);
-
+  /** Rebuild the canvas core for a shot: server layer if present, else the demo plate. */
+  async function loadShotIntoCore(shot) {
+    core = new RC.RainCanvasCore({ width: CANVAS_W, height: CANVAS_H });
     core.ensureBase('base · ref plate');
+    state.serverLayerFile = null;
 
-    if (!offline && state.shot) {
+    if (!state.offline && shot) {
       let loaded = false;
       try {
-        const meta = await API.getShot(state.shot.id);
+        const meta = await API.getShot(shot.id);
         if (meta && meta.activeLayer) {
           state.serverLayerFile = meta.activeLayer;
-          const rgba = await API.fetchImageRGBA(API.shotImageUrl(state.shot.id, meta.activeLayer));
+          const rgba = await API.fetchImageRGBA(API.shotImageUrl(shot.id, meta.activeLayer));
           setBaseFromRGBA(rgba);
           loaded = true;
         }
@@ -97,8 +95,45 @@
       if (!loaded) paintLocalBase();
     } else {
       paintLocalBase();
-      toast('offline — demo mode 🌧️ gen needs the server');
+      if (state.offline) toast('offline — demo mode 🌧️ gen needs the server');
     }
+  }
+
+  /** Switch to another shot: fresh core, load its state, remember it. */
+  async function openShot(id) {
+    if (!state.board || !Array.isArray(state.board.shots)) return;
+    if (state.shot && state.shot.id === id) return;
+    const shot = state.board.shots.find((s) => s.id === id);
+    if (!shot) return;
+    state.shot = shot;
+    try { localStorage.setItem('raindesk.lastShot', id); } catch (_e) { /* ignore */ }
+    await loadShotIntoCore(shot);
+    updateTitle();
+    updateHint();
+    syncGenBar();
+    closeSheet();
+    markDirty();
+  }
+
+  /** Keyboard/step navigation between shots. */
+  function cycleShot(dir) {
+    if (!state.board || !Array.isArray(state.board.shots) || state.board.shots.length === 0) return;
+    const idx = state.shot ? state.board.shots.findIndex((s) => s.id === state.shot.id) : -1;
+    const next = state.board.shots[(idx + dir + state.board.shots.length) % state.board.shots.length];
+    openShot(next.id);
+  }
+
+  async function init() {
+    const { board, offline } = await API.getBoardOrDemo();
+    state.board = board;
+    state.offline = offline;
+    // restore the last-opened shot when it still exists (return-to-work continuity)
+    let lastId = null;
+    try { lastId = localStorage.getItem('raindesk.lastShot'); } catch (_e) { /* private mode */ }
+    const last = lastId && board.shots.find((s) => s.id === lastId);
+    state.shot = last || (board.shots.find((s) => s.lane === 'in_dev') || board.shots[0] || null);
+
+    await loadShotIntoCore(state.shot);
 
     state.drawer = CHAT.ChatDrawer($('drawer'), { api: API, shotLabel });
     $('drawerHandle').addEventListener('click', () => {
@@ -198,6 +233,9 @@
     // top bar
     $('undoBtn').addEventListener('click', onUndo);
     $('laneChip').addEventListener('click', openSheet);
+    $('shotTitle').addEventListener('click', openSheet);
+    $('shotTitle').style.cursor = 'pointer';
+    $('shotTitle').title = 'board / shots — click to switch';
 
     // sheet
     $('sheetScrim').addEventListener('click', closeSheet);
@@ -210,6 +248,7 @@
     disp.addEventListener('pointercancel', onUp);
 
     document.addEventListener('keydown', (e) => {
+      const inText = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
       if (e.key === 'Escape') {
         closeSheet();
         $('penpop').classList.remove('open');
@@ -217,6 +256,7 @@
         if (state.drawer) state.drawer.close();
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); onUndo(); }
+      if (!inText && (e.key === '[' || e.key === ']')) cycleShot(e.key === ']' ? 1 : -1);
     });
   }
 
@@ -532,6 +572,8 @@
           chip.className = 'shot-chip' + (mine ? ' mine' : '');
           chip.textContent = s.id;
           chip.title = s.beat || '';
+          chip.style.cursor = 'pointer';
+          chip.addEventListener('click', () => { openShot(s.id); });
           row.appendChild(chip);
         }
       }

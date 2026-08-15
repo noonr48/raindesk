@@ -35,6 +35,7 @@ const { validatePngBuffer, MAX_PNG_BYTES } = require('./lib/validate');
 const comfy = require('./lib/comfy');
 const agent = require('./lib/agent');
 const { GenQueue } = require('./lib/queue');
+const assets = require('./lib/assets');
 
 const HOST = process.env.RAINDESK_HOST || '0.0.0.0'; // tailnet-reachable (phone/laptop); vault-app/mockup precedent
 const PORT = 17600;
@@ -216,10 +217,23 @@ async function handleApi(req, res, url, deps) {
     if (body.seed !== undefined) comfy.normalizeSeed(body.seed); // validate now
 
     const { shotId, layerId, prompt, negative, seed } = body;
-    const jobId = queue.submit(() => comfyImpl.runInpaint({
-      shotId, layerId, prompt, negative: negative || '', seed,
-      imageBuffer, maskBuffer,
-    }), { shotId, layerId: layerId || null });
+    const jobId = queue.submit(async () => {
+      const result = await comfyImpl.runInpaint({
+        shotId, layerId, prompt, negative: negative || '', seed,
+        imageBuffer, maskBuffer,
+      });
+      // Phone-safe delivery: mirror the output into Raindesk's same-origin
+      // asset store so clients never need to reach ComfyUI's 127.0.0.1 URL
+      // (which is client-local and broken on any non-localhost device).
+      try {
+        if (comfyImpl.fetchImageBytes && result && Array.isArray(result.images) && result.images[0]) {
+          const bytes = await comfyImpl.fetchImageBytes(result.images[0]);
+          const stored = assets.store(shotId, bytes);
+          return { ...result, imageUrl: stored.url, comfyUrl: result.imageUrl };
+        }
+      } catch (_e) { /* fall back to the ComfyUI URL */ }
+      return result;
+    }, { shotId, layerId: layerId || null });
     return sendJson(res, 200, { jobId });
   }
 
@@ -229,6 +243,18 @@ async function handleApi(req, res, url, deps) {
     const job = seg === null ? null : queue.get(seg);
     if (!job) throw new HttpError(404, 'no such job');
     return sendJson(res, 200, queue.view(job));
+  }
+
+  const assetMatch = route.match(/^\/api\/assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9._-]{1,128})$/);
+  if (method === 'GET' && assetMatch) {
+    const filePath = assets.resolve(assetMatch[1], assetMatch[2]);
+    if (!filePath) throw new HttpError(404, 'no such asset');
+    let stat;
+    try { stat = await fs.promises.stat(filePath); } catch (_e) { throw new HttpError(404, 'no such asset'); }
+    if (!stat.isFile()) throw new HttpError(404, 'no such asset');
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': stat.size });
+    await pipeline(fs.createReadStream(filePath), res);
+    return;
   }
 
   const shotMatch = route.match(/^\/api\/shot\/([^/]+)$/);
