@@ -7,6 +7,6 @@
     "start": "node server.js",
     "dev:mock": "node dev/mock-server.js",
     "preview": "node dev/preview.js",
-    "test": "node --test lib/tests tests/frontend"
+    "test": "node --test lib/tests/*.test.js tests/frontend/*.test.js"
   }
 }
