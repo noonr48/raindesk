@@ -1,6 +1,12 @@
 name: Raindesk preview
 
 on:
+  push:
+    branches:
+      - 'chatgpt/**'
+    paths:
+      - 'raindesk/**'
+      - '.github/workflows/raindesk-preview.yml'
   pull_request:
     paths:
       - 'raindesk/**'
