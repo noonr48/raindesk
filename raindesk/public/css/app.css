@@ -200,8 +200,7 @@ input { font-family: inherit; }
 .sw-temp, .sw-gen { background: linear-gradient(160deg, #6f97a3, #2e5666); }
 .layer .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer .tag {
-  font-size: 8px; padding: 2px 6px; border-radius: 6px; background: #24404c;
-  letter-spacing: .3px; text-transform: uppercase;
+  font-size: 8px; padding: 2px 6px; border-radius: 6px; background: #24404c; letter-spacing: .3px; text-transform: uppercase;
 }
 .layer .tag.temp { background: #3a2c10; color: var(--gold); }
 .layer .eye {
@@ -219,7 +218,7 @@ input { font-family: inherit; }
 }
 .lane.hot { border-color: var(--gold-dim); color: var(--gold); }
 
-/* ----------------------------------------------------------- lanes sheet */
+/* ------------------------------------------------------------- lanes sheet */
 
 .sheet {
   position: absolute; inset: 0; z-index: 60; background: rgba(10, 20, 24, .6);
@@ -299,6 +298,35 @@ input { font-family: inherit; }
   background: #3a2c10; color: #ffe9c2; border: 1px solid var(--gold-dim);
   align-self: flex-end; border-bottom-right-radius: 4px;
 }
+
+.partner-start { align-self: flex-start; margin-top: 2px; }
+.partner-start-btn,
+.partner-move {
+  border: 1px solid rgba(184, 137, 58, .55);
+  background: rgba(58, 44, 16, .28);
+  color: #f1dfbd;
+  border-radius: 10px;
+  font-size: 10.5px;
+  line-height: 1.25;
+  padding: 7px 9px;
+  text-align: left;
+}
+.partner-start-btn:hover,
+.partner-move:hover,
+.partner-start-btn:focus-visible,
+.partner-move:focus-visible {
+  border-color: var(--gold);
+  color: var(--cream);
+  outline: none;
+}
+.partner-moves {
+  align-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 1px 2px 5px;
+}
+.partner-move { flex: 1 1 105px; }
 
 .typing {
   display: none; align-items: center; gap: 4px; padding: 6px 12px;

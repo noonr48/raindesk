@@ -9,7 +9,10 @@
  *   POST /api/shot/{id}/layer  multipart PNG (field "image") -> { ok, file, url, ts }
  *   GET  /api/shot/{id}        -> { id, layers:[{file,ts}], activeLayer }
  *   GET  /api/shot/{id}/image/{file} -> PNG bytes
- *   POST /api/chat             { message } -> { reply }
+ *   GET  /api/direction        -> Direction Graph
+ *   POST /api/direction/*      -> project / scene / shot / beat / annotation
+ *   POST /api/partner/turn     { message?, mode?, context? } -> structured partner turn
+ *   POST /api/chat             { message } -> { reply } (legacy)
  */
 (function (root, factory) {
   const api = factory();
@@ -82,6 +85,15 @@
   function getBoard() { return GET('/api/board'); }
 
   function moveShot(shotId, lane) { return POST('/api/board/move', { shotId, lane }); }
+
+  /* --------------------------------------------------------- direction */
+
+  function getDirection() { return GET('/api/direction'); }
+  function updateDirectionProject(patch) { return POST('/api/direction/project', patch || {}); }
+  function createDirectionScene(scene) { return POST('/api/direction/scene', scene || {}); }
+  function createDirectionShot(shot) { return POST('/api/direction/shot', shot || {}); }
+  function createDirectionBeat(beat) { return POST('/api/direction/beat', beat || {}); }
+  function addDirectionAnnotation(annotation) { return POST('/api/direction/annotation', annotation || {}); }
 
   /* --------------------------------------------------------------- gen */
 
@@ -164,7 +176,7 @@
     return { width: w, height: h, data: new Uint8ClampedArray(c2d.getImageData(0, 0, w, h).data) };
   }
 
-  /* -------------------------------------------------------------- shots */
+  /* ----------------------------------------------------------- shots */
 
   function getShot(id) { return GET(`/api/shot/${encodeURIComponent(id)}`); }
 
@@ -179,18 +191,15 @@
     return `/api/shot/${encodeURIComponent(id)}/image/${encodeURIComponent(file)}`;
   }
 
-  /* -------------------------------------------------------------- chat */
+  /* -------------------------------------------------- partner */
 
-  function sendChat(message) {
-    // 125s > server's 120s pi timeout: the server's own friendly fallback
-    // reply wins when pi hangs; this client timeout only catches network-level
-    // hangs so the composer can never wedge on typing dots forever.
+  function partnerTurn(message, { mode = null, context = {} } = {}) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 125000);
-    return jsonFetch('/api/chat', {
+    return jsonFetch('/api/partner/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message: message == null ? '' : message, mode: mode || undefined, context }),
       signal: ctl.signal,
     }).finally(() => clearTimeout(timer));
   }
@@ -221,6 +230,8 @@
   return {
     ApiError, GET, POST, base64FromBytes,
     getBoard, getBoardOrDemo, moveShot,
+    getDirection, updateDirectionProject, createDirectionScene, createDirectionShot,
+    createDirectionBeat, addDirectionAnnotation, partnerTurn,
     submitGen, pollGen, fetchImageRGBA,
     getShot, uploadLayer, shotImageUrl, sendChat,
     DEMO_BOARD,
