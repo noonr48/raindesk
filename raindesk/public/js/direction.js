@@ -57,7 +57,7 @@
     };
   }
 
-  function anchorsFromPath(annotation, interpretation) {
+  function cameraCuesFromPath(annotation, interpretation) {
     if (!annotation || !annotation.geometry || !Array.isArray(annotation.geometry.points) ||
         annotation.geometry.points.length < 2) return null;
     const points = annotation.geometry.points;
@@ -118,7 +118,7 @@
       }
     }
 
-    const shotId = `legacy_${safeIdPart(legacyShot.id)}`;
+    const shotId = safeIdPart(legacyShot.id);
     try {
       await api.createDirectionShot({
         id: shotId,
@@ -210,14 +210,14 @@
     const annotation = saved && saved.annotation ? saved.annotation : null;
     let anchors = null;
     if (annotation && kind === 'camera_path' && typeof api.setDirectionShotAnchor === 'function') {
-      anchors = anchorsFromPath(annotation, interpretation);
+      anchors = cameraCuesFromPath(annotation, interpretation);
       if (anchors) {
         try {
           await api.setDirectionShotAnchor(scope.shotId, 'start', anchors.start);
           await api.setDirectionShotAnchor(scope.shotId, 'end', anchors.end);
         } catch (_e) {
-          // The semantic arrow is already safely persisted; endpoint promotion
-          // is additive and must never make the artist redraw the direction.
+          // The semantic arrow is already safely persisted; cue promotion is
+          // additive and never claims these endpoints are actual shot frames.
         }
       }
     }
@@ -225,7 +225,8 @@
     return {
       scope,
       annotation,
-      anchors,
+      anchors, // legacy return name
+      cameraCues: anchors,
       turn,
       partnerError,
     };
@@ -237,7 +238,8 @@
     simplifyPoints,
     pathGeometry,
     kindFromInterpretation,
-    anchorsFromPath,
+    cameraCuesFromPath,
+    anchorsFromPath: cameraCuesFromPath,
     findLegacyScope,
     ensureLegacyScope,
     loadShotMarks,

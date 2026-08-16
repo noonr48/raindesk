@@ -7,6 +7,16 @@ const { GenQueue, MAX_PENDING } = require('../../lib/queue');
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+async function waitPhase(q, id, phase, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const job = q.get(id);
+    if (job && job.phase === phase) return job;
+    if (Date.now() > deadline) throw new Error(`job ${id} never reached phase ${phase}`);
+    await delay(5);
+  }
+}
+
 async function waitFor(q, id, statuses, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -86,4 +96,48 @@ test('get/view handle unknown ids', () => {
   const q = new GenQueue();
   assert.equal(q.get('404'), null);
   assert.equal(q.view(null), null);
+});
+
+test('queued generation can be cancelled honestly; running generation refuses fake cancellation', async () => {
+  const q = new GenQueue();
+  let release;
+  const blocker = new Promise((r) => { release = r; });
+  let secondRan = false;
+  const first = q.submit(async ({ setPhase }) => { setPhase('generating'); await blocker; return {}; });
+  const second = q.submit(async () => { secondRan = true; return {}; });
+  await waitPhase(q, first, 'generating');
+  const runningCancel = q.cancel(first);
+  assert.equal(runningCancel.ok, false);
+  assert.equal(runningCancel.reason, 'running');
+  const queuedCancel = q.cancel(second);
+  assert.equal(queuedCancel.ok, true);
+  assert.equal(q.view(q.get(second)).status, 'cancelled');
+  release();
+  await waitFor(q, first, ['done']);
+  await delay(5);
+  assert.equal(secondRan, false);
+});
+
+test('queue emits stage metadata and durable take receipt to optional persistent store', async () => {
+  const writes = [];
+  const q = new GenQueue({ store: {
+    list: () => [],
+    upsert: (j) => writes.push({
+      status: j.status, phase: j.phase, takeId: j.takeId || null,
+      resultAssetSha: j.resultAssetSha || null, imageUrl: j.imageUrl || null,
+    }),
+  } });
+  const sha = 'a'.repeat(64);
+  const id = q.submit(async ({ setPhase }) => {
+    setPhase('generating'); setPhase('mirroring');
+    return { imageUrl: `/api/blob/${sha}`, takeId: 'take_S01_1', resultAssetSha: sha, comfyUrl: 'http://comfy/view' };
+  });
+  const done = await waitFor(q, id, ['done']);
+  assert.ok(writes.some((w) => w.phase === 'queued'));
+  assert.ok(writes.some((w) => w.phase === 'generating'));
+  assert.ok(writes.some((w) => w.phase === 'mirroring'));
+  assert.equal(writes.at(-1).status, 'done');
+  assert.equal(writes.at(-1).takeId, 'take_S01_1');
+  assert.equal(writes.at(-1).resultAssetSha, sha);
+  assert.equal(q.view(done).takeId, 'take_S01_1');
 });

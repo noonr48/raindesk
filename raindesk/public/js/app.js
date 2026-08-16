@@ -48,6 +48,9 @@
     offline: false,
     serverLayerFile: null,
     making: false,
+    currentJobId: null,
+    currentJobPhase: null,
+    takeMeta: [], // aligned with core.session.takes; durable server take ids/provenance
     drawer: null,
     beatTrail: null,
     dirty: true,
@@ -57,6 +60,14 @@
     pendingDirection: null,
     directionBusy: false,
     fit: { scale: 1, ox: 0, oy: 0 },
+    persistence: {
+      timer: null,
+      queue: Promise.resolve(),
+      revisionByShot: Object.create(null),
+      assetRefsByShot: Object.create(null),
+      unsyncedByShot: Object.create(null),
+      pendingSnapshotByShot: Object.create(null),
+    },
   };
 
   /* ------------------------------------------------------------- dom */
@@ -79,6 +90,11 @@
     bindDirectionCaption();
     resize();
     window.addEventListener('resize', resize);
+    window.addEventListener('beforeunload', (e) => {
+      if (!hasUnsyncedWork()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    });
     requestAnimationFrame(tick);
     init().catch((e) => toast('could not start raindesk 🌧️ ' + (e && e.message ? e.message : '')));
   }
@@ -88,12 +104,31 @@
   function shotLabel() { return state.shot ? state.shot.id : 'shot'; }
 
   function partnerCanvasContext() {
+    const lasso = core && core.lasso && core.lasso.closed ? core.lasso : null;
+    const lassoPoints = lasso
+      ? lasso.points.filter((_p, i) => i % Math.max(1, Math.floor(lasso.points.length / 48)) === 0)
+        .slice(0, 48).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }))
+      : [];
     return {
       legacyShotId: state.shot ? state.shot.id : null,
       legacyBeat: state.shot && state.shot.beat ? state.shot.beat : '',
       surface: 'storyboard_canvas',
       activeTool: state.tool,
-      canvas: { width: CANVAS_W, height: CANVAS_H },
+      canvas: {
+        width: CANVAS_W,
+        height: CANVAS_H,
+        activeLayerId: core ? core.activeLayerId : null,
+        pendingTakes: core && core.session ? core.session.takes.length : 0,
+      },
+      selection: lasso ? { type: 'lasso', points: lassoPoints } : null,
+      artRevisionId: state.shot ? (state.persistence.revisionByShot[state.shot.id] || null) : null,
+      visibleLayers: core ? core.layers.map((layer) => ({
+        id: layer.id,
+        name: layer.name,
+        kind: layer.kind,
+        visible: layer.visible !== false,
+        active: layer.id === core.activeLayerId,
+      })) : [],
       nearbyNotes: state.directionMarks
         .filter((m) => m && m.rawText)
         .slice(-8)
@@ -101,11 +136,146 @@
     };
   }
 
-  /** Rebuild the canvas core for a shot: server layer if present, else the demo plate. */
+  /* ----------------------------------------- editable shot persistence */
+
+  function rasterLayerRefsFromDocument(doc) {
+    const refs = Object.create(null);
+    if (!doc || !Array.isArray(doc.layers)) return refs;
+    for (const layer of doc.layers) {
+      if (layer && layer.id && layer.assetSha) refs[layer.id] = layer.assetSha;
+    }
+    return refs;
+  }
+
+  function persistenceSnapshot(reason = 'edit') {
+    if (state.offline || !state.shot || !API.saveShotDocument || !API.uploadBlob) return null;
+    const shotId = state.shot.id;
+    const knownRefs = { ...(state.persistence.assetRefsByShot[shotId] || {}) };
+    const doc = core.toDocument({ shotId, assetRefsByLayerId: knownRefs });
+    doc.meta = {
+      legacyShotId: shotId,
+      directionShotId: state.directionScope && state.directionScope.shotId || null,
+      directionSceneId: state.directionScope && state.directionScope.sceneId || null,
+    };
+    const pendingRaster = [];
+    for (const layer of core.layers) {
+      if (!RC.isRasterKind(layer.kind) || knownRefs[layer.id]) continue;
+      pendingRaster.push({
+        layerId: layer.id,
+        png: RC.encodePNG(CANVAS_W, CANVAS_H, new Uint8ClampedArray(layer.data)),
+      });
+    }
+    return { shotId, reason, doc, knownRefs, pendingRaster };
+  }
+
+  function enqueueShotSave(snapshot) {
+    if (!snapshot) return Promise.resolve(null);
+    state.persistence.unsyncedByShot[snapshot.shotId] = true;
+    state.persistence.pendingSnapshotByShot[snapshot.shotId] = snapshot;
+    state.persistence.queue = state.persistence.queue.then(async () => {
+      const refs = {
+        ...(state.persistence.assetRefsByShot[snapshot.shotId] || {}),
+        ...snapshot.knownRefs,
+      };
+      for (const item of snapshot.pendingRaster) {
+        if (refs[item.layerId]) continue;
+        const stored = await API.uploadBlob(item.png);
+        refs[item.layerId] = stored.sha;
+      }
+      for (const layer of snapshot.doc.layers) {
+        if (RC.isRasterKind(layer.kind)) layer.assetSha = refs[layer.id] || null;
+      }
+      const baseRevisionId = state.persistence.revisionByShot[snapshot.shotId] || null;
+      const saved = await API.saveShotDocument(snapshot.shotId, {
+        document: snapshot.doc,
+        baseRevisionId,
+        reason: snapshot.reason,
+      });
+      state.persistence.revisionByShot[snapshot.shotId] = saved.revisionId;
+      state.persistence.assetRefsByShot[snapshot.shotId] = refs;
+      state.persistence.unsyncedByShot[snapshot.shotId] = false;
+      delete state.persistence.pendingSnapshotByShot[snapshot.shotId];
+      return saved;
+    }).catch((e) => {
+      state.persistence.unsyncedByShot[snapshot.shotId] = true;
+      // Keep the artwork in the live document and tell the truth: it has not
+      // been durably synced yet. Never claim "saved locally" when it is not.
+      toast(e && e.status === 409
+        ? 'this shot changed elsewhere — keeping your work unsynced for review'
+        : 'work is still on this screen, but it has not synced yet 🌧️');
+      return null;
+    });
+    return state.persistence.queue;
+  }
+
+  function scheduleShotSave(reason = 'edit', delay = 450) {
+    if (state.offline || !state.shot) return;
+    state.persistence.unsyncedByShot[state.shot.id] = true;
+    clearTimeout(state.persistence.timer);
+    state.persistence.timer = setTimeout(() => {
+      state.persistence.timer = null;
+      enqueueShotSave(persistenceSnapshot(reason));
+    }, delay);
+  }
+
+  async function flushShotSave(reason = 'edit') {
+    clearTimeout(state.persistence.timer);
+    state.persistence.timer = null;
+    const snap = persistenceSnapshot(reason);
+    if (snap) await enqueueShotSave(snap);
+    else await state.persistence.queue;
+    return state.shot ? !state.persistence.unsyncedByShot[state.shot.id] : true;
+  }
+
+  async function retryPendingShotSave(shotId) {
+    const snapshot = state.persistence.pendingSnapshotByShot[shotId];
+    if (!snapshot) return !state.persistence.unsyncedByShot[shotId];
+    await enqueueShotSave(snapshot);
+    return !state.persistence.unsyncedByShot[shotId];
+  }
+
+  function hasUnsyncedWork() {
+    return Object.values(state.persistence.unsyncedByShot).some(Boolean);
+  }
+
+  /** Rebuild the canvas core for a shot: editable document first, legacy preview second. */
   async function loadShotIntoCore(shot) {
     core = new RC.RainCanvasCore({ width: CANVAS_W, height: CANVAS_H });
-    core.ensureBase('base · ref plate');
+    state.takeMeta = [];
     state.serverLayerFile = null;
+
+    if (!state.offline && shot && API.getShotDocument) {
+      try {
+        const current = await API.getShotDocument(shot.id);
+        const doc = current && current.document;
+        if (doc) {
+          const buffers = Object.create(null);
+          const refs = rasterLayerRefsFromDocument(doc);
+          for (const layer of doc.layers || []) {
+            if (!layer.assetSha) continue;
+            const rgba = await API.fetchImageRGBA(API.blobUrl(layer.assetSha));
+            if (rgba.width !== CANVAS_W || rgba.height !== CANVAS_H) {
+              throw new Error(`editable layer ${layer.id} has unexpected dimensions`);
+            }
+            buffers[layer.id] = rgba.data;
+          }
+          core.loadDocument(doc, buffers);
+          state.persistence.revisionByShot[shot.id] = current.revisionId;
+          state.persistence.assetRefsByShot[shot.id] = refs;
+          state.persistence.unsyncedByShot[shot.id] = false;
+          delete state.persistence.pendingSnapshotByShot[shot.id];
+          return;
+        }
+      } catch (e) {
+        if (!e || e.status !== 404) {
+          toast('editable state could not be restored — opening the last preview instead 🌧️');
+        }
+      }
+    }
+
+    core.ensureBase('base · ref plate');
+    state.persistence.revisionByShot[shot && shot.id] = null;
+    state.persistence.assetRefsByShot[shot && shot.id] = Object.create(null);
 
     if (!state.offline && shot) {
       let loaded = false;
@@ -132,6 +302,14 @@
     if (state.making) { toast('wait for the take — switching mid-gen would drop it 🌧️'); return; }
     const shot = state.board.shots.find((s) => s.id === id);
     if (!shot) return;
+    if (state.shot) {
+      const currentId = state.shot.id;
+      await flushShotSave('switch shot');
+      if (state.persistence.unsyncedByShot[currentId]) {
+        toast('staying on this shot until its edits are safely synced');
+        return;
+      }
+    }
     state.shot = shot;
     try { localStorage.setItem('raindesk.lastShot', id); } catch (_e) { /* ignore */ }
     await loadShotIntoCore(shot);
@@ -164,6 +342,11 @@
 
     await loadShotIntoCore(state.shot);
     await hydrateDirectionMarks(state.shot);
+    // First open of a legacy/blank shot is migrated lazily into the editable
+    // document store without blocking the creative surface.
+    if (state.shot && !state.offline && !state.persistence.revisionByShot[state.shot.id]) {
+      scheduleShotSave('initial editable import', 800);
+    }
 
     state.drawer = CHAT.ChatDrawer($('drawer'), {
       api: API,
@@ -543,6 +726,7 @@
         core.addStroke(core.activeLayer().id, {
           points: g.points, color: state.pen.color, width: state.pen.width,
         });
+        scheduleShotSave('draw stroke');
       } catch (err) {
         toast(err.message);
       }
@@ -555,9 +739,33 @@
   function setMaking(on) {
     state.making = on;
     const btn = $('genBtn');
-    btn.disabled = on;
-    btn.textContent = on ? 'making…' : (core.session && core.session.takes.length ? '⟳ GEN' : 'GEN');
+    if (!on) {
+      state.currentJobId = null;
+      state.currentJobPhase = null;
+      btn.disabled = false;
+      btn.textContent = core.session && core.session.takes.length ? '⟳ GEN' : 'GEN';
+    } else {
+      btn.disabled = true;
+      btn.textContent = 'starting…';
+    }
     btn.classList.toggle('making', on);
+  }
+
+  function updateGenerationPhase(view) {
+    if (!state.making) return;
+    const phase = view && view.phase || state.currentJobPhase || 'queued';
+    state.currentJobPhase = phase;
+    const btn = $('genBtn');
+    if (phase === 'queued') {
+      btn.disabled = false;
+      btn.textContent = 'CANCEL · waiting';
+    } else if (phase === 'mirroring') {
+      btn.disabled = true;
+      btn.textContent = 'finishing…';
+    } else {
+      btn.disabled = true;
+      btn.textContent = 'making…';
+    }
   }
 
   function syncGenBar() {
@@ -567,11 +775,31 @@
   }
 
   async function onGen() {
-    if (state.making) return;
+    if (state.making) {
+      if (state.currentJobId && state.currentJobPhase === 'queued' && API.cancelGen) {
+        try {
+          await API.cancelGen(state.currentJobId);
+          toast('cancelled before it started');
+        } catch (e) {
+          toast((e && (e.friendly || e.message)) || 'could not cancel this stage');
+        }
+      } else {
+        toast('already working on it — this stage cannot be safely stopped yet');
+      }
+      return;
+    }
     if (state.offline || !state.shot) { toast('gen needs the raindesk server 🌧️'); return; }
+    // Pin the exact editable artwork revision before asking the generator to
+    // branch from it. A take is only trustworthy when its parent is durable.
+    const synced = await flushShotSave('prepare generation');
+    if (!synced) {
+      toast('I’m keeping this take on hold until the current shot syncs safely');
+      return;
+    }
     const assets = core.exportGenAssets({ feather: 24 });
     const prompt = $('prompt').value.trim() || DEFAULT_PROMPT;
     core.beginTakeSession(assets);
+    if (core.session && core.session.takes.length === 0) state.takeMeta = [];
     setMaking(true);
     markDirty();
     try {
@@ -581,13 +809,24 @@
         prompt,
         negative: undefined,
         seed: undefined,
+        baseRevisionId: state.persistence.revisionByShot[state.shot.id] || null,
+        region: assets.region,
+        lasso: core.effectiveLassoPoints ? core.effectiveLassoPoints() : [],
         regionPng: assets.regionPng,
         maskPng: assets.maskPng,
       });
-      const view = await API.pollGen(jobId);
+      state.currentJobId = jobId;
+      state.currentJobPhase = 'queued';
+      updateGenerationPhase({ phase: 'queued' });
+      const view = await API.pollGen(jobId, { onPoll: updateGenerationPhase });
       const raw = await API.fetchImageRGBA(view.imageUrl);
       const take = resample(raw, assets.region.w, assets.region.h);
-      core.pushTake(take);
+      const takeIndex = core.pushTake(take);
+      state.takeMeta[takeIndex] = {
+        takeId: view.takeId || null,
+        resultAssetSha: view.resultAssetSha || null,
+        imageUrl: view.imageUrl || null,
+      };
       if (state.drawer) {
         state.drawer.recordGen({
           shotId: state.shot.id,
@@ -633,15 +872,13 @@
 
   async function onCommit() {
     if (!core.currentTake()) { toast('nothing to commit yet'); return; }
-    // never paint onto the locked base without a work layer
-    const active = core.activeLayer();
-    if (!active || active.kind === 'base') {
-      const pen = core.layers.slice().reverse().find((l) => l.kind === 'pen') ||
-        core.addLayer({ name: 'gen pass', kind: 'pen' });
-      core.setActiveLayer(pen.id);
-    }
+    const selectedIndex = core.session ? core.session.takeIndex : -1;
+    const acceptedMeta = selectedIndex >= 0 ? state.takeMeta[selectedIndex] || null : null;
     try {
-      core.commitTake();
+      core.commitTake({
+        name: `accepted take ${Date.now().toString(36).slice(-4)}`,
+        sourceTakeId: acceptedMeta && acceptedMeta.takeId || null,
+      });
     } catch (e) {
       toast(e.message);
       return;
@@ -651,19 +888,31 @@
     syncGenBar();
     syncDock();
     markDirty();
-    toast('committed to layer ✅');
-    if (!state.offline && state.shot) {
+    toast('accepted — saving as its own take layer…');
+    const saved = await flushShotSave('accept generated take');
+    if (saved && acceptedMeta && acceptedMeta.takeId && API.acceptTake && state.shot) {
       try {
-        const png = RC.encodePNG(CANVAS_W, CANVAS_H, core.compositeVisible().data);
-        const saved = await API.uploadLayer(state.shot.id, png);
-        state.serverLayerFile = saved.file;
-      } catch (e) {
-        toast('saved locally — server upload failed 🌧️');
+        await API.acceptTake(acceptedMeta.takeId, state.persistence.revisionByShot[state.shot.id] || null);
+      } catch (_e) {
+        // The artwork revision is already safe. Keep take metadata candidate
+        // rather than lying about acceptance; it can be reconciled later.
+        toast('artwork is safe; take history still needs to sync');
       }
+    }
+    state.takeMeta = [];
+    if (!state.shot || !state.persistence.unsyncedByShot[state.shot.id]) {
+      toast('take saved safely ✅');
     }
   }
 
   function onDiscard() {
+    const rejected = state.takeMeta.slice();
+    if (API.rejectTake) {
+      for (const meta of rejected) {
+        if (meta && meta.takeId) API.rejectTake(meta.takeId).catch(() => {});
+      }
+    }
+    state.takeMeta = [];
     core.discardTakes();
     syncGenBar();
     syncDock();
@@ -671,15 +920,24 @@
     toast('dropped it, no shame ✨');
   }
 
-  function onUndo() {
+  async function onUndo() {
     const rec = core.undo();
-    if (rec) {
-      syncGenBar();
-      syncDock();
-      markDirty();
-    } else {
+    if (!rec) {
       toast('nothing to undo');
+      return;
     }
+    syncGenBar();
+    syncDock();
+    markDirty();
+    if (rec.type === 'commitLayer' && rec.sourceTakeId) {
+      const saved = await flushShotSave('undo accepted take');
+      if (saved && API.reopenTake) {
+        try { await API.reopenTake(rec.sourceTakeId); }
+        catch (_e) { toast('artwork undo is safe; take history still needs to sync'); }
+      }
+      return;
+    }
+    scheduleShotSave('undo');
   }
 
   /* -------------------------------------------------------- layers panel */
@@ -714,12 +972,14 @@
         layer.visible = !layer.visible;
         renderPanel();
         markDirty();
+        scheduleShotSave('layer visibility');
       });
       row.append(sw, nm, tag, eye);
       row.addEventListener('click', () => {
         try { core.setActiveLayer(layer.id); } catch (_e) { return; }
         renderPanel();
         markDirty();
+        scheduleShotSave('active layer');
       });
       wrap.appendChild(row);
     }
@@ -730,6 +990,7 @@
       core.addLayer({ name: 'notes ' + core.layers.filter((l) => l.kind === 'pen').length, kind: 'pen' });
       renderPanel();
       markDirty();
+      scheduleShotSave('add pen layer');
     });
     wrap.appendChild(add);
 
