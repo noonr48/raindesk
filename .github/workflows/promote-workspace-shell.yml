@@ -27,7 +27,7 @@ jobs:
           set -euo pipefail
           test "$(git branch --show-current)" = "chatgpt/endless-workspace-shell-v1"
           test -f raindesk/dev/.workspace-shell-payload.b64
-          cp raindesk/dev/.workspace-shell-payload.b64 /tmp/workspace-shell.b64
+          tr -cd 'A-Za-z0-9+/=' < raindesk/dev/.workspace-shell-payload.b64 > /tmp/workspace-shell.b64
           base64 -d /tmp/workspace-shell.b64 > /tmp/workspace-shell.patch.bz2
           echo 'eda4c71c2379bf22f1c154c5b4cc6f03477f1485bcd537a52cf6e55fe2e2945a  /tmp/workspace-shell.patch.bz2' | sha256sum -c -
           bzip2 -dc /tmp/workspace-shell.patch.bz2 > /tmp/workspace-shell.patch
