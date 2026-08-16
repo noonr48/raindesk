@@ -17,8 +17,9 @@
   const API = window.RaindeskAPI;
   const CHAT = window.RaindeskChat;
   const DIR = window.RaindeskDirection;
+  const BEATS = window.RaindeskBeats;
 
-  if (!RC || !API || !CHAT || !DIR) {
+  if (!RC || !API || !CHAT || !DIR || !BEATS) {
     document.addEventListener('DOMContentLoaded', () => {
       const el = document.createElement('div');
       el.className = 'boot-error';
@@ -48,6 +49,7 @@
     serverLayerFile: null,
     making: false,
     drawer: null,
+    beatTrail: null,
     dirty: true,
     gesture: null, // { kind:'lasso'|'pen'|'direction', points:[], ... }
     directionMarks: [],
@@ -134,6 +136,7 @@
     try { localStorage.setItem('raindesk.lastShot', id); } catch (_e) { /* ignore */ }
     await loadShotIntoCore(shot);
     await hydrateDirectionMarks(shot);
+    if (state.beatTrail) state.beatTrail.setShot(shot);
     updateTitle();
     updateHint();
     syncGenBar();
@@ -166,6 +169,18 @@
       api: API,
       shotLabel,
       contextProvider: partnerCanvasContext,
+    });
+    state.beatTrail = BEATS.BeatTrail($('beatTrail'), {
+      api: API,
+      direction: DIR,
+      shot: state.shot,
+      contextProvider: partnerCanvasContext,
+      onPartnerMessage: (message, moves) => {
+        if (state.drawer && state.drawer.addPartnerNote) state.drawer.addPartnerNote(message, moves);
+      },
+    });
+    state.drawer.on('turn', () => {
+      if (state.beatTrail && state.beatTrail.isOpen()) state.beatTrail.refresh();
     });
     $('drawerHandle').addEventListener('click', () => {
       if (state.drawer.isOpen()) state.drawer.close();
@@ -392,6 +407,7 @@
       btn.addEventListener('click', () => {
         const t = btn.dataset.tool;
         if (t === 'layers') { togglePanel(); return; }
+        if (t === 'beats') { if (state.beatTrail) state.beatTrail.toggle(); return; }
         if (t === 'pen' && state.tool === 'pen') { togglePenPop(); return; }
         setTool(t);
       });
@@ -440,6 +456,7 @@
         closeSheet();
         $('penpop').classList.remove('open');
         $('layersPanel').classList.remove('open');
+        if (state.beatTrail) state.beatTrail.close();
         if (state.drawer) state.drawer.close();
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); onUndo(); }

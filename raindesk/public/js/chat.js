@@ -46,7 +46,7 @@
     const api = opts.api;
     const shotLabel = opts.shotLabel || (() => 'shot');
     const contextProvider = typeof opts.contextProvider === 'function' ? opts.contextProvider : null;
-    const listeners = { open: [], close: [] };
+    const listeners = { open: [], close: [], turn: [] };
     let tab = 'agent';
     let busy = false;
 
@@ -189,6 +189,7 @@
         ? response.message.trim() : CHAT_FALLBACK;
       addBubble('agent', reply);
       addMoves(response && response.nextMoves);
+      listeners.turn.forEach((f) => { try { f(response); } catch (_e) { /* observer only */ } });
     }
 
     async function submit() {
