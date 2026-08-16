@@ -27,7 +27,7 @@ jobs:
           ref: chatgpt/direction-partner-v2
           fetch-depth: 0
 
-      - name: Reconstruct tested partner integration and apply direction pen
+      - name: Reconstruct tested partner integration and apply direction slices
         run: |
           changed=0
           if ! node --check server.js >/dev/null 2>&1; then
@@ -60,6 +60,25 @@ jobs:
             changed=1
           fi
 
+          if ! grep -q 'function ensureLegacyShot' lib/direction.js; then
+            patch -p0 < dev/direction-legacy-capture.patch
+            changed=1
+          fi
+          if ! grep -q 'function captureInterpretedBeat' lib/partner.js; then
+            patch -p0 < dev/partner-auto-capture.patch
+            changed=1
+          fi
+          if ! grep -q 'legacy shot bridge is idempotent' lib/tests/direction.test.js; then
+            patch -p0 < dev/direction-test-auto-capture.patch
+            changed=1
+          fi
+          if ! grep -q 'legacy storyboard chat is quietly bridged' lib/tests/partner.test.js; then
+            patch -p0 < dev/partner-test-auto-capture.patch
+            changed=1
+          fi
+
+          node --check lib/direction.js
+          node --check lib/partner.js
           node --check public/js/app.js
           node --check public/js/chat.js
           node --check public/js/direction.js
@@ -67,8 +86,8 @@ jobs:
           if [ "$changed" = "1" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add server.js lib/tests/routes.test.js public/index.html public/js/app.js public/js/chat.js public/css/app.css
-            git commit -m "raindesk: integrate visual direction pen"
+            git add server.js lib/tests/routes.test.js lib/direction.js lib/partner.js lib/tests/direction.test.js lib/tests/partner.test.js public/index.html public/js/app.js public/js/chat.js public/css/app.css
+            git commit -m "raindesk: capture partner direction into shot beats"
             git push origin HEAD:chatgpt/direction-partner-v2
           fi
 
