@@ -17,9 +17,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: raindesk
 
     steps:
       - uses: actions/checkout@v4
@@ -27,75 +24,37 @@ jobs:
           ref: chatgpt/direction-partner-v2
           fetch-depth: 0
 
-      - name: Reconstruct tested partner integration and apply direction slices
-        run: |
-          changed=0
-          if ! node --check server.js >/dev/null 2>&1; then
-            git show fb668ccb0f838dac90a3af68febc64c544fc3e6a:raindesk/server.js > server.js
-            patch -p0 < dev/server-partner.patch
-            node --check server.js
-            changed=1
-          fi
-          if ! node --check lib/tests/routes.test.js >/dev/null 2>&1; then
-            git show fb668ccb0f838dac90a3af68febc64c544fc3e6a:raindesk/lib/tests/routes.test.js > lib/tests/routes.test.js
-            patch -p0 < dev/routes-partner.patch
-            node --check lib/tests/routes.test.js
-            changed=1
-          fi
-
-          if ! grep -q 'RaindeskDirection' public/js/app.js; then
-            patch -p0 < dev/public-js-app-direction.patch
-            changed=1
-          fi
-          if ! grep -q 'data-tool="direction"' public/index.html; then
-            patch -p0 < dev/public-index-direction.patch
-            changed=1
-          fi
-          if ! grep -q 'addPartnerNote' public/js/chat.js; then
-            patch -p0 < dev/public-js-chat-direction.patch
-            changed=1
-          fi
-          if ! grep -q 'direction-caption' public/css/app.css; then
-            patch -p0 < dev/public-css-direction.patch
-            changed=1
-          fi
-
-          if ! grep -q 'function ensureLegacyShot' lib/direction.js; then
-            patch -p0 < dev/direction-legacy-capture.patch
-            changed=1
-          fi
-          if ! grep -q 'function captureInterpretedBeat' lib/partner.js; then
-            patch -p0 < dev/partner-auto-capture.patch
-            changed=1
-          fi
-          if ! grep -q 'legacy shot bridge is idempotent' lib/tests/direction.test.js; then
-            patch -p0 < dev/direction-test-auto-capture.patch
-            changed=1
-          fi
-          if ! grep -q 'legacy storyboard chat is quietly bridged' lib/tests/partner.test.js; then
-            patch -p0 < dev/partner-test-auto-capture.patch
-            changed=1
-          fi
-
-          node --check lib/direction.js
-          node --check lib/partner.js
-          node --check public/js/app.js
-          node --check public/js/chat.js
-          node --check public/js/direction.js
-
-          if [ "$changed" = "1" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add server.js lib/tests/routes.test.js lib/direction.js lib/partner.js lib/tests/direction.test.js lib/tests/partner.test.js public/index.html public/js/app.js public/js/chat.js public/css/app.css
-            git commit -m "raindesk: capture partner direction into shot beats"
-            git push origin HEAD:chatgpt/direction-partner-v2
-          fi
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Syntax check partner integration
+      - name: Promote tested camera and movement slice
+        run: |
+          set -euo pipefail
+          if ! grep -q 'function setShotAnchor' raindesk/lib/direction.js; then
+            cd raindesk
+            patch -p1 < dev/next-slice-1.patch
+            patch -p1 < dev/next-slice-2.patch
+            patch -p1 < dev/next-slice-3.patch
+            patch -p1 < dev/next-slice-4.patch
+            npm test
+            cd ..
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add raindesk/lib/direction.js raindesk/lib/partner.js raindesk/lib/workflow-router.js \
+              raindesk/lib/tests/direction.test.js raindesk/lib/tests/partner.test.js raindesk/lib/tests/routes.test.js \
+              raindesk/server.js raindesk/public/js/api.js raindesk/public/js/app.js raindesk/public/js/chat.js \
+              raindesk/public/js/direction.js raindesk/tests/frontend/api.test.js \
+              raindesk/tests/frontend/direction.test.js raindesk/tests/frontend/direction-ui.test.js
+            git rm raindesk/dev/next-slice-1.patch raindesk/dev/next-slice-2.patch \
+              raindesk/dev/next-slice-3.patch raindesk/dev/next-slice-4.patch
+            git commit -m "raindesk: anchor camera direction and harden Partner movement capture"
+            git push origin HEAD:chatgpt/direction-partner-v2
+          fi
+
+      - name: Syntax check Partner and direction integration
+        working-directory: raindesk
         run: |
           node --check server.js
           node --check lib/direction.js
@@ -108,27 +67,48 @@ jobs:
           node --check public/js/app.js
 
       - name: Run Raindesk tests
+        working-directory: raindesk
         run: npm test
 
-      - name: Render desktop acceptance preview
+      - name: Render and verify desktop acceptance preview
+        working-directory: raindesk
         run: |
-          set -e
+          set -euo pipefail
           DATA_DIR="$(mktemp -d)"
-          RAINDESK_DATA_DIR="$DATA_DIR" node server.js > /tmp/raindesk-preview.log 2>&1 &
+          RAINDESK_DATA_DIR="$DATA_DIR" RAINDESK_HOST=127.0.0.1 node server.js > /tmp/raindesk-preview.log 2>&1 &
           SERVER_PID=$!
           trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$DATA_DIR"' EXIT
           for i in $(seq 1 50); do
             if curl -fsS http://127.0.0.1:17600/ >/dev/null; then break; fi
             sleep 0.1
           done
+          curl -fsS http://127.0.0.1:17600/ >/dev/null
+
           BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
           if [ -z "$BROWSER" ]; then
             echo "Chromium/Chrome not available" >&2
             exit 1
           fi
+
           mkdir -p artifacts/direction
+          DOM="$($BROWSER --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=2200 \
+            --dump-dom http://127.0.0.1:17600/ 2>/tmp/raindesk-chromium-dom.log)"
+          printf '%s\n' "$DOM" > artifacts/direction/desktop-dom.html
+
+          if ! grep -q 'data-raindesk-boot="ready"' artifacts/direction/desktop-dom.html; then
+            echo "Raindesk browser boot marker missing" >&2
+            cat /tmp/raindesk-preview.log >&2 || true
+            cat /tmp/raindesk-chromium-dom.log >&2 || true
+            exit 1
+          fi
+          if grep -q 'raindesk failed to load its scripts' artifacts/direction/desktop-dom.html; then
+            echo "Raindesk rendered the script-load failure shell" >&2
+            exit 1
+          fi
+
           "$BROWSER" --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
-            --run-all-compositor-stages-before-draw --virtual-time-budget=1800 \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=2200 \
             --window-size=1440,900 \
             --screenshot="$(pwd)/artifacts/direction/desktop-1440x900.png" \
             http://127.0.0.1:17600/
@@ -138,7 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: raindesk-direction-preview
-          path: raindesk/artifacts/direction/*.png
+          path: raindesk/artifacts/direction/*
           if-no-files-found: warn
           retention-days: 7
 
