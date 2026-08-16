@@ -81,6 +81,10 @@ plus the git SHA at the time:
   `file-inspection-test_run-621c3a64aa251f3f`
 - round-11 close certification @ a5aa670 (44/44, exit 0): receipt
   `file-inspection-test_run-c358ca91cd3f1e75`
+- round-12 close certification @ 93c2487 (44/44, exit 0): receipt
+  `file-inspection-test_run-1f509286921fbe25`
+- round-13 close certification @ 93c2487 (44/44, exit 0): receipt
+  `file-inspection-test_run-46f90fe8102aebcc`
 
 ## Wave-cycle termination trigger (round-7/8/9 corrections)
 
@@ -113,3 +117,24 @@ phones; the authoritative imagery is what data/shots/*.json references
 via layers/activeLayer (saveLayer, shots.js:85, is the sole setter).
 Prose closeouts, ledger appends, /tmp review artifacts, and test-file-only
 edits (tests/**, lib/tests/**) are non-activating.
+
+## Closeout ordering and the two gates (round-15 correction)
+
+Two distinct predicates govern certification; every closeout states them
+SEPARATELY:
+
+- WAVE TRIGGER (above): binds a fresh REVIEW PAIR — repo commits,
+  authoritative served-state changes, owner-verdict events. Review
+  prose, ledger appends, and /tmp artifacts do NOT bind it.
+- STATEFUL GATE (supervisor): a passing suite must postdate EVERY
+  successful mutation, INCLUDING non-repo ones (ledger milestones,
+  review artifacts, receipts). Because every closeout mints such
+  artifacts, this gate re-arms at every close.
+
+Binding closeout ordering is therefore SUITE-LAST: within any round
+claiming completion, the receipted suite runs AFTER every mutation of
+that round (waves → repairs → commit/push → ledger milestone →
+suite — nothing after). This structurally keeps the stateful gate
+satisfied and caps the resting float at debt-1 (a closing suite cannot
+register its own id); the next repo-touching commit's one-stroke
+append covers ALL floating ids at once, never just the latest.
