@@ -27,16 +27,26 @@ jobs:
           ref: chatgpt/direction-partner-v2
           fetch-depth: 0
 
-      - name: Reconstruct tested partner server if transfer was damaged
+      - name: Reconstruct tested partner integration if transfer was damaged
         run: |
+          changed=0
           if ! node --check server.js >/dev/null 2>&1; then
             git show fb668ccb0f838dac90a3af68febc64c544fc3e6a:raindesk/server.js > server.js
             patch -p0 < dev/server-partner.patch
             node --check server.js
+            changed=1
+          fi
+          if ! node --check lib/tests/routes.test.js >/dev/null 2>&1; then
+            git show fb668ccb0f838dac90a3af68febc64c544fc3e6a:raindesk/lib/tests/routes.test.js > lib/tests/routes.test.js
+            patch -p0 < dev/routes-partner.patch
+            node --check lib/tests/routes.test.js
+            changed=1
+          fi
+          if [ "$changed" = "1" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add server.js
-            git commit -m "raindesk: restore tested partner server integration"
+            git add server.js lib/tests/routes.test.js
+            git commit -m "raindesk: restore tested partner integration sources"
             git push origin HEAD:chatgpt/direction-partner-v2
           fi
 
@@ -50,6 +60,7 @@ jobs:
           node --check lib/direction.js
           node --check lib/workflow-router.js
           node --check lib/partner.js
+          node --check lib/tests/routes.test.js
           node --check public/js/api.js
           node --check public/js/chat.js
 
