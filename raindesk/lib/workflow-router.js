@@ -30,6 +30,13 @@ const RECIPES = {
     passes: ['anchor start frame', 'anchor landing frame', 'interpret camera path', 'rough previs', 'review framing and continuity', 'time the move'],
     preserve: ['accepted staging', 'character identity', 'scene geography'],
   },
+  character_motion: {
+    id: 'character_motion',
+    label: 'Character movement beat',
+    purpose: 'Turn a gesture or body movement into clear blocking, timing and follow-through without overbuilding the shot.',
+    passes: ['anchor starting pose', 'trace the primary motion path', 'check weight/body mechanics', 'set timing and overlap', 'add secondary motion', 'review camera relationship'],
+    preserve: ['character identity', 'accepted scene geography', 'unrelated body/action beats'],
+  },
   performance_closeup: {
     id: 'performance_closeup',
     label: 'Performance close-up',
@@ -76,6 +83,7 @@ const RECIPES = {
 
 const HINTS = [
   ['camera_reveal', /\b(camera|cam|orbit|spiral|push in|push-in|pull back|dolly|pan|tilt|crane|zoom|framing|frame lands|start frame|end frame)\b/i],
+  ['character_motion', /\b(move|moves|moving|step|steps|turn|turns|raise|raises|lower|lowers|shake|shakes|fist|stand|stands|sit|sits|lean|leans|reach|reaches|walk|walks|run|runs|recoil|crouch|jump|gesture|point|points|swing|swings|twist|twists|shift|shifts|lunge|lunges)\b/i],
   ['contact_action', /\b(punch|kick|hit|impact|grab|grabs|catch|catches|wrist|contact|collide|slam|strike|block)\b/i],
   ['performance_closeup', /\b(expression|face|eyes|gaze|mouth|tongue|breath|speaks|says|dialogue|smile|frown|anger|hesitat|reaction)\b/i],
   ['choreography', /\b(fight|choreograph|two people|both characters|crowd|dance|crossing|multi-character|multiple characters)\b/i],

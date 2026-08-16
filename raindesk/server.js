@@ -237,6 +237,21 @@ async function handleApi(req, res, url, deps) {
     return sendJson(res, 201, { ok: true, annotation: direction.addAnnotation(body) });
   }
 
+  if (method === 'POST' && route === '/api/direction/shot-anchor') {
+    const body = await readJson(req, 1024 * 1024);
+    if (typeof body.shotId !== 'string' || !body.shotId) throw new HttpError(400, 'shotId is required');
+    if (typeof body.slot !== 'string' || !body.slot) throw new HttpError(400, 'slot is required');
+    const anchor = direction.setShotAnchor(body.shotId, body.slot, body.anchor == null ? null : body.anchor);
+    return sendJson(res, 200, { ok: true, shotId: body.shotId, slot: body.slot, anchor });
+  }
+
+  const directionSpecMatch = route.match(/^\/api\/direction\/shot\/([^/]+)\/spec$/);
+  if (method === 'GET' && directionSpecMatch) {
+    const shotId = decodeSeg(directionSpecMatch[1]);
+    if (shotId === null) throw new HttpError(404, 'not found');
+    return sendJson(res, 200, direction.shotSpec(shotId));
+  }
+
   if (method === 'POST' && route === '/api/gen') {
     const body = await readJson(req);
     if (typeof body.shotId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(body.shotId)) {

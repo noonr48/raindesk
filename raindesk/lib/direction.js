@@ -273,6 +273,59 @@ function normalizeMovement(movement) {
   return out;
 }
 
+function normalizeFrameAnchor(anchor) {
+  if (!isObject(anchor)) return null;
+  const out = {
+    kind: cleanText(anchor.kind, 64) || 'direction_anchor',
+    description: cleanText(anchor.description, 2000),
+    framing: cleanText(anchor.framing, 1000),
+    sourceAnnotationId: cleanText(anchor.sourceAnnotationId, 128) || null,
+    referenceId: cleanText(anchor.referenceId, 256) || null,
+    imageUrl: cleanText(anchor.imageUrl, 2000) || null,
+  };
+  if (isObject(anchor.point)) {
+    const x = Number(anchor.point.x); const y = Number(anchor.point.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) out.point = { x, y };
+  }
+  if (isObject(anchor.geometry)) out.geometry = anchor.geometry;
+  return out;
+}
+
+/**
+ * Set one shot endpoint without forcing the artist to fill a shot form.
+ * `start` and `end` can initially be path endpoints and later be upgraded to
+ * actual sketch/image references without changing the shot contract.
+ */
+function setShotAnchor(shotId, slot, anchor) {
+  assertId(shotId, 'shotId');
+  if (!['start', 'end'].includes(slot)) throw new HttpError(400, 'slot must be start or end');
+  const graph = readGraph();
+  const shot = getShot(graph, shotId);
+  if (!shot) throw new HttpError(404, `unknown shot "${shotId}"`);
+  const key = slot === 'start' ? 'startFrame' : 'endFrame';
+  shot[key] = anchor == null ? null : normalizeFrameAnchor(anchor);
+  shot.updatedAt = now();
+  writeGraph(graph);
+  return shot[key];
+}
+
+/** Human/tool-facing shot packet assembled from the graph, not a duplicate store. */
+function shotSpec(shotId) {
+  const graph = readGraph();
+  assertId(shotId, 'shotId');
+  const shot = getShot(graph, shotId);
+  if (!shot) throw new HttpError(404, `unknown shot "${shotId}"`);
+  return {
+    schemaVersion: graph.schemaVersion,
+    scene: getScene(graph, shot.sceneId),
+    shot,
+    beats: graph.beats.filter((b) => b.shotId === shotId).sort((a, b) => a.order - b.order),
+    annotations: graph.annotations.filter((a) => a.scopeType === 'shot' && a.scopeId === shotId),
+    intents: graph.intents.filter((i) => i.shotId === shotId).slice(-24),
+    updatedAt: graph.updatedAt,
+  };
+}
+
 function createBeat(input = {}) {
   const graph = readGraph();
   const shotId = assertId(input.shotId, 'shotId');
@@ -384,5 +437,6 @@ module.exports = {
   DATA_DIR, DIRECTION_PATH, SCHEMA_VERSION, PARTNER_MODES, ANNOTATION_KINDS,
   STATUS, emptyGraph, isValidGraph, readGraph, writeGraph, setProject,
   createScene, createShot, createBeat, addAnnotation, recordIntent, summary,
-  normalizeMovement, ensureLegacyShot, safeLegacyPart,
+  normalizeMovement, normalizeFrameAnchor, setShotAnchor, shotSpec,
+  ensureLegacyShot, safeLegacyPart,
 };

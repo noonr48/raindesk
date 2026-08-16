@@ -94,6 +94,12 @@
   function createDirectionShot(shot) { return POST('/api/direction/shot', shot || {}); }
   function createDirectionBeat(beat) { return POST('/api/direction/beat', beat || {}); }
   function addDirectionAnnotation(annotation) { return POST('/api/direction/annotation', annotation || {}); }
+  function setDirectionShotAnchor(shotId, slot, anchor) {
+    return POST('/api/direction/shot-anchor', { shotId, slot, anchor });
+  }
+  function getDirectionShotSpec(shotId) {
+    return GET(`/api/direction/shot/${encodeURIComponent(shotId)}/spec`);
+  }
 
   /* --------------------------------------------------------------- gen */
 
@@ -191,6 +197,22 @@
     return `/api/shot/${encodeURIComponent(id)}/image/${encodeURIComponent(file)}`;
   }
 
+  /* -------------------------------------------------------------- chat */
+
+  // Legacy companion route remains intentionally available while the UI and
+  // old clients migrate to structured Partner turns. Keeping this wrapper is
+  // also important for offline/fallback paths in chat.js.
+  function sendChat(message) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 125000);
+    return jsonFetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: message == null ? '' : String(message) }),
+      signal: ctl.signal,
+    }).finally(() => clearTimeout(timer));
+  }
+
   /* -------------------------------------------------- partner */
 
   function partnerTurn(message, { mode = null, context = {} } = {}) {
@@ -231,7 +253,8 @@
     ApiError, GET, POST, base64FromBytes,
     getBoard, getBoardOrDemo, moveShot,
     getDirection, updateDirectionProject, createDirectionScene, createDirectionShot,
-    createDirectionBeat, addDirectionAnnotation, partnerTurn,
+    createDirectionBeat, addDirectionAnnotation, setDirectionShotAnchor,
+    getDirectionShotSpec, partnerTurn,
     submitGen, pollGen, fetchImageRGBA,
     getShot, uploadLayer, shotImageUrl, sendChat,
     DEMO_BOARD,

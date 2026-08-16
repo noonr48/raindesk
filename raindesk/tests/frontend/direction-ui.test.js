@@ -39,3 +39,15 @@ test('direction caption is a lightweight overlay rather than a permanent inspect
   assert.match(css, /\.direction-caption\.open\s*\{\s*display:\s*flex/);
   assert.doesNotMatch(css, /direction-caption[^}]*position:\s*fixed/s);
 });
+
+
+test('Partner receives current shot beat + nearby visual directions without a setup form', () => {
+  assert.match(chat, /contextProvider/);
+  assert.match(app, /function partnerCanvasContext\(/);
+  assert.match(app, /legacyBeat:/);
+  assert.match(app, /nearbyNotes:/);
+});
+
+test('app publishes a real browser boot marker for acceptance screenshots', () => {
+  assert.match(app, /dataset\.raindeskBoot\s*=\s*['"]ready['"]/);
+});

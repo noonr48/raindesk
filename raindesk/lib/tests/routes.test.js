@@ -382,6 +382,31 @@ test('direction v2 routes persist scene -> shot -> beat -> annotation', async (t
     });
     assert.equal(res.status, 201);
 
+    res = await fetch(`${base}/api/direction/shot-anchor`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shotId: 'route_shot', slot: 'start',
+        anchor: { kind: 'direction_path_endpoint', point: { x: 12, y: 90 }, framing: 'low rear' },
+      }),
+    });
+    assert.equal(res.status, 200);
+
+    res = await fetch(`${base}/api/direction/shot-anchor`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shotId: 'route_shot', slot: 'end',
+        anchor: { kind: 'direction_path_endpoint', point: { x: 70, y: 15 }, framing: 'face close-up' },
+      }),
+    });
+    assert.equal(res.status, 200);
+
+    const specRes = await fetch(`${base}/api/direction/shot/route_shot/spec`);
+    assert.equal(specRes.status, 200);
+    const spec = await specRes.json();
+    assert.equal(spec.shot.startFrame.framing, 'low rear');
+    assert.equal(spec.shot.endFrame.framing, 'face close-up');
+    assert.equal(spec.beats[0].id, 'route_beat');
+
     graph = await (await fetch(`${base}/api/direction`)).json();
     assert.equal(graph.scenes.some((x) => x.id === 'route_scene'), true);
     assert.equal(graph.shots.some((x) => x.id === 'route_shot'), true);

@@ -50,6 +50,10 @@ test('visual direction bridge creates provisional scope, asks partner, then stor
       graph.annotations.push({ id: 'ann_1', ...annotation });
       return { annotation: graph.annotations.at(-1) };
     },
+    async setDirectionShotAnchor(shotId, slot, anchor) {
+      calls.push({ kind: 'anchor', shotId, slot, anchor });
+      return { ok: true, anchor };
+    },
   };
 
   const result = await DIR.interpretAndSavePath(api, {
@@ -67,6 +71,13 @@ test('visual direction bridge creates provisional scope, asks partner, then stor
   assert.equal(calls[1].annotation.rawText, 'camera spirals from behind them up to the face');
   assert.equal(calls[1].annotation.source.intentId, 'intent_1');
   assert.equal(calls[1].annotation.interpretation.camera.framingEnd, 'face close-up');
+  assert.equal(calls[2].kind, 'anchor');
+  assert.equal(calls[2].slot, 'start');
+  assert.deepEqual(calls[2].anchor.point, { x: 100, y: 900 });
+  assert.equal(calls[3].slot, 'end');
+  assert.deepEqual(calls[3].anchor.point, { x: 700, y: 180 });
+  assert.equal(calls[3].anchor.framing, 'face close-up');
+  assert.ok(result.anchors);
 });
 
 test('visual direction mark is still saved when partner is temporarily unavailable', async () => {
@@ -93,4 +104,15 @@ test('visual direction mark is still saved when partner is temporarily unavailab
   assert.equal(result.annotation.kind, 'unknown');
   assert.equal(result.annotation.rawText, 'hand moves upward');
   assert.equal(result.annotation.source.partnerAvailable, false);
+});
+
+
+test('camera path endpoints are represented as lightweight frame anchors', () => {
+  const anchors = DIR.anchorsFromPath({
+    id: 'ann_cam', rawText: 'rise from boots to face',
+    geometry: { points: [{ x: 20, y: 900 }, { x: 500, y: 120 }] },
+  }, { camera: { framingStart: 'boots / low rear', framingEnd: 'face close-up' } });
+  assert.equal(anchors.start.framing, 'boots / low rear');
+  assert.equal(anchors.end.framing, 'face close-up');
+  assert.equal(anchors.start.sourceAnnotationId, 'ann_cam');
 });
