@@ -32,6 +32,7 @@
     <button class="tool" data-tool="select" title="select / lasso"><span>≻</span><small>SELECT</small></button>
     <button class="tool active" data-tool="pen" title="pen"><span>✒️</span><small>PEN</small></button>
     <button class="tool" data-tool="direction" title="draw direction"><span>&#8605;</span><small>DIRECT</small></button>
+    <button class="tool" data-tool="beats" title="micro beats"><span>&#8942;</span><small>BEATS</small></button>
     <button class="tool" data-tool="layers" title="layers"><span>≡</span><small>LAYERS</small></button>
   </nav>
 
@@ -76,6 +77,9 @@
     </div>
   </div>
 
+  <!-- lightweight micro-action trail: Partner fills this from normal direction/chat -->
+  <div id="beatTrail" aria-hidden="true"></div>
+
   <!-- layers panel -->
   <div id="layersPanel" class="panel">
     <h4 id="panelTitle">Layers</h4>
@@ -103,6 +107,7 @@
 <script src="js/api.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/direction.js"></script>
+<script src="js/beats.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
