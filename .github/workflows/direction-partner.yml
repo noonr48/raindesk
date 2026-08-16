@@ -110,6 +110,38 @@ jobs:
       - name: Run Raindesk tests
         run: npm test
 
+      - name: Render desktop acceptance preview
+        run: |
+          set -e
+          DATA_DIR="$(mktemp -d)"
+          RAINDESK_DATA_DIR="$DATA_DIR" node server.js > /tmp/raindesk-preview.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$DATA_DIR"' EXIT
+          for i in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:17600/ >/dev/null; then break; fi
+            sleep 0.1
+          done
+          BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
+          if [ -z "$BROWSER" ]; then
+            echo "Chromium/Chrome not available" >&2
+            exit 1
+          fi
+          mkdir -p artifacts/direction
+          "$BROWSER" --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=1800 \
+            --window-size=1440,900 \
+            --screenshot="$(pwd)/artifacts/direction/desktop-1440x900.png" \
+            http://127.0.0.1:17600/
+
+      - name: Upload UI preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-direction-preview
+          path: raindesk/artifacts/direction/*.png
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload source snapshot
         if: always()
         uses: actions/upload-artifact@v4
