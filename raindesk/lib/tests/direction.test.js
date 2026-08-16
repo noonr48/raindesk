@@ -93,3 +93,37 @@ test('legacy shot bridge is idempotent and preserves the old board identity', ()
   assert.equal(graph.shots[0].description, 'truck loses grip');
   assert.equal(graph.project.activeShotId, 'legacy_S03');
 });
+
+
+test('camera endpoints can promote into start/landing anchors and shotSpec assembles the working shot', () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'anchor_scene', title: 'Camera reveal' });
+  direction.createShot({ id: 'anchor_shot', sceneId: scene.id, title: 'Rise to face' });
+  direction.createBeat({ id: 'anchor_beat', shotId: 'anchor_shot', rawDirection: 'she rises into frame' });
+  direction.addAnnotation({
+    id: 'anchor_camera_arrow', scopeType: 'shot', scopeId: 'anchor_shot',
+    kind: 'camera_path', rawText: 'camera rises from low behind to face',
+  });
+
+  const start = direction.setShotAnchor('anchor_shot', 'start', {
+    kind: 'direction_path_endpoint', point: { x: 100, y: 900 },
+    framing: 'low behind character', sourceAnnotationId: 'anchor_camera_arrow',
+  });
+  const end = direction.setShotAnchor('anchor_shot', 'end', {
+    kind: 'direction_path_endpoint', point: { x: 700, y: 180 },
+    framing: 'close on face', sourceAnnotationId: 'anchor_camera_arrow',
+  });
+  assert.deepEqual(start.point, { x: 100, y: 900 });
+  assert.equal(end.framing, 'close on face');
+
+  const spec = direction.shotSpec('anchor_shot');
+  assert.equal(spec.shot.startFrame.framing, 'low behind character');
+  assert.equal(spec.shot.endFrame.framing, 'close on face');
+  assert.equal(spec.beats.some((b) => b.id === 'anchor_beat'), true);
+  assert.equal(spec.annotations.some((a) => a.id === 'anchor_camera_arrow'), true);
+});
+
+test('shot anchors validate slot and unknown shot without mutating the graph', () => {
+  assert.throws(() => direction.setShotAnchor('roof_04', 'middle', {}), (e) => e.status === 400);
+  assert.throws(() => direction.setShotAnchor('missing_shot', 'start', {}), (e) => e.status === 404);
+});

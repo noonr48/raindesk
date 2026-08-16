@@ -63,6 +63,10 @@
   let disp; let dctx; let off; let octx;
 
   function boot() {
+    // Acceptance/runtime health marker: set only after every required script
+    // global exists and app.js has entered the real boot path. CI/browser
+    // previews assert this so a pretty failure shell cannot pass unnoticed.
+    document.documentElement.dataset.raindeskBoot = 'ready';
     disp = $('canvas');
     dctx = disp.getContext('2d');
     off = document.createElement('canvas');
@@ -80,6 +84,20 @@
   /* --------------------------------------------------------- init/board */
 
   function shotLabel() { return state.shot ? state.shot.id : 'shot'; }
+
+  function partnerCanvasContext() {
+    return {
+      legacyShotId: state.shot ? state.shot.id : null,
+      legacyBeat: state.shot && state.shot.beat ? state.shot.beat : '',
+      surface: 'storyboard_canvas',
+      activeTool: state.tool,
+      canvas: { width: CANVAS_W, height: CANVAS_H },
+      nearbyNotes: state.directionMarks
+        .filter((m) => m && m.rawText)
+        .slice(-8)
+        .map((m) => m.rawText),
+    };
+  }
 
   /** Rebuild the canvas core for a shot: server layer if present, else the demo plate. */
   async function loadShotIntoCore(shot) {
@@ -144,7 +162,11 @@
     await loadShotIntoCore(state.shot);
     await hydrateDirectionMarks(state.shot);
 
-    state.drawer = CHAT.ChatDrawer($('drawer'), { api: API, shotLabel });
+    state.drawer = CHAT.ChatDrawer($('drawer'), {
+      api: API,
+      shotLabel,
+      contextProvider: partnerCanvasContext,
+    });
     $('drawerHandle').addEventListener('click', () => {
       if (state.drawer.isOpen()) state.drawer.close();
       else state.drawer.open('agent');

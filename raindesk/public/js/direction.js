@@ -57,6 +57,25 @@
     };
   }
 
+  function anchorsFromPath(annotation, interpretation) {
+    if (!annotation || !annotation.geometry || !Array.isArray(annotation.geometry.points) ||
+        annotation.geometry.points.length < 2) return null;
+    const points = annotation.geometry.points;
+    const camera = interpretation && interpretation.camera && typeof interpretation.camera === 'object'
+      ? interpretation.camera : {};
+    const rawText = String(annotation.rawText || '').trim();
+    return {
+      start: {
+        kind: 'direction_path_endpoint', point: points[0], framing: camera.framingStart || camera.start || '',
+        description: rawText, sourceAnnotationId: annotation.id || null,
+      },
+      end: {
+        kind: 'direction_path_endpoint', point: points[points.length - 1], framing: camera.framingEnd || camera.end || '',
+        description: rawText, sourceAnnotationId: annotation.id || null,
+      },
+    };
+  }
+
   function kindFromInterpretation(interpretation) {
     if (!interpretation || typeof interpretation !== 'object') return 'unknown';
     if (VALID_KINDS.has(interpretation.annotationKind)) return interpretation.annotationKind;
@@ -188,9 +207,25 @@
       },
     });
 
+    const annotation = saved && saved.annotation ? saved.annotation : null;
+    let anchors = null;
+    if (annotation && kind === 'camera_path' && typeof api.setDirectionShotAnchor === 'function') {
+      anchors = anchorsFromPath(annotation, interpretation);
+      if (anchors) {
+        try {
+          await api.setDirectionShotAnchor(scope.shotId, 'start', anchors.start);
+          await api.setDirectionShotAnchor(scope.shotId, 'end', anchors.end);
+        } catch (_e) {
+          // The semantic arrow is already safely persisted; endpoint promotion
+          // is additive and must never make the artist redraw the direction.
+        }
+      }
+    }
+
     return {
       scope,
-      annotation: saved && saved.annotation ? saved.annotation : null,
+      annotation,
+      anchors,
       turn,
       partnerError,
     };
@@ -202,6 +237,7 @@
     simplifyPoints,
     pathGeometry,
     kindFromInterpretation,
+    anchorsFromPath,
     findLegacyScope,
     ensureLegacyScope,
     loadShotMarks,

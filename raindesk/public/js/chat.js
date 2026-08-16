@@ -45,6 +45,7 @@
   function ChatDrawer(root, opts) {
     const api = opts.api;
     const shotLabel = opts.shotLabel || (() => 'shot');
+    const contextProvider = typeof opts.contextProvider === 'function' ? opts.contextProvider : null;
     const listeners = { open: [], close: [] };
     let tab = 'agent';
     let busy = false;
@@ -135,10 +136,15 @@
     }
 
     function partnerContext() {
-      return {
+      const base = {
         legacyShotId: shotLabel(),
         surface: 'storyboard_canvas',
       };
+      if (!contextProvider) return base;
+      try {
+        const extra = contextProvider();
+        return extra && typeof extra === 'object' ? { ...base, ...extra } : base;
+      } catch (_e) { return base; }
     }
 
     function addMoves(moves) {

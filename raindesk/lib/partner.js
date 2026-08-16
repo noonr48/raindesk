@@ -159,14 +159,58 @@ function mergeWorkflows(parsed, message, kickstart) {
   return out.slice(0, 3);
 }
 
-function normalizeEnvelope(parsed, rawReply, { message, summary, kickstart, partnerMode }) {
+function fallbackInterpretation(message, context = {}, kickstart = false) {
+  const selection = isObject(context.selection) ? context.selection : {};
+  const raw = text(selection.rawText || message, 6000);
+  if (kickstart) return { kind: 'setup', confidence: 0.4 };
+  if (!raw) return { kind: 'creative_direction', confidence: 0.15 };
+
+  const cameraRe = /\b(camera|cam|orbit|spiral|push in|push-in|pull back|dolly|pan|tilt|crane|zoom|framing|frame|shot moves|lens)\b/i;
+  const movementRe = /\b(move|moves|step|turn|raise|lower|shake|fist|stand|sit|lean|reach|walk|run|recoil|crouch|jump|gesture|point|swing|twist|shift|lunge|punch|kick|grab|catch|wrist|hand|arm|leg|body)\b/i;
+  const performanceRe = /\b(expression|face|eyes|gaze|mouth|tongue|breath|speaks|says|dialogue|smile|frown|anger|hesitat|reaction|whisper|shout)\b/i;
+  const timingMatch = raw.match(/\b(while|before|after|during|then|as soon as|at the same time|hold|delay|pause)[^,.!?;]*/i);
+  const timing = timingMatch ? text(timingMatch[0], 1000) : '';
+
+  if (cameraRe.test(raw)) {
+    return {
+      kind: 'camera',
+      camera: { path: raw, timing },
+      preserve: [],
+      confidence: 0.35,
+      provisionalReason: 'language fallback; preserve the artist wording until Partner interpretation is available',
+    };
+  }
+  if (movementRe.test(raw)) {
+    return {
+      kind: 'movement',
+      movement: { action: raw, timing },
+      preserve: [],
+      confidence: performanceRe.test(raw) ? 0.38 : 0.32,
+      provisionalReason: 'movement fallback; raw wording remains authoritative',
+    };
+  }
+  if (performanceRe.test(raw)) {
+    return {
+      kind: 'performance',
+      movement: { action: raw, timing },
+      preserve: [],
+      confidence: 0.32,
+      provisionalReason: 'performance fallback; raw wording remains authoritative',
+    };
+  }
+  return { kind: 'creative_direction', description: raw, confidence: 0.2 };
+}
+
+function normalizeEnvelope(parsed, rawReply, { message, summary, kickstart, partnerMode, context = {} }) {
   const seed = kickstart ? kickstartSeed(summary) : null;
   const p = isObject(parsed) ? parsed : {};
   const partnerMessage = text(p.message, 5000) || (seed && seed.message) || text(rawReply, 5000) ||
     "I'm with you. Pick one thing you want to feel different and we'll work from there.";
   const nextMoves = normalizeNextMoves(p.nextMoves);
   const resolvedMoves = nextMoves.length ? nextMoves : (seed ? seed.nextMoves : []);
-  const interpretation = isObject(p.interpretation) ? p.interpretation : { kind: kickstart ? 'setup' : 'creative_direction' };
+  const interpretation = isObject(p.interpretation)
+    ? p.interpretation
+    : fallbackInterpretation(message, context, kickstart);
   return {
     message: partnerMessage,
     interpretation,
@@ -238,7 +282,9 @@ function createPartner({ agentImpl, directionImpl = direction } = {}) {
     let rawReply = '';
     try { rawReply = await agentImpl.chat(prompt); } catch (_e) { rawReply = ''; }
     const parsed = parseJsonObject(rawReply);
-    const envelope = normalizeEnvelope(parsed, rawReply, { message, summary, kickstart, partnerMode });
+    const envelope = normalizeEnvelope(parsed, rawReply, {
+      message, summary, kickstart, partnerMode, context: resolvedContext,
+    });
 
     let intent = null;
     try {
@@ -267,5 +313,6 @@ function createPartner({ agentImpl, directionImpl = direction } = {}) {
 
 module.exports = {
   BOARD_ACTIONS, parseJsonObject, normalizeNextMoves, normalizeBoardActions,
-  looksStuck, kickstartSeed, buildPrompt, captureInterpretedBeat, createPartner,
+  looksStuck, kickstartSeed, buildPrompt, fallbackInterpretation,
+  captureInterpretedBeat, createPartner,
 };

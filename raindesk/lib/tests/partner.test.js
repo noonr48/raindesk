@@ -87,6 +87,8 @@ test('blank-project kickstart returns reaction-sized choices even if agent reply
 test('router recognizes camera, contact and animatic intent without model-specific tools', () => {
   const camera = router.rankRecipes('spiral the camera from behind them up into a close shot');
   assert.equal(camera[0].id, 'camera_reveal');
+  const motion = router.rankRecipes('he shakes his fist once, shifts his weight, then lunges');
+  assert.ok(motion.some((x) => x.id === 'character_motion'));
   const contact = router.rankRecipes('she catches his wrist before the punch lands');
   assert.ok(contact.some((x) => x.id === 'contact_action'));
   const timing = router.rankRecipes('hold for 12 frames then cut into the animatic');
@@ -127,4 +129,35 @@ test('legacy storyboard chat is quietly bridged into Direction Graph and movemen
   assert.equal(beat.shotId, shot.id);
   assert.equal(beat.rawDirection, 'Tom shakes his fist once before he lunges');
   assert.equal(beat.movement.actor, 'Tom');
+});
+
+
+test('non-JSON agent replies still preserve obvious movement as a provisional beat', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'fallback_scene', title: 'Pre-fight' });
+  direction.createShot({ id: 'fallback_shot', sceneId: scene.id, title: 'Gesture' });
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat() { return 'still with you'; } },
+    directionImpl: direction,
+  });
+  const turn = await partner.turn({
+    message: 'he clicks his tongue while shaking his fist before the fight',
+    context: { sceneId: scene.id, shotId: 'fallback_shot' },
+  });
+  assert.equal(turn.interpretation.kind, 'movement');
+  assert.match(turn.interpretation.movement.action, /shaking his fist/);
+  assert.match(turn.interpretation.movement.timing, /while|before/i);
+  assert.ok(turn.workflow.some((x) => x.id === 'character_motion'));
+  assert.ok(turn.captured && turn.captured.beatId);
+  const beat = direction.shotSpec('fallback_shot').beats.at(-1);
+  assert.equal(beat.rawDirection, 'he clicks his tongue while shaking his fist before the fight');
+});
+
+test('fallback interpretation recognizes camera language without inventing a tool', () => {
+  const interpreted = partnerModule.fallbackInterpretation(
+    'camera spirals from low behind her and lands close on the face',
+  );
+  assert.equal(interpreted.kind, 'camera');
+  assert.match(interpreted.camera.path, /spirals/);
+  assert.ok(interpreted.confidence < 0.5, 'fallback stays explicitly provisional');
 });
