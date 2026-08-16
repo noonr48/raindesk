@@ -214,32 +214,27 @@ async function handleApi(req, res, url, deps) {
 
   if (method === 'POST' && route === '/api/direction/project') {
     const body = await readJson(req, 256 * 1024);
-    const graph = direction.setProject(body);
-    return sendJson(res, 200, { ok: true, graph });
+    return sendJson(res, 200, { ok: true, graph: direction.setProject(body) });
   }
 
   if (method === 'POST' && route === '/api/direction/scene') {
-    const body = await readJson(req, 1024 * 1024);
-    const scene = direction.createScene(body);
-    return sendJson(res, 200, { ok: true, scene, graph: direction.readGraph() });
+    const body = await readJson(req, 512 * 1024);
+    return sendJson(res, 201, { ok: true, scene: direction.createScene(body) });
   }
 
   if (method === 'POST' && route === '/api/direction/shot') {
-    const body = await readJson(req, 1024 * 1024);
-    const shot = direction.createShot(body);
-    return sendJson(res, 200, { ok: true, shot, graph: direction.readGraph() });
+    const body = await readJson(req, 512 * 1024);
+    return sendJson(res, 201, { ok: true, shot: direction.createShot(body) });
   }
 
   if (method === 'POST' && route === '/api/direction/beat') {
-    const body = await readJson(req, 1024 * 1024);
-    const beat = direction.createBeat(body);
-    return sendJson(res, 200, { ok: true, beat, graph: direction.readGraph() });
+    const body = await readJson(req, 512 * 1024);
+    return sendJson(res, 201, { ok: true, beat: direction.createBeat(body) });
   }
 
   if (method === 'POST' && route === '/api/direction/annotation') {
-    const body = await readJson(req, 2 * 1024 * 1024);
-    const annotation = direction.addAnnotation(body);
-    return sendJson(res, 200, { ok: true, annotation, graph: direction.readGraph() });
+    const body = await readJson(req, 1024 * 1024);
+    return sendJson(res, 201, { ok: true, annotation: direction.addAnnotation(body) });
   }
 
   if (method === 'POST' && route === '/api/gen') {
@@ -288,10 +283,10 @@ async function handleApi(req, res, url, deps) {
   const assetMatch = route.match(/^\/api\/assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9._-]{1,128})$/);
   if (method === 'GET' && assetMatch) {
     const filePath = assets.resolve(assetMatch[1], assetMatch[2]);
-    if (!filePath) throw new HttpError(404, 'nopsuch asset');
+    if (!filePath) throw new HttpError(404, 'no such asset');
     let stat;
-    try { stat = await fs.promises.stat(filePath); } catch (_e) { throw new HttpError(404, 'nosuch asset'); }
-    if (!stat.isFile()) throw new HttpError(404, 'nosuch asset');
+    try { stat = await fs.promises.stat(filePath); } catch (_e) { throw new HttpError(404, 'no such asset'); }
+    if (!stat.isFile()) throw new HttpError(404, 'no such asset');
     res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': stat.size });
     await pipeline(fs.createReadStream(filePath), res);
     return;
@@ -349,4 +344,142 @@ async function handleApi(req, res, url, deps) {
 
   if (method === 'POST' && route === '/api/partner/turn') {
     if (chatInFlight >= CHAT_CONCURRENCY) {
-                  throw new HttpError(429, 'partner is already thinking with you - one moment');
+      throw new HttpError(429, 'partner is already thinking with you - one moment');
+    }
+    chatInFlight += 1;
+    let result;
+    try {
+      const body = await readJson(req, 1024 * 1024);
+      const message = body.message == null ? '' : body.message;
+      if (typeof message !== 'string') throw new HttpError(400, 'message must be a string');
+      if (message.length > CHAT_MESSAGE_LIMIT) throw new HttpError(413, 'message too long');
+      if (!message.trim() && body.mode !== 'kickstart') {
+        throw new HttpError(400, 'message is required unless mode is kickstart');
+      }
+      if (body.context !== undefined && (!body.context || typeof body.context !== 'object' || Array.isArray(body.context))) {
+        throw new HttpError(400, 'context must be an object');
+      }
+      result = await partnerImpl.turn({
+        message,
+        mode: body.mode || null,
+        context: body.context || {},
+      });
+    } finally {
+      chatInFlight -= 1;
+    }
+    return sendJson(res, 200, result);
+  }
+
+  if (method === 'POST' && route === '/api/chat') {
+    if (chatInFlight >= CHAT_CONCURRENCY) {
+      throw new HttpError(429, 'companion is talking with you already — one moment 🌧️');
+    }
+    // Increment BEFORE the awaited readJson so the check-then-act window
+    // cannot admit unbounded concurrent spawns; the finally balances every
+    // post-increment path including body-validation throws.
+    chatInFlight += 1;
+    let reply;
+    try {
+      const body = await readJson(req, 1024 * 1024);
+      if (typeof body.message !== 'string' || !body.message.trim()) {
+        throw new HttpError(400, 'message is required');
+      }
+      if (body.message.length > CHAT_MESSAGE_LIMIT) {
+        throw new HttpError(413, 'message too long');
+      }
+      reply = await agentImpl.chat(body.message);
+    } finally {
+      chatInFlight -= 1;
+    }
+    return sendJson(res, 200, { reply });
+  }
+
+  throw new HttpError(404, 'not found');
+}
+
+async function serveStatic(req, res, url) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    throw new HttpError(404, 'not found');
+  }
+  let rel = url.pathname;
+  if (rel === '/') rel = '/index.html';
+  const filePath = safePublicPath(rel);
+  if (!filePath) throw new HttpError(404, 'not found');
+
+  let stat;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch (_e) {
+    throw new HttpError(404, 'not found');
+  }
+  if (!stat.isFile()) throw new HttpError(404, 'not found');
+
+  const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+  res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size });
+  if (req.method === 'HEAD') return res.end();
+  await pipeline(fs.createReadStream(filePath), res);
+  return undefined;
+}
+
+/* ---------------------------------------------------------------- server */
+
+function createServer(deps = {}) {
+  const queue = deps.queue || new GenQueue();
+  const comfyImpl = deps.comfyImpl || deps.comfy || comfy;
+  const agentImpl = deps.agentImpl || deps.agent || agent;
+  const partnerImpl = deps.partnerImpl || partner.createPartner({ agentImpl });
+
+  const server = http.createServer((req, res) => {
+    let promise;
+    try {
+      const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+      promise = url.pathname.startsWith('/api/')
+        ? handleApi(req, res, url, { queue, comfyImpl, agentImpl, partnerImpl })
+        : serveStatic(req, res, url);
+    } catch (_e) {
+      promise = Promise.reject(new HttpError(404, 'not found'));
+    }
+    promise.catch((e) => {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      const status = e instanceof HttpError ? e.status : 500;
+      const message = e instanceof HttpError ? e.message : 'internal error';
+      if (!(e instanceof HttpError)) {
+        // eslint-disable-next-line no-console
+        console.error('[raindesk] unhandled error:', e);
+      }
+      try {
+        sendJson(res, status, { error: message }); // res may be destroyed (413 path)
+      } catch (_sendErr) {
+        res.destroy();
+      }
+    });
+  });
+  server.raindesk = { queue, comfyImpl, agentImpl, partnerImpl };
+  return server;
+}
+
+function start({ host = HOST, port = PORT } = {}) {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      const addr = server.address();
+      // eslint-disable-next-line no-console
+      console.log(`[raindesk] listening on http://${addr.address}:${addr.port}`);
+      resolve(server);
+    });
+  });
+}
+
+if (require.main === module) {
+  start().catch((e) => {
+    // eslint-disable-next-line no-console
+    console.error('[raindesk] failed to start:', e);
+    process.exit(1);
+  });
+}
+
+module.exports = { createServer, start, HOST, PORT, PUBLIC_DIR, parseMultipart, safePublicPath, sendJson };
