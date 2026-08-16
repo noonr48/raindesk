@@ -59,8 +59,14 @@ test('structured partner turn keeps casual message and routes movement/camera wo
   assert.ok(turn.workflow.some((w) => w.id === 'performance_closeup'));
   assert.equal(turn.boardActions[0].disposition, 'proposal');
   assert.ok(turn.intentId);
-  const saved = direction.readGraph().intents.at(-1);
+  assert.ok(turn.captured && turn.captured.beatId, 'interpreted movement is documented as a provisional beat');
+  const after = direction.readGraph();
+  const saved = after.intents.at(-1);
   assert.equal(saved.interpretation.movement.emotion, 'provocation');
+  const capturedBeat = after.beats.find((beat) => beat.id === turn.captured.beatId);
+  assert.equal(capturedBeat.rawDirection, 'the character clicks his tongue while shaking his fist before a fight');
+  assert.equal(capturedBeat.movement.action, 'tongue click + one fist shake');
+  assert.equal(capturedBeat.source.intentId, turn.intentId);
 });
 
 test('blank-project kickstart returns reaction-sized choices even if agent reply is unusable', async () => {
@@ -88,4 +94,37 @@ test('router recognizes camera, contact and animatic intent without model-specif
   for (const recipe of [...camera, ...contact, ...timing]) {
     assert.doesNotMatch(JSON.stringify(recipe), /ComfyUI|ControlNet|SDXL|node/i);
   }
+});
+
+
+test('legacy storyboard chat is quietly bridged into Direction Graph and movement is documented', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const fakeAgent = {
+    async chat() {
+      return JSON.stringify({
+        message: 'I read it as one restrained gesture before the attack.',
+        interpretation: {
+          kind: 'movement',
+          movement: { actor: 'Tom', action: 'shake fist once', timing: 'before attack' },
+          preserve: ['stance'],
+          confidence: 0.86,
+        },
+        nextMoves: [], workflowHints: ['performance_closeup'], boardActions: [],
+      });
+    },
+  };
+  const partner = partnerModule.createPartner({ agentImpl: fakeAgent, directionImpl: direction });
+  const turn = await partner.turn({
+    message: 'Tom shakes his fist once before he lunges',
+    context: { legacyShotId: 'S04', legacyBeat: 'rooftop confrontation', surface: 'storyboard_canvas' },
+  });
+  assert.ok(turn.captured && turn.captured.beatId);
+  const graph = direction.readGraph();
+  const shot = graph.shots.find((item) => item.source && item.source.legacyShotId === 'S04');
+  assert.ok(shot, 'legacy board shot receives a Direction Graph scope');
+  assert.equal(graph.project.activeShotId, shot.id);
+  const beat = graph.beats.find((item) => item.id === turn.captured.beatId);
+  assert.equal(beat.shotId, shot.id);
+  assert.equal(beat.rawDirection, 'Tom shakes his fist once before he lunges');
+  assert.equal(beat.movement.actor, 'Tom');
 });

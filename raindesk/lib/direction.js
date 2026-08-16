@@ -168,6 +168,67 @@ function createScene(input = {}) {
 function getScene(graph, id) { return graph.scenes.find((s) => s.id === id) || null; }
 function getShot(graph, id) { return graph.shots.find((s) => s.id === id) || null; }
 
+function safeLegacyPart(value) {
+  const s = cleanText(value, 256).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 72);
+  return s || 'shot';
+}
+
+/**
+ * Bridge the existing storyboard board into Direction Graph scope lazily.
+ * This keeps ordinary Partner chat useful before the new scene/shot UI fully
+ * replaces the legacy board. The bridge is idempotent and never copies art.
+ */
+function ensureLegacyShot(legacyShotId, { beat = '', title = '' } = {}) {
+  const rawLegacyId = cleanText(legacyShotId, 256);
+  if (!rawLegacyId) throw new HttpError(400, 'legacyShotId is required');
+  const graph = readGraph();
+  const sceneId = 'legacy_board';
+  let scene = getScene(graph, sceneId);
+  if (!scene) {
+    scene = {
+      id: sceneId,
+      title: 'Working board',
+      description: 'Bridge for the current Raindesk storyboard surface.',
+      purpose: '', mood: '', participants: [], status: 'provisional',
+      source: { kind: 'legacy_board_bridge' },
+      createdAt: now(), updatedAt: now(),
+    };
+    graph.scenes.push(scene);
+  }
+
+  let shot = graph.shots.find((item) => item && item.source &&
+    item.source.kind === 'legacy_board_bridge' && item.source.legacyShotId === rawLegacyId) || null;
+  if (!shot) {
+    const shotId = `legacy_${safeLegacyPart(rawLegacyId)}`;
+    const occupied = getShot(graph, shotId);
+    if (occupied && (!occupied.source || occupied.source.legacyShotId !== rawLegacyId)) {
+      throw new HttpError(409, `legacy shot bridge collision for "${rawLegacyId}"`);
+    }
+    shot = occupied || {
+      id: shotId,
+      sceneId,
+      title: cleanText(title, 512) || rawLegacyId,
+      description: cleanText(beat),
+      purpose: '', startFrame: null, endFrame: null, camera: {}, dialogue: [],
+      preserve: [], takes: [], status: 'provisional',
+      source: { kind: 'legacy_board_bridge', legacyShotId: rawLegacyId },
+      createdAt: now(), updatedAt: now(),
+    };
+    if (!occupied) graph.shots.push(shot);
+  } else if (!shot.description && beat) {
+    shot.description = cleanText(beat);
+    shot.updatedAt = now();
+  }
+
+  graph.project.activeSceneId = sceneId;
+  graph.project.activeShotId = shot.id;
+  if (graph.project.creativeState === 'blank' || graph.project.creativeState === 'scene_started') {
+    graph.project.creativeState = 'developing';
+  }
+  writeGraph(graph);
+  return { sceneId, shotId: shot.id, scene, shot };
+}
+
 function createShot(input = {}) {
   const graph = readGraph();
   const sceneId = assertId(input.sceneId, 'sceneId');
@@ -323,5 +384,5 @@ module.exports = {
   DATA_DIR, DIRECTION_PATH, SCHEMA_VERSION, PARTNER_MODES, ANNOTATION_KINDS,
   STATUS, emptyGraph, isValidGraph, readGraph, writeGraph, setProject,
   createScene, createShot, createBeat, addAnnotation, recordIntent, summary,
-  normalizeMovement,
+  normalizeMovement, ensureLegacyShot, safeLegacyPart,
 };
