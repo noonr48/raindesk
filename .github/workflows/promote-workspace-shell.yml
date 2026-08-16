@@ -46,17 +46,16 @@ jobs:
           echo '4a8d91999ffcb26b2836f13b1b58742a021d027148e8403d02700af0057b02f6  /tmp/workspace-new.patch' | sha256sum -c -
 
       - name: Apply exact tested workspace source diff
-        working-directory: raindesk
         run: |
           set -euo pipefail
-          git apply --check /tmp/workspace-tracked.patch
-          git apply /tmp/workspace-tracked.patch
-          git apply --check /tmp/workspace-new.patch
-          git apply /tmp/workspace-new.patch
-          test -f public/js/workspace-ui.js
-          test -f dev/browser-workspace-smoke.js
-          test -f tests/frontend/workspace-ui.test.js
-          test -f WORKSPACE_SHELL.md
+          git apply --check --directory=raindesk /tmp/workspace-tracked.patch
+          git apply --directory=raindesk /tmp/workspace-tracked.patch
+          git apply --check --directory=raindesk /tmp/workspace-new.patch
+          git apply --directory=raindesk /tmp/workspace-new.patch
+          test -f raindesk/public/js/workspace-ui.js
+          test -f raindesk/dev/browser-workspace-smoke.js
+          test -f raindesk/tests/frontend/workspace-ui.test.js
+          test -f raindesk/WORKSPACE_SHELL.md
 
       - name: Syntax check workspace shell
         working-directory: raindesk
