@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -27,27 +27,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Promote tested Beat Trail slice
-        run: |
-          set -euo pipefail
-          if ! grep -q 'RaindeskBeats' raindesk/public/js/app.js; then
-            cd raindesk
-            patch -p0 < dev/beat-trail.patch
-            node --check public/js/beats.js
-            node --check public/js/app.js
-            node --check public/js/chat.js
-            npm test
-            cd ..
-
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add raindesk/public/index.html raindesk/public/js/app.js raindesk/public/js/chat.js \
-              raindesk/public/js/beats.js raindesk/public/css/app.css raindesk/tests/frontend/beats.test.js
-            git rm raindesk/dev/beat-trail.patch
-            git commit -m "raindesk: add Partner micro-beat trail"
-            git push origin HEAD:chatgpt/direction-partner-v2
-          fi
 
       - name: Syntax check Partner + direction integration
         working-directory: raindesk
