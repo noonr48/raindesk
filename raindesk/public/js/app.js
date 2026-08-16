@@ -16,8 +16,9 @@
   const RC = window.RaindeskCanvas;
   const API = window.RaindeskAPI;
   const CHAT = window.RaindeskChat;
+  const DIR = window.RaindeskDirection;
 
-  if (!RC || !API || !CHAT) {
+  if (!RC || !API || !CHAT || !DIR) {
     document.addEventListener('DOMContentLoaded', () => {
       const el = document.createElement('div');
       el.className = 'boot-error';
@@ -48,7 +49,11 @@
     making: false,
     drawer: null,
     dirty: true,
-    gesture: null, // { kind:'lasso'|'pen', points:[], ... }
+    gesture: null, // { kind:'lasso'|'pen'|'direction', points:[], ... }
+    directionMarks: [],
+    directionScope: null,
+    pendingDirection: null,
+    directionBusy: false,
     fit: { scale: 1, ox: 0, oy: 0 },
   };
 
@@ -65,6 +70,7 @@
     octx = off.getContext('2d', { willReadFrequently: true });
 
     bindChrome();
+    bindDirectionCaption();
     resize();
     window.addEventListener('resize', resize);
     requestAnimationFrame(tick);
@@ -109,6 +115,7 @@
     state.shot = shot;
     try { localStorage.setItem('raindesk.lastShot', id); } catch (_e) { /* ignore */ }
     await loadShotIntoCore(shot);
+    await hydrateDirectionMarks(shot);
     updateTitle();
     updateHint();
     syncGenBar();
@@ -135,6 +142,7 @@
     state.shot = last || (board.shots.find((s) => s.lane === 'in_dev') || board.shots[0] || null);
 
     await loadShotIntoCore(state.shot);
+    await hydrateDirectionMarks(state.shot);
 
     state.drawer = CHAT.ChatDrawer($('drawer'), { api: API, shotLabel });
     $('drawerHandle').addEventListener('click', () => {
@@ -199,6 +207,161 @@
     if (!sticky) hintTimer = setTimeout(() => el.classList.add('fade'), 4200);
   }
 
+  /* --------------------------------------------------- visual direction */
+
+  async function hydrateDirectionMarks(shot) {
+    state.directionMarks = [];
+    state.directionScope = null;
+    state.pendingDirection = null;
+    closeDirectionCaption();
+    if (state.offline || !shot || !API.getDirection) { markDirty(); return; }
+    try {
+      const loaded = await DIR.loadShotMarks(API, shot.id);
+      state.directionScope = loaded.scope;
+      state.directionMarks = loaded.marks || [];
+    } catch (_e) {
+      // Direction memory is additive: never stop drawing because it is unavailable.
+    }
+    markDirty();
+  }
+
+  function bindDirectionCaption() {
+    $('directionCaptionSave').addEventListener('click', savePendingDirection);
+    $('directionCaptionCancel').addEventListener('click', cancelPendingDirection);
+    $('directionCaptionInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); savePendingDirection(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancelPendingDirection(); }
+    });
+  }
+
+  function openDirectionCaption(points) {
+    if (!points || points.length < 2) return;
+    state.pendingDirection = { points: points.slice() };
+    const end = points[points.length - 1];
+    const dpr = window.devicePixelRatio || 1;
+    const px = (state.fit.ox + end.x * state.fit.scale) / dpr;
+    const py = (state.fit.oy + end.y * state.fit.scale) / dpr;
+    const box = $('directionCaption');
+    box.style.left = Math.max(10, Math.min(window.innerWidth - 330, px + 14)) + 'px';
+    box.style.top = Math.max(64, Math.min(window.innerHeight - 130, py + 12)) + 'px';
+    box.classList.add('open');
+    box.setAttribute('aria-hidden', 'false');
+    $('directionCaptionInput').value = '';
+    requestAnimationFrame(() => $('directionCaptionInput').focus());
+  }
+
+  function closeDirectionCaption() {
+    const box = $('directionCaption');
+    if (!box) return;
+    box.classList.remove('open');
+    box.setAttribute('aria-hidden', 'true');
+  }
+
+  function cancelPendingDirection() {
+    state.pendingDirection = null;
+    closeDirectionCaption();
+    markDirty();
+  }
+
+  function shortDirectionReadback(turn, annotation) {
+    const interp = turn && turn.interpretation;
+    if (interp && interp.kind === 'camera') return 'partner read that as a camera move';
+    if (interp && interp.kind === 'movement') return 'partner read that as character movement';
+    if (interp && interp.kind === 'performance') return 'partner read that as an acting beat';
+    if (annotation && annotation.kind && annotation.kind !== 'unknown') return `saved ${annotation.kind.replace('_', ' ')}`;
+    return 'saved the direction exactly as drawn';
+  }
+
+  async function savePendingDirection() {
+    if (state.directionBusy || !state.pendingDirection || !state.shot) return;
+    const pending = state.pendingDirection;
+    const caption = $('directionCaptionInput').value.trim();
+    state.directionBusy = true;
+    closeDirectionCaption();
+    // Optimistically keep the arrow visible while the Partner interprets it.
+    const provisional = {
+      id: `local_${Date.now()}`,
+      kind: 'unknown',
+      rawText: caption,
+      geometry: DIR.pathGeometry(pending.points, CANVAS_W, CANVAS_H),
+      status: 'provisional',
+      local: true,
+    };
+    state.directionMarks.push(provisional);
+    state.pendingDirection = null;
+    markDirty();
+    try {
+      const result = await DIR.interpretAndSavePath(API, {
+        legacyShot: state.shot,
+        points: pending.points,
+        caption,
+        width: CANVAS_W,
+        height: CANVAS_H,
+        extraContext: { canvas: { width: CANVAS_W, height: CANVAS_H } },
+      });
+      const i = state.directionMarks.indexOf(provisional);
+      if (i !== -1 && result.annotation) state.directionMarks[i] = result.annotation;
+      state.directionScope = result.scope;
+      toast(shortDirectionReadback(result.turn, result.annotation));
+      if (result.turn && result.turn.message && state.drawer && state.drawer.addPartnerNote) {
+        state.drawer.addPartnerNote(result.turn.message, result.turn.nextMoves || []);
+      }
+    } catch (_e) {
+      provisional.local = false;
+      toast('kept the arrow - partner can read it when the connection is back');
+    } finally {
+      state.directionBusy = false;
+      markDirty();
+    }
+  }
+
+  function drawArrowPath(points, { color = '#e07856', alpha = 1, caption = '', live = false } = {}) {
+    if (!points || points.length < 2) return;
+    const { scale, ox, oy } = state.fit;
+    const dpr = window.devicePixelRatio || 1;
+    dctx.save();
+    dctx.globalAlpha = alpha;
+    dctx.strokeStyle = color;
+    dctx.fillStyle = color;
+    dctx.lineWidth = Math.max(2 * dpr, 2.2 * scale);
+    dctx.lineJoin = 'round';
+    dctx.lineCap = 'round';
+    dctx.beginPath();
+    dctx.moveTo(ox + points[0].x * scale, oy + points[0].y * scale);
+    for (let i = 1; i < points.length; i++) dctx.lineTo(ox + points[i].x * scale, oy + points[i].y * scale);
+    dctx.stroke();
+
+    const end = points[points.length - 1];
+    let prev = points[points.length - 2];
+    for (let i = points.length - 2; i >= 0; i--) {
+      if (Math.hypot(end.x - points[i].x, end.y - points[i].y) > 8) { prev = points[i]; break; }
+    }
+    const ex = ox + end.x * scale;
+    const ey = oy + end.y * scale;
+    const angle = Math.atan2(end.y - prev.y, end.x - prev.x);
+    const size = 12 * dpr;
+    dctx.beginPath();
+    dctx.moveTo(ex, ey);
+    dctx.lineTo(ex - Math.cos(angle - 0.55) * size, ey - Math.sin(angle - 0.55) * size);
+    dctx.lineTo(ex - Math.cos(angle + 0.55) * size, ey - Math.sin(angle + 0.55) * size);
+    dctx.closePath();
+    dctx.fill();
+
+    if (caption && !live) {
+      const label = caption.length > 42 ? caption.slice(0, 39) + '...' : caption;
+      dctx.font = `${11 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
+      const metrics = dctx.measureText(label);
+      const pad = 6 * dpr;
+      const lx = Math.min(disp.width - metrics.width - pad * 3, ex + 10 * dpr);
+      const ly = Math.max(20 * dpr, ey - 10 * dpr);
+      dctx.fillStyle = 'rgba(14,33,41,.88)';
+      dctx.fillRect(lx - pad, ly - 13 * dpr, metrics.width + pad * 2, 18 * dpr);
+      dctx.fillStyle = '#f3ead8';
+      dctx.fillText(label, lx, ly);
+    }
+    dctx.restore();
+  }
+
   /* ------------------------------------------------------------ chrome */
 
   function bindChrome() {
@@ -251,6 +414,7 @@
     document.addEventListener('keydown', (e) => {
       const inText = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
       if (e.key === 'Escape') {
+        cancelPendingDirection();
         closeSheet();
         $('penpop').classList.remove('open');
         $('layersPanel').classList.remove('open');
@@ -267,7 +431,8 @@
       b.classList.toggle('active', b.dataset.tool === t);
     });
     if (t !== 'pen') $('penpop').classList.remove('open');
-    disp.classList.toggle('crosshair', t === 'select');
+    disp.classList.toggle('crosshair', t === 'select' || t === 'direction');
+    disp.classList.toggle('direction-cursor', t === 'direction');
   }
 
   function togglePenPop() { $('penpop').classList.toggle('open'); syncPenPop(); }
@@ -298,6 +463,9 @@
     const p = toCanvas(e);
     if (state.tool === 'select') {
       state.gesture = { kind: 'lasso', points: [p] };
+    } else if (state.tool === 'direction') {
+      cancelPendingDirection();
+      state.gesture = { kind: 'direction', points: [p] };
     } else if (state.tool === 'pen') {
       const layer = core.activeLayer();
       if (!layer || layer.kind === 'base') {
@@ -329,6 +497,8 @@
       for (const p of g.points) core.extendLasso(p);
       if (core.closeLasso()) syncGenBar();
       else core.clearLasso();
+    } else if (g.kind === 'direction') {
+      if (g.points.length > 1) openDirectionCaption(g.points);
     } else if (g.kind === 'pen') {
       try {
         core.addStroke(core.activeLayer().id, {
@@ -730,6 +900,24 @@
       dctx.lineCap = 'round';
       dctx.stroke();
       dctx.restore();
+    }
+
+    // semantic direction arrows live above the art but outside raster layers.
+    for (const mark of state.directionMarks) {
+      if (!mark || !mark.geometry || !Array.isArray(mark.geometry.points)) continue;
+      const color = mark.kind === 'camera_path' ? '#e8b04b' :
+        (mark.kind === 'actor_motion' ? '#e07856' : '#6f97a3');
+      drawArrowPath(mark.geometry.points, {
+        color,
+        alpha: mark.local ? 0.72 : 0.95,
+        caption: mark.rawText || '',
+      });
+    }
+    if (state.gesture && state.gesture.kind === 'direction') {
+      drawArrowPath(state.gesture.points, { color: '#e07856', alpha: 0.85, live: true });
+    }
+    if (state.pendingDirection) {
+      drawArrowPath(state.pendingDirection.points, { color: '#e07856', alpha: 0.85, live: true });
     }
 
     // take chip over the region (CSS px: divide device-px coords by dpr)

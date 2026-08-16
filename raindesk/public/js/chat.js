@@ -125,8 +125,13 @@
       return b;
     }
 
+    function addPartnerNote(text, moves) {
+      if (typeof text === 'string' && text.trim()) addBubble('agent', text.trim());
+      if (Array.isArray(moves) && moves.length) addMoves(moves);
+    }
+
     function clearMoves() {
-      chatList.querySelectorAll('.partner-moves').forEach(() => n.remove());
+      chatList.querySelectorAll('.partner-moves').forEach((n) => n.remove());
     }
 
     function partnerContext() {
@@ -257,7 +262,7 @@
     sync();
     return {
       open, close, isOpen,
-      recordGen, markCommitted,
+      recordGen, markCommitted, addPartnerNote,
       on: (evt, fn) => { if (listeners[evt]) listeners[evt].push(fn); },
     };
   }
