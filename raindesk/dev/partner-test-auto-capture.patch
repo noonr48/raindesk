@@ -1,6 +1,6 @@
 --- lib/tests/partner.test.js
 +++ lib/tests/partner.test.js
-@@ -55,8 +55,16 @@
+@@ -59,8 +59,14 @@
    assert.ok(turn.workflow.some((w) => w.id === 'performance_closeup'));
    assert.equal(turn.boardActions[0].disposition, 'proposal');
    assert.ok(turn.intentId);
@@ -14,10 +14,13 @@
 +  assert.equal(capturedBeat.movement.action, 'tongue click + one fist shake');
 +  assert.equal(capturedBeat.source.intentId, turn.intentId);
  });
-@@ -85,3 +93,36 @@
+ 
+ test('blank-project kickstart returns reaction-sized choices even if agent reply is unusable', async () => {
+@@ -89,3 +95,36 @@
      assert.doesNotMatch(JSON.stringify(recipe), /ComfyUI|ControlNet|SDXL|node/i);
    }
  });
++
 +
 +test('legacy storyboard chat is quietly bridged into Direction Graph and movement is documented', async () => {
 +  direction.writeGraph(direction.emptyGraph());
