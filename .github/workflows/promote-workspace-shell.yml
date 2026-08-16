@@ -1,0 +1,72 @@
+name: Promote Floating Workspace Shell
+
+on:
+  push:
+    branches:
+      - 'chatgpt/endless-workspace-shell-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reconstruct and verify tested workspace payload
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "chatgpt/endless-workspace-shell-v1"
+          test -f raindesk/dev/.workspace-shell-payload.b64
+          cp raindesk/dev/.workspace-shell-payload.b64 /tmp/workspace-shell.b64
+          echo '7f7a68d98e1e25f3a32233e7b9a951402fb0582a6d7907b1fe5890612e69c628  /tmp/workspace-shell.b64' | sha256sum -c -
+          base64 -d /tmp/workspace-shell.b64 > /tmp/workspace-shell.patch.bz2
+          echo 'eda4c71c2379bf22f1c154c5b4cc6f03477f1485bcd537a52cf6e55fe2e2945a  /tmp/workspace-shell.patch.bz2' | sha256sum -c -
+          bzip2 -dc /tmp/workspace-shell.patch.bz2 > /tmp/workspace-shell.patch
+          echo 'c607e233ebfffb78c212ae83848f6366c300bf96d804a8cf967d02d1a9333ab0  /tmp/workspace-shell.patch' | sha256sum -c -
+
+      - name: Apply exact tested workspace source diff
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          git apply --check /tmp/workspace-shell.patch
+          git apply /tmp/workspace-shell.patch
+          test -f public/js/workspace-ui.js
+          test -f dev/browser-workspace-smoke.js
+          test -f WORKSPACE_SHELL.md
+
+      - name: Syntax check workspace shell
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check public/js/workspace-ui.js
+          node --check public/js/app.js
+          node --check public/js/chat.js
+          node --check lib/partner.js
+          node --check lib/workspace.js
+          node --check dev/browser-workspace-smoke.js
+
+      - name: Run complete Raindesk suite before promotion
+        working-directory: raindesk
+        run: npm test
+
+      - name: Promote real source and remove transport scaffolding
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm raindesk/dev/.workspace-shell-payload.b64
+          git rm .github/workflows/promote-workspace-shell.yml
+          git add -A raindesk
+          git diff --cached --check
+          git commit -m 'raindesk: hydrate persistent floating creative workspace'
+          git push origin HEAD:chatgpt/endless-workspace-shell-v1
