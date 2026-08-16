@@ -1,9 +1,10 @@
 --- lib/tests/direction.test.js
 +++ lib/tests/direction.test.js
-@@ -66,3 +66,18 @@
+@@ -78,3 +78,18 @@
    assert.equal(direction.readGraph().project.partnerMode, 'act');
    assert.throws(() => direction.setProject({ partnerMode: 'reckless' }), (e) => e.status === 400);
  });
++
 +
 +test('legacy shot bridge is idempotent and preserves the old board identity', () => {
 +  direction.writeGraph(direction.emptyGraph());
