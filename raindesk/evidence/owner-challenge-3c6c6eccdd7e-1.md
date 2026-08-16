@@ -134,7 +134,14 @@ SEPARATELY:
 Binding closeout ordering is therefore SUITE-LAST: within any round
 claiming completion, the receipted suite runs AFTER every mutation of
 that round (waves → repairs → commit/push → ledger milestone →
-suite — nothing after). This structurally keeps the stateful gate
-satisfied and caps the resting float at debt-1 (a closing suite cannot
-register its own id); the next repo-touching commit's one-stroke
-append covers ALL floating ids at once, never just the latest.
+suite; the close report's prose follows but binds NEITHER predicate —
+the wave trigger exempts it explicitly, and the stateful gate's
+mutation set is the MINTED artifacts (ledger lines, receipts, files),
+not report text). This ordering STRUCTURALLY keeps the stateful gate
+satisfied: a closing suite cannot register its own id, so at least
+one float always rests. The bound on resting floats is
+CONVENTION-ENFORCED, not structural: repair-free re-fire rounds stack
+floats (witnessed round-13 — two rested until 4e6d0e8 cleared both),
+and the one-stroke append convention (the next repo-touching commit
+registers ALL floating ids at once, never just the latest) is what
+keeps the debt bounded.
