@@ -1,0 +1,35 @@
+name: Direction Partner
+
+on:
+  push:
+    branches:
+      - 'chatgpt/direction-partner-v2'
+  pull_request:
+    paths:
+      - 'raindesk/**'
+      - '.github/workflows/direction-partner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: raindesk
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check new partner foundation
+        run: |
+          node --check lib/direction.js
+          node --check lib/workflow-router.js
+          node --check lib/partner.js
+      - name: Run Raindesk tests
+        run: npm test
