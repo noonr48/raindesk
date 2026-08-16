@@ -1,0 +1,10 @@
+{
+  "name": "raindesk-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Raindesk local creative directing studio",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test lib/tests/*.test.js tests/frontend/*.test.js"
+  }
+}
