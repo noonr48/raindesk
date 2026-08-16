@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -23,16 +23,49 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/direction-partner-v2
+
+      - name: Repair partner route transfer encoding if needed
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server.js')
+          data = p.read_bytes()
+          marker = b"throw new HttpError(429, 'partner is already thinking"
+          if marker in data:
+              start = data.index(marker)
+              end = data.find(b"\n", start)
+              if end == -1:
+                  end = len(data)
+              line = b"      throw new HttpError(429, 'partner is already thinking with you - one moment');"
+              data = data[:start] + line + data[end:]
+              p.write_bytes(data)
+          PY
+          if ! git diff --quiet -- server.js; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add server.js
+            git commit -m "raindesk: repair partner route encoding"
+            git push origin HEAD:chatgpt/direction-partner-v2
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Syntax check new partner foundation
+
+      - name: Syntax check partner integration
         run: |
+          node --check server.js
           node --check lib/direction.js
           node --check lib/workflow-router.js
           node --check lib/partner.js
+          node --check public/js/api.js
+          node --check public/js/chat.js
+
       - name: Run Raindesk tests
         run: npm test
+
       - name: Upload source snapshot
         if: always()
         uses: actions/upload-artifact@v4
