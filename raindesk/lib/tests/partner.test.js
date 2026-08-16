@@ -310,3 +310,32 @@ test('Partner persists recent conversation so short follow-ups can refer to prio
   assert.match(prompts[1], /make three rough directions/);
   assert.match(prompts[1], /I would keep three rough directions/);
 });
+
+test('Partner receives bounded persistent workspace objects so spatial language can target stable panels', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const seen = [];
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat(prompt) {
+      const m = prompt.match(/Current context \(may be partial\):\n([\s\S]*?)\n\n/);
+      assert.ok(m);
+      const ctx = JSON.parse(m[1]); seen.push(ctx);
+      return JSON.stringify({ message: 'I can move the Partner card beside the beats.', interpretation: { kind: 'setup', confidence: 0.7 }, nextMoves: [], boardActions: [] });
+    } },
+    directionImpl: direction,
+  });
+  await partner.turn({
+    message: 'move yourself beside the beats',
+    context: {
+      workspace: {
+        viewport: { x: 0, y: 0, zoom: 1 },
+        objects: [
+          { id: 'panel_partner', type: 'partner_panel', x: 1000, y: 90, width: 330, height: 580, dock: 'right', visible: true },
+          { id: 'panel_beats', type: 'beat_trail', x: 600, y: 520, width: 350, height: 300, visible: true },
+        ],
+      },
+    },
+  });
+  assert.equal(seen[0].workspace.objects[0].id, 'panel_partner');
+  assert.equal(seen[0].workspace.objects[1].id, 'panel_beats');
+  assert.equal(seen[0].workspace.objects[0].dock, 'right');
+});

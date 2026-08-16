@@ -28,3 +28,15 @@ test('workspace move/dock/focus actions return executable inverses', () => {
   const focus = workspace.applyAction({ type: 'focus', targetId: 'references' });
   assert.equal(focus.workspace.activeObjectId, 'references');
 });
+
+test('move action inverse restores a pre-existing dock instead of only old coordinates', () => {
+  workspace.upsertObject({ id: 'dock_restore', type: 'partner_panel', x: 900, y: 80, width: 300, height: 500, dock: 'right' });
+  const moved = workspace.applyAction({ type: 'move_panel', targetId: 'dock_restore', payload: { x: 500, y: 180 } });
+  assert.equal(moved.object.dock, null);
+  assert.equal(moved.inverse.payload.dock, 'right');
+  workspace.applyAction(moved.inverse);
+  const restored = workspace.read().objects.find((o) => o.id === 'dock_restore');
+  assert.equal(restored.x, 900);
+  assert.equal(restored.y, 80);
+  assert.equal(restored.dock, 'right');
+});

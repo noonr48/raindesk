@@ -519,3 +519,115 @@ body.drawer-open .drawer-handle { display: none; }
 @media (max-width: 720px) {
   .beat-trail { left:10px; right:10px; width:auto; bottom:102px; max-height:42vh; }
 }
+
+/* ------------------------------------------------ floating workspace shell
+ * Desktop utility surfaces are ordinary persistent workspace objects. The
+ * active artboard stays focused; panels can float, resize, minimise to the
+ * shelf, and magnetically dock/snap without becoming technical inspectors.
+ */
+.workspace-panel-shelf {
+  position: fixed; z-index: 116; left: 16px; bottom: 14px;
+  display: none; gap: 6px; max-width: calc(100vw - 32px); flex-wrap: wrap;
+  padding: 5px; border-radius: 13px;
+  background: rgba(8,18,23,.76); border: 1px solid rgba(243,234,216,.10);
+  backdrop-filter: blur(12px);
+}
+.workspace-shelf-chip {
+  border: 1px solid rgba(243,234,216,.14); background: rgba(14,33,41,.82);
+  color: rgba(243,234,216,.68); border-radius: 9px; padding: 7px 10px;
+  font: inherit; font-size: 10px; cursor: pointer;
+}
+.workspace-shelf-chip.active { color: var(--gold); border-color: rgba(232,176,75,.56); background: rgba(58,44,16,.42); }
+.workspace-minimize {
+  margin-left: auto; min-width: 25px; height: 25px; border: 0; border-radius: 7px;
+  background: transparent; color: rgba(243,234,216,.58); cursor: pointer; font: inherit;
+}
+.workspace-minimize:hover { color: var(--cream); background: rgba(243,234,216,.06); }
+.workspace-drag-handle { cursor: grab; user-select: none; touch-action: none; }
+.workspace-drag-handle:active { cursor: grabbing; }
+.workspace-resize-grip {
+  display: none; position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px;
+  cursor: nwse-resize; touch-action: none; z-index: 6;
+}
+.workspace-resize-grip::after {
+  content: ''; position: absolute; right: 2px; bottom: 2px; width: 8px; height: 8px;
+  border-right: 1px solid rgba(243,234,216,.42); border-bottom: 1px solid rgba(243,234,216,.42);
+}
+.workspace-snap-guide { position: fixed; z-index: 200; display: none; pointer-events: none; background: rgba(232,176,75,.48); }
+.workspace-snap-guide.on { display: block; }
+.workspace-snap-guide.vertical { top: 56px; bottom: 72px; width: 1px; }
+.workspace-snap-guide.horizontal { left: 12px; right: 12px; height: 1px; }
+
+.workspace-scenes-panel {
+  position: fixed; display: none; overflow: hidden;
+  background: rgba(14,33,41,.95); border: 1px solid rgba(243,234,216,.16);
+  border-radius: 14px; box-shadow: 0 18px 48px rgba(0,0,0,.32); backdrop-filter: blur(14px);
+}
+.workspace-scenes-panel.open { display: flex; flex-direction: column; }
+.workspace-panel-head { display:flex; align-items:center; gap:8px; padding:10px 11px 8px; border-bottom:1px solid rgba(243,234,216,.09); color:var(--cream); }
+.workspace-panel-head strong { font-size:12px; font-weight:650; letter-spacing:.03em; }
+.workspace-panel-head > button { margin-left:auto; border:0; background:transparent; color:rgba(243,234,216,.58); font-size:16px; cursor:pointer; }
+.workspace-scene-rows { overflow:auto; padding:7px; }
+.workspace-scene-row {
+  width:100%; display:grid; grid-template-columns:42px 1fr auto; align-items:center; gap:8px;
+  border:1px solid transparent; background:transparent; color:rgba(243,234,216,.72);
+  text-align:left; border-radius:9px; padding:8px; cursor:pointer; font:inherit;
+}
+.workspace-scene-row:hover { background:rgba(243,234,216,.045); }
+.workspace-scene-row.active { border-color:rgba(232,176,75,.5); background:rgba(58,44,16,.30); color:var(--cream); }
+.workspace-scene-row strong { color:var(--gold); font-size:11px; }
+.workspace-scene-row span { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10.5px; }
+.workspace-scene-row small { color:rgba(243,234,216,.42); font-size:8px; text-transform:uppercase; }
+
+@media (min-width: 900px) {
+  body.workspace-desktop .workspace-panel-shelf { display:flex; }
+  body.workspace-desktop .workspace-floating-panel { box-sizing:border-box; max-height:none; }
+  body.workspace-desktop .workspace-floating-panel .workspace-resize-grip { display:block; }
+
+  /* Utility windows no longer force a permanent rail or dead art pillar. */
+  body.workspace-desktop.drawer-open #stage { right:0; }
+  body.workspace-desktop .chat-drawer { pointer-events:none; background:none; }
+  body.workspace-desktop .chat-scrim { display:none !important; }
+  body.workspace-desktop .chat-panel.workspace-floating-panel {
+    position:fixed; right:auto; bottom:auto; transform:none !important;
+    border:1px solid rgba(243,234,216,.15); border-radius:14px;
+    box-shadow:0 18px 48px rgba(0,0,0,.34); overflow:hidden;
+  }
+  body.workspace-desktop .chat-drawer:not(.open) .chat-panel { display:none; }
+  body.workspace-desktop .chat-drawer.open { pointer-events:none; }
+  body.workspace-desktop .chat-drawer.open .chat-panel { display:flex; pointer-events:auto; transform:none !important; }
+  body.workspace-desktop .chat-tabs { padding:10px 9px 8px; }
+
+  body.workspace-desktop .panel.workspace-floating-panel {
+    position:fixed; right:auto; bottom:auto; display:none; overflow:auto;
+    max-height:none; margin:0;
+  }
+  body.workspace-desktop .panel.workspace-floating-panel.open { display:block; }
+  body.workspace-desktop .panel.workspace-floating-panel > h4 {
+    min-height:26px; display:flex; align-items:center; margin:-2px 0 8px;
+  }
+
+  body.workspace-desktop .beat-trail.workspace-floating-panel {
+    position:fixed; right:auto; bottom:auto; max-height:none; width:auto;
+  }
+  body.workspace-desktop .beat-trail.workspace-floating-panel.open { display:flex; }
+
+  body.workspace-desktop .drawer-handle { display:none; }
+}
+
+@media (max-width: 899px) {
+  .workspace-scenes-panel, .workspace-panel-shelf, .workspace-snap-guide { display:none !important; }
+  .workspace-minimize, .workspace-resize-grip { display:none !important; }
+}
+.partner-action-proposal, .partner-action-receipt {
+  align-self:stretch; display:flex; align-items:center; gap:6px; padding:7px 8px;
+  border:1px solid rgba(243,234,216,.10); border-radius:10px;
+  background:rgba(243,234,216,.035); color:rgba(243,234,216,.72);
+}
+.partner-action-copy { flex:1; min-width:0; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.partner-action-btn {
+  border:1px solid rgba(232,176,75,.42); background:rgba(58,44,16,.28); color:var(--gold);
+  border-radius:8px; padding:5px 7px; font:inherit; font-size:9px; cursor:pointer;
+}
+.partner-action-btn.quiet { border-color:rgba(243,234,216,.10); background:transparent; color:rgba(243,234,216,.46); }
+.partner-action-receipt small { font-size:9px; color:rgba(243,234,216,.45); }
