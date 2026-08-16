@@ -14,7 +14,10 @@
  *   GET  /api/gen/{jobId}     -> { id, status, imageUrl? , error? }
  *   POST /api/shot/{id}/layer (multipart PNG â‰¤20MB, field "image"|"file")
  *   GET  /api/shot/{id}/image/{file}
- *   POST /api/chat            { message } -> { reply }
+ *   GET  /api/direction       -> direction graph
+ *   POST /api/direction/*     -> scene / shot / beat / annotation mutations
+ *   POST /api/partner/turn    { message?, mode?, context? } -> structured partner turn
+ *   POST /api/chat            { message } -> { reply } (legacy companion route)
  *
  * Static: public/ with MIME map, path-traversal-proof (normalize + prefix).
  * Safety: no shell anywhere (pi gets argv/stdin, ComfyUI gets
@@ -34,6 +37,8 @@ const shots = require('./lib/shots');
 const { validatePngBuffer, MAX_PNG_BYTES } = require('./lib/validate');
 const comfy = require('./lib/comfy');
 const agent = require('./lib/agent');
+const direction = require('./lib/direction');
+const partner = require('./lib/partner');
 const { GenQueue } = require('./lib/queue');
 const assets = require('./lib/assets');
 
@@ -185,7 +190,7 @@ function safePublicPath(urlPath) {
 /* ---------------------------------------------------------------- routes */
 
 async function handleApi(req, res, url, deps) {
-  const { queue, comfyImpl, agentImpl } = deps;
+  const { queue, comfyImpl, agentImpl, partnerImpl } = deps;
   const route = url.pathname;
   const method = req.method;
 
@@ -200,6 +205,41 @@ async function handleApi(req, res, url, deps) {
     if (typeof body.lane !== 'string' || !body.lane) throw new HttpError(400, 'lane is required');
     const updated = board.moveShot(shotId, body.lane);
     return sendJson(res, 200, { ok: true, board: updated });
+  }
+
+  /* Direction Graph v2: structured production memory underneath the visual board. */
+  if (method === 'GET' && route === '/api/direction') {
+    return sendJson(res, 200, direction.readGraph());
+  }
+
+  if (method === 'POST' && route === '/api/direction/project') {
+    const body = await readJson(req, 256 * 1024);
+    const graph = direction.setProject(body);
+    return sendJson(res, 200, { ok: true, graph });
+  }
+
+  if (method === 'POST' && route === '/api/direction/scene') {
+    const body = await readJson(req, 1024 * 1024);
+    const scene = direction.createScene(body);
+    return sendJson(res, 200, { ok: true, scene, graph: direction.readGraph() });
+  }
+
+  if (method === 'POST' && route === '/api/direction/shot') {
+    const body = await readJson(req, 1024 * 1024);
+    const shot = direction.createShot(body);
+    return sendJson(res, 200, { ok: true, shot, graph: direction.readGraph() });
+  }
+
+  if (method === 'POST' && route === '/api/direction/beat') {
+    const body = await readJson(req, 1024 * 1024);
+    const beat = direction.createBeat(body);
+    return sendJson(res, 200, { ok: true, beat, graph: direction.readGraph() });
+  }
+
+  if (method === 'POST' && route === '/api/direction/annotation') {
+    const body = await readJson(req, 2 * 1024 * 1024);
+    const annotation = direction.addAnnotation(body);
+    return sendJson(res, 200, { ok: true, annotation, graph: direction.readGraph() });
   }
 
   if (method === 'POST' && route === '/api/gen') {
@@ -248,10 +288,10 @@ async function handleApi(req, res, url, deps) {
   const assetMatch = route.match(/^\/api\/assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9._-]{1,128})$/);
   if (method === 'GET' && assetMatch) {
     const filePath = assets.resolve(assetMatch[1], assetMatch[2]);
-    if (!filePath) throw new HttpError(404, 'no such asset');
+    if (!filePath) throw new HttpError(404, 'nopsuch asset');
     let stat;
-    try { stat = await fs.promises.stat(filePath); } catch (_e) { throw new HttpError(404, 'no such asset'); }
-    if (!stat.isFile()) throw new HttpError(404, 'no such asset');
+    try { stat = await fs.promises.stat(filePath); } catch (_e) { throw new HttpError(404, 'nosuch asset'); }
+    if (!stat.isFile()) throw new HttpError(404, 'nosuch asset');
     res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': stat.size });
     await pipeline(fs.createReadStream(filePath), res);
     return;
@@ -307,115 +347,6 @@ async function handleApi(req, res, url, deps) {
     return undefined;
   }
 
-  if (method === 'POST' && route === '/api/chat') {
+  if (method === 'POST' && route === '/api/partner/turn') {
     if (chatInFlight >= CHAT_CONCURRENCY) {
-      throw new HttpError(429, 'companion is talking with you already â€” one moment ğŸŒ§ï¸');
-    }
-    // Increment BEFORE the awaited readJson so the check-then-act window
-    // cannot admit unbounded concurrent spawns; the finally balances every
-    // post-increment path including body-validation throws.
-    chatInFlight += 1;
-    let reply;
-    try {
-      const body = await readJson(req, 1024 * 1024);
-      if (typeof body.message !== 'string' || !body.message.trim()) {
-        throw new HttpError(400, 'message is required');
-      }
-      if (body.message.length > CHAT_MESSAGE_LIMIT) {
-        throw new HttpError(413, 'message too long');
-      }
-      reply = await agentImpl.chat(body.message);
-    } finally {
-      chatInFlight -= 1;
-    }
-    return sendJson(res, 200, { reply });
-  }
-
-  throw new HttpError(404, 'not found');
-}
-
-async function serveStatic(req, res, url) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    throw new HttpError(404, 'not found');
-  }
-  let rel = url.pathname;
-  if (rel === '/') rel = '/index.html';
-  const filePath = safePublicPath(rel);
-  if (!filePath) throw new HttpError(404, 'not found');
-
-  let stat;
-  try {
-    stat = await fs.promises.stat(filePath);
-  } catch (_e) {
-    throw new HttpError(404, 'not found');
-  }
-  if (!stat.isFile()) throw new HttpError(404, 'not found');
-
-  const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-  res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size });
-  if (req.method === 'HEAD') return res.end();
-  await pipeline(fs.createReadStream(filePath), res);
-  return undefined;
-}
-
-/* ---------------------------------------------------------------- server */
-
-function createServer(deps = {}) {
-  const queue = deps.queue || new GenQueue();
-  const comfyImpl = deps.comfyImpl || deps.comfy || comfy;
-  const agentImpl = deps.agentImpl || deps.agent || agent;
-
-  const server = http.createServer((req, res) => {
-    let promise;
-    try {
-      const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
-      promise = url.pathname.startsWith('/api/')
-        ? handleApi(req, res, url, { queue, comfyImpl, agentImpl })
-        : serveStatic(req, res, url);
-    } catch (_e) {
-      promise = Promise.reject(new HttpError(404, 'not found'));
-    }
-    promise.catch((e) => {
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      const status = e instanceof HttpError ? e.status : 500;
-      const message = e instanceof HttpError ? e.message : 'internal error';
-      if (!(e instanceof HttpError)) {
-        // eslint-disable-next-line no-console
-        console.error('[raindesk] unhandled error:', e);
-      }
-      try {
-        sendJson(res, status, { error: message }); // res may be destroyed (413 path)
-      } catch (_sendErr) {
-        res.destroy();
-      }
-    });
-  });
-  server.raindesk = { queue, comfyImpl, agentImpl };
-  return server;
-}
-
-function start({ host = HOST, port = PORT } = {}) {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(port, host, () => {
-      const addr = server.address();
-      // eslint-disable-next-line no-console
-      console.log(`[raindesk] listening on http://${addr.address}:${addr.port}`);
-      resolve(server);
-    });
-  });
-}
-
-if (require.main === module) {
-  start().catch((e) => {
-    // eslint-disable-next-line no-console
-    console.error('[raindesk] failed to start:', e);
-    process.exit(1);
-  });
-}
-
-module.exports = { createServer, start, HOST, PORT, PUBLIC_DIR, parseMultipart, safePublicPath, sendJson };
+      throw new HttpError(429, 'partner is already thinking with you â€”"‰Ş±ç(×!jÒ'X †ß
