@@ -1,0 +1,148 @@
+diff -ruN '--exclude=.github' '--exclude=artifacts' '--exclude=data' raindesk-ec79-base/lib/tests/direction.test.js raindesk-direction-latest/lib/tests/direction.test.js
+--- raindesk-ec79-base/lib/tests/direction.test.js	2026-08-16 10:30:22.000000000 +0000
++++ raindesk-direction-latest/lib/tests/direction.test.js	2026-08-16 11:11:14.360978655 +0000
+@@ -93,3 +93,37 @@
+   assert.equal(graph.shots[0].description, 'truck loses grip');
+   assert.equal(graph.project.activeShotId, 'legacy_S03');
+ });
++
++
++test('camera endpoints can promote into start/landing anchors and shotSpec assembles the working shot', () => {
++  direction.writeGraph(direction.emptyGraph());
++  const scene = direction.createScene({ id: 'anchor_scene', title: 'Camera reveal' });
++  direction.createShot({ id: 'anchor_shot', sceneId: scene.id, title: 'Rise to face' });
++  direction.createBeat({ id: 'anchor_beat', shotId: 'anchor_shot', rawDirection: 'she rises into frame' });
++  direction.addAnnotation({
++    id: 'anchor_camera_arrow', scopeType: 'shot', scopeId: 'anchor_shot',
++    kind: 'camera_path', rawText: 'camera rises from low behind to face',
++  });
++
++  const start = direction.setShotAnchor('anchor_shot', 'start', {
++    kind: 'direction_path_endpoint', point: { x: 100, y: 900 },
++    framing: 'low behind character', sourceAnnotationId: 'anchor_camera_arrow',
++  });
++  const end = direction.setShotAnchor('anchor_shot', 'end', {
++    kind: 'direction_path_endpoint', point: { x: 700, y: 180 },
++    framing: 'close on face', sourceAnnotationId: 'anchor_camera_arrow',
++  });
++  assert.deepEqual(start.point, { x: 100, y: 900 });
++  assert.equal(end.framing, 'close on face');
++
++  const spec = direction.shotSpec('anchor_shot');
++  assert.equal(spec.shot.startFrame.framing, 'low behind character');
++  assert.equal(spec.shot.endFrame.framing, 'close on face');
++  assert.equal(spec.beats.some((b) => b.id === 'anchor_beat'), true);
++  assert.equal(spec.annotations.some((a) => a.id === 'anchor_camera_arrow'), true);
++});
++
++test('shot anchors validate slot and unknown shot without mutating the graph', () => {
++  assert.throws(() => direction.setShotAnchor('roof_04', 'middle', {}), (e) => e.status === 400);
++  assert.throws(() => direction.setShotAnchor('missing_shot', 'start', {}), (e) => e.status === 404);
++});
+diff -ruN '--exclude=.github' '--exclude=artifacts' '--exclude=data' raindesk-ec79-base/lib/tests/partner.test.js raindesk-direction-latest/lib/tests/partner.test.js
+--- raindesk-ec79-base/lib/tests/partner.test.js	2026-08-16 10:30:22.000000000 +0000
++++ raindesk-direction-latest/lib/tests/partner.test.js	2026-08-16 11:10:58.089326351 +0000
+@@ -87,6 +87,8 @@
+ test('router recognizes camera, contact and animatic intent without model-specific tools', () => {
+   const camera = router.rankRecipes('spiral the camera from behind them up into a close shot');
+   assert.equal(camera[0].id, 'camera_reveal');
++  const motion = router.rankRecipes('he shakes his fist once, shifts his weight, then lunges');
++  assert.ok(motion.some((x) => x.id === 'character_motion'));
+   const contact = router.rankRecipes('she catches his wrist before the punch lands');
+   assert.ok(contact.some((x) => x.id === 'contact_action'));
+   const timing = router.rankRecipes('hold for 12 frames then cut into the animatic');
+@@ -128,3 +130,34 @@
+   assert.equal(beat.rawDirection, 'Tom shakes his fist once before he lunges');
+   assert.equal(beat.movement.actor, 'Tom');
+ });
++
++
++test('non-JSON agent replies still preserve obvious movement as a provisional beat', async () => {
++  direction.writeGraph(direction.emptyGraph());
++  const scene = direction.createScene({ id: 'fallback_scene', title: 'Pre-fight' });
++  direction.createShot({ id: 'fallback_shot', sceneId: scene.id, title: 'Gesture' });
++  const partner = partnerModule.createPartner({
++    agentImpl: { async chat() { return 'still with you'; } },
++    directionImpl: direction,
++  });
++  const turn = await partner.turn({
++    message: 'he clicks his tongue while shaking his fist before the fight',
++    context: { sceneId: scene.id, shotId: 'fallback_shot' },
++  });
++  assert.equal(turn.interpretation.kind, 'movement');
++  assert.match(turn.interpretation.movement.action, /shaking his fist/);
++  assert.match(turn.interpretation.movement.timing, /while|before/i);
++  assert.ok(turn.workflow.some((x) => x.id === 'character_motion'));
++  assert.ok(turn.captured && turn.captured.beatId);
++  const beat = direction.shotSpec('fallback_shot').beats.at(-1);
++  assert.equal(beat.rawDirection, 'he clicks his tongue while shaking his fist before the fight');
++});
++
++test('fallback interpretation recognizes camera language without inventing a tool', () => {
++  const interpreted = partnerModule.fallbackInterpretation(
++    'camera spirals from low behind her and lands close on the face',
++  );
++  assert.equal(interpreted.kind, 'camera');
++  assert.match(interpreted.camera.path, /spirals/);
++  assert.ok(interpreted.confidence < 0.5, 'fallback stays explicitly provisional');
++});
+diff -ruN '--exclude=.github' '--exclude=artifacts' '--exclude=data' raindesk-ec79-base/lib/tests/routes.test.js raindesk-direction-latest/lib/tests/routes.test.js
+--- raindesk-ec79-base/lib/tests/routes.test.js	2026-08-16 10:30:22.000000000 +0000
++++ raindesk-direction-latest/lib/tests/routes.test.js	2026-08-16 11:10:58.090285888 +0000
+@@ -382,6 +382,31 @@
+     });
+     assert.equal(res.status, 201);
+ 
++    res = await fetch(`${base}/api/direction/shot-anchor`, {
++      method: 'POST', headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({
++        shotId: 'route_shot', slot: 'start',
++        anchor: { kind: 'direction_path_endpoint', point: { x: 12, y: 90 }, framing: 'low rear' },
++      }),
++    });
++    assert.equal(res.status, 200);
++
++    res = await fetch(`${base}/api/direction/shot-anchor`, {
++      method: 'POST', headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({
++        shotId: 'route_shot', slot: 'end',
++        anchor: { kind: 'direction_path_endpoint', point: { x: 70, y: 15 }, framing: 'face close-up' },
++      }),
++    });
++    assert.equal(res.status, 200);
++
++    const specRes = await fetch(`${base}/api/direction/shot/route_shot/spec`);
++    assert.equal(specRes.status, 200);
++    const spec = await specRes.json();
++    assert.equal(spec.shot.startFrame.framing, 'low rear');
++    assert.equal(spec.shot.endFrame.framing, 'face close-up');
++    assert.equal(spec.beats[0].id, 'route_beat');
++
+     graph = await (await fetch(`${base}/api/direction`)).json();
+     assert.equal(graph.scenes.some((x) => x.id === 'route_scene'), true);
+     assert.equal(graph.shots.some((x) => x.id === 'route_shot'), true);
+diff -ruN '--exclude=.github' '--exclude=artifacts' '--exclude=data' raindesk-ec79-base/lib/workflow-router.js raindesk-direction-latest/lib/workflow-router.js
+--- raindesk-ec79-base/lib/workflow-router.js	2026-08-16 10:30:22.000000000 +0000
++++ raindesk-direction-latest/lib/workflow-router.js	2026-08-16 11:10:28.686827159 +0000
+@@ -30,6 +30,13 @@
+     passes: ['anchor start frame', 'anchor landing frame', 'interpret camera path', 'rough previs', 'review framing and continuity', 'time the move'],
+     preserve: ['accepted staging', 'character identity', 'scene geography'],
+   },
++  character_motion: {
++    id: 'character_motion',
++    label: 'Character movement beat',
++    purpose: 'Turn a gesture or body movement into clear blocking, timing and follow-through without overbuilding the shot.',
++    passes: ['anchor starting pose', 'trace the primary motion path', 'check weight/body mechanics', 'set timing and overlap', 'add secondary motion', 'review camera relationship'],
++    preserve: ['character identity', 'accepted scene geography', 'unrelated body/action beats'],
++  },
+   performance_closeup: {
+     id: 'performance_closeup',
+     label: 'Performance close-up',
+@@ -76,6 +83,7 @@
+ 
+ const HINTS = [
+   ['camera_reveal', /\b(camera|cam|orbit|spiral|push in|push-in|pull back|dolly|pan|tilt|crane|zoom|framing|frame lands|start frame|end frame)\b/i],
++  ['character_motion', /\b(move|moves|moving|step|steps|turn|turns|raise|raises|lower|lowers|shake|shakes|fist|stand|stands|sit|sits|lean|leans|reach|reaches|walk|walks|run|runs|recoil|crouch|jump|gesture|point|points|swing|swings|twist|twists|shift|shifts|lunge|lunges)\b/i],
+   ['contact_action', /\b(punch|kick|hit|impact|grab|grabs|catch|catches|wrist|contact|collide|slam|strike|block)\b/i],
+   ['performance_closeup', /\b(expression|face|eyes|gaze|mouth|tongue|breath|speaks|says|dialogue|smile|frown|anger|hesitat|reaction)\b/i],
+   ['choreography', /\b(fight|choreograph|two people|both characters|crowd|dance|crossing|multi-character|multiple characters)\b/i],
