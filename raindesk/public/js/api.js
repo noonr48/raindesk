@@ -97,19 +97,25 @@
   function setDirectionShotAnchor(shotId, slot, anchor) {
     return POST('/api/direction/shot-anchor', { shotId, slot, anchor });
   }
+  function setDirectionShotFrameRef(shotId, slot, frameRef) {
+    return POST('/api/direction/shot-frame-ref', { shotId, slot, frameRef });
+  }
   function getDirectionShotSpec(shotId) {
     return GET(`/api/direction/shot/${encodeURIComponent(shotId)}/spec`);
   }
 
   /* --------------------------------------------------------------- gen */
 
-  function submitGen({ shotId, layerId, prompt, negative, seed, regionPng, maskPng }) {
+  function submitGen({ shotId, layerId, prompt, negative, seed, regionPng, maskPng, baseRevisionId, region, lasso }) {
     return POST('/api/gen', {
       shotId,
       layerId: layerId || undefined,
       prompt,
       negative: negative || undefined,
       seed: seed === undefined || seed === null ? undefined : seed,
+      baseRevisionId: baseRevisionId || undefined,
+      region: region || undefined,
+      lasso: Array.isArray(lasso) ? lasso : undefined,
       regionPng: base64FromBytes(regionPng),
       maskPng: base64FromBytes(maskPng),
     });
@@ -152,6 +158,9 @@
           friendly: `gen didn't make it — ${view.error || 'unknown error'} · try another take? ✨`,
         });
       }
+      if (view.status === 'cancelled') {
+        throw new ApiError('generation cancelled', { friendly: 'cancelled before it started' });
+      }
       if (Date.now() + pollMs > deadline) {
         throw new ApiError(`gen timed out after ${Math.round(timeoutMs / 60000)} min`, {
           friendly: 'gen ran out of time — try again? ⏳',
@@ -159,6 +168,34 @@
       }
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
+  }
+
+  function cancelGen(jobId) { return POST(`/api/gen/${encodeURIComponent(jobId)}/cancel`, {}); }
+  function listJobs({ shotId = null, limit = 100 } = {}) {
+    const qs = new URLSearchParams();
+    if (shotId) qs.set('shotId', shotId);
+    qs.set('limit', String(limit));
+    return GET(`/api/jobs?${qs.toString()}`);
+  }
+
+  function listTakes({ shotId = null, status = null, limit = 200 } = {}) {
+    const qs = new URLSearchParams();
+    if (shotId) qs.set('shotId', shotId);
+    if (status) qs.set('status', status);
+    qs.set('limit', String(limit));
+    return GET(`/api/takes?${qs.toString()}`);
+  }
+
+  function acceptTake(takeId, revisionId) {
+    return POST(`/api/take/${encodeURIComponent(takeId)}/accept`, { revisionId: revisionId || null });
+  }
+
+  function rejectTake(takeId) {
+    return POST(`/api/take/${encodeURIComponent(takeId)}/reject`, {});
+  }
+
+  function reopenTake(takeId) {
+    return POST(`/api/take/${encodeURIComponent(takeId)}/reopen`, {});
   }
 
   /** Fetch an image URL and decode to { width, height, data:RGBA }. */
@@ -195,6 +232,56 @@
 
   function shotImageUrl(id, file) {
     return `/api/shot/${encodeURIComponent(id)}/image/${encodeURIComponent(file)}`;
+  }
+
+  /* ----------------------------------------------- editable documents */
+
+  function uploadBlob(pngBytes) {
+    const form = new FormData();
+    const name = `blob-${Date.now()}.png`;
+    form.append('image', new Blob([pngBytes], { type: 'image/png' }), name);
+    return jsonFetch('/api/blob', { method: 'POST', body: form });
+  }
+
+  function blobUrl(sha) { return `/api/blob/${encodeURIComponent(sha)}`; }
+
+  function getShotDocument(id) {
+    return GET(`/api/shot/${encodeURIComponent(id)}/document`);
+  }
+
+  function saveShotDocument(id, { document, baseRevisionId = null, reason = 'edit' } = {}) {
+    return POST(`/api/shot/${encodeURIComponent(id)}/document`, {
+      document,
+      baseRevisionId: baseRevisionId || undefined,
+      reason,
+    });
+  }
+
+  function getShotRevisions(id) {
+    return GET(`/api/shot/${encodeURIComponent(id)}/revisions`);
+  }
+
+  function getShotRevision(id, revisionId) {
+    return GET(`/api/shot/${encodeURIComponent(id)}/revision/${encodeURIComponent(revisionId)}`);
+  }
+
+  function restoreShotRevision(id, revisionId, { baseRevisionId = null, reason = 'restore revision' } = {}) {
+    return POST(`/api/shot/${encodeURIComponent(id)}/revision/${encodeURIComponent(revisionId)}/restore`, {
+      baseRevisionId: baseRevisionId || undefined, reason,
+    });
+  }
+
+  /* ---------------------------------------------------------- workspace */
+
+  function getWorkspace() { return GET('/api/workspace'); }
+  function upsertWorkspaceObject(object) { return POST('/api/workspace/object', object); }
+  function setWorkspaceViewport(viewport) { return POST('/api/workspace/viewport', viewport); }
+  function listPartnerActions(limit = 100) { return GET(`/api/partner/actions?limit=${encodeURIComponent(limit)}`); }
+  function mutatePartnerAction(id, verb) {
+    if (!['approve', 'execute', 'accept', 'revert', 'cancel'].includes(verb)) {
+      return Promise.reject(new ApiError(`unsupported Partner action verb ${verb}`));
+    }
+    return POST(`/api/partner/action/${encodeURIComponent(id)}/${verb}`, {});
   }
 
   /* -------------------------------------------------------------- chat */
@@ -253,10 +340,13 @@
     ApiError, GET, POST, base64FromBytes,
     getBoard, getBoardOrDemo, moveShot,
     getDirection, updateDirectionProject, createDirectionScene, createDirectionShot,
-    createDirectionBeat, addDirectionAnnotation, setDirectionShotAnchor,
+    createDirectionBeat, addDirectionAnnotation, setDirectionShotAnchor, setDirectionShotFrameRef,
     getDirectionShotSpec, partnerTurn,
-    submitGen, pollGen, fetchImageRGBA,
-    getShot, uploadLayer, shotImageUrl, sendChat,
+    submitGen, pollGen, cancelGen, listJobs, listTakes, acceptTake, rejectTake, reopenTake, fetchImageRGBA,
+    getShot, uploadLayer, shotImageUrl,
+    uploadBlob, blobUrl, getShotDocument, saveShotDocument, getShotRevisions, getShotRevision, restoreShotRevision,
+    getWorkspace, upsertWorkspaceObject, setWorkspaceViewport, listPartnerActions, mutatePartnerAction,
+    sendChat,
     DEMO_BOARD,
   };
 });

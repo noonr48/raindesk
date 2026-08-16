@@ -1,10 +1,11 @@
 'use strict';
 
 /**
- * Raindesk backend — node:http only, zero deps. Binds all interfaces
- * (0.0.0.0:17600 by default, override with RAINDESK_HOST) so the owner's
- * phone/laptop reach it over the tailnet — same exposure model as the
- * estate's vault-app. Unauthenticated by design: trusted home network only.
+ * Raindesk backend — node:http only, zero deps. Secure default is loopback
+ * (127.0.0.1:17600). Remote binding is an explicit deployment choice and is
+ * refused unless a long RAINDESK_REMOTE_TOKEN is configured. Wildcard binds
+ * additionally require RAINDESK_ALLOW_WILDCARD=1 so a tailnet launch cannot
+ * accidentally expose the creative workstation on every LAN interface.
  *
  * REST (JSON):
  *   GET  /api/board
@@ -12,11 +13,18 @@
  *   POST /api/gen             { shotId, layerId?, maskPng(b64), regionPng(b64),
  *                               prompt, seed?, negative? } -> { jobId }
  *   GET  /api/gen/{jobId}     -> { id, status, imageUrl? , error? }
- *   POST /api/shot/{id}/layer (multipart PNG ≤20MB, field "image"|"file")
+ *   POST /api/blob            immutable content-addressed PNG upload
+ *   GET  /api/blob/{sha}
+ *   GET  /api/shot/{id}/document
+ *   POST /api/shot/{id}/document  versioned editable shot document
+ *   GET  /api/shot/{id}/revisions
+ *   POST /api/shot/{id}/layer (legacy flattened PNG endpoint)
  *   GET  /api/shot/{id}/image/{file}
  *   GET  /api/direction       -> direction graph
  *   POST /api/direction/*     -> scene / shot / beat / annotation mutations
  *   POST /api/partner/turn    { message?, mode?, context? } -> structured partner turn
+ *   GET/POST /api/workspace   persistent spatial board state
+ *   GET/POST /api/partner/action/* permission-gated reversible actions
  *   POST /api/chat            { message } -> { reply } (legacy companion route)
  *
  * Static: public/ with MIME map, path-traversal-proof (normalize + prefix).
@@ -29,6 +37,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
 
 const { HttpError } = require('./lib/errors');
@@ -41,8 +50,15 @@ const direction = require('./lib/direction');
 const partner = require('./lib/partner');
 const { GenQueue } = require('./lib/queue');
 const assets = require('./lib/assets');
+const blobs = require('./lib/blobs');
+const shotDocuments = require('./lib/shot-documents');
+const workspace = require('./lib/workspace');
+const partnerActions = require('./lib/partner-actions');
+const jobStore = require('./lib/job-store');
+const takes = require('./lib/takes');
 
-const HOST = process.env.RAINDESK_HOST || '0.0.0.0'; // tailnet-reachable (phone/laptop); vault-app/mockup precedent
+// Secure by default: remote/private-mesh exposure must be an explicit launch choice.
+const HOST = process.env.RAINDESK_HOST || '127.0.0.1';
 const PORT = 17600;
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -187,6 +203,100 @@ function safePublicPath(urlPath) {
   return resolved;
 }
 
+/* --------------------------------------------------------- remote access */
+
+function isLoopbackHost(host) {
+  const h = String(host || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h === '::1' || /^127(?:\.\d{1,3}){3}$/.test(h);
+}
+
+function isWildcardHost(host) {
+  const h = String(host || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  return h === '0.0.0.0' || h === '::';
+}
+
+function validateBindOptions({ host, authToken, allowWildcard = false }) {
+  if (isLoopbackHost(host)) return true;
+  if (isWildcardHost(host) && !allowWildcard) {
+    throw new Error('refusing wildcard network bind; use a specific trusted interface or set RAINDESK_ALLOW_WILDCARD=1');
+  }
+  if (typeof authToken !== 'string' || authToken.length < 24) {
+    throw new Error('remote Raindesk requires RAINDESK_REMOTE_TOKEN with at least 24 characters');
+  }
+  return true;
+}
+
+function authCookieValue(token) {
+  return crypto.createHash('sha256').update(`raindesk-session:${token}`).digest('hex');
+}
+
+function timingSafeTextEqual(a, b) {
+  const aa = Buffer.from(String(a || ''), 'utf8');
+  const bb = Buffer.from(String(b || ''), 'utf8');
+  if (aa.length !== bb.length) return false;
+  return crypto.timingSafeEqual(aa, bb);
+}
+
+function cookieMap(header) {
+  const out = Object.create(null);
+  for (const part of String(header || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i <= 0) continue;
+    const key = part.slice(0, i).trim();
+    const value = part.slice(i + 1).trim();
+    try { out[key] = decodeURIComponent(value); } catch (_e) { /* ignore malformed cookie */ }
+  }
+  return out;
+}
+
+function requestAuthorized(req, authToken) {
+  if (!authToken) return true;
+  const bearer = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ''));
+  if (bearer && timingSafeTextEqual(bearer[1], authToken)) return true;
+  const cookies = cookieMap(req.headers.cookie);
+  return timingSafeTextEqual(cookies.raindesk_auth, authCookieValue(authToken));
+}
+
+function sendUnlockPage(res, status = 401, bad = false) {
+  const body = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Raindesk · unlock</title><style>body{font:16px system-ui;background:#111b20;color:#f3ead8;display:grid;place-items:center;min-height:100vh;margin:0}form{width:min(28rem,85vw);padding:2rem;border:1px solid #34505c;border-radius:18px;background:#17262d}input,button{box-sizing:border-box;width:100%;padding:.8rem 1rem;margin-top:.8rem;border-radius:10px;border:1px solid #45616c;background:#0f1b20;color:#f3ead8}button{cursor:pointer;background:#e8b04b;color:#182126;border:0;font-weight:700}.bad{color:#e07856}</style><form method="post" action="/__unlock"><h1>Raindesk</h1><p>This remote desk is private.</p>${bad ? '<p class="bad">That key did not match.</p>' : ''}<input type="password" name="token" autocomplete="current-password" placeholder="access key" required><button>open the desk</button></form>`;
+  res.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+/** Return true when auth handling already completed the response. */
+async function handleRemoteAuth(req, res, url, authToken) {
+  if (!authToken) return false;
+  if (requestAuthorized(req, authToken)) return false;
+
+  if (url.pathname === '/__unlock' && req.method === 'POST') {
+    const buf = await readBody(req, 16 * 1024);
+    const form = new URLSearchParams(buf.toString('utf8'));
+    if (timingSafeTextEqual(form.get('token'), authToken)) {
+      const cookie = encodeURIComponent(authCookieValue(authToken));
+      res.writeHead(303, {
+        Location: '/',
+        'Set-Cookie': `raindesk_auth=${cookie}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200`,
+        'Cache-Control': 'no-store',
+      });
+      res.end();
+      return true;
+    }
+    sendUnlockPage(res, 401, true);
+    return true;
+  }
+
+  if (url.pathname.startsWith('/api/')) {
+    sendJson(res, 401, { error: 'Raindesk remote access key required' });
+    return true;
+  }
+  sendUnlockPage(res, 401, false);
+  return true;
+}
+
 /* ---------------------------------------------------------------- routes */
 
 async function handleApi(req, res, url, deps) {
@@ -205,6 +315,34 @@ async function handleApi(req, res, url, deps) {
     if (typeof body.lane !== 'string' || !body.lane) throw new HttpError(400, 'lane is required');
     const updated = board.moveShot(shotId, body.lane);
     return sendJson(res, 200, { ok: true, board: updated });
+  }
+
+  /* Spatial workspace: stable world-space objects shared by UI and Partner. */
+  if (method === 'GET' && route === '/api/workspace') {
+    return sendJson(res, 200, workspace.read());
+  }
+  if (method === 'POST' && route === '/api/workspace/object') {
+    const body = await readJson(req, 256 * 1024);
+    return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body) });
+  }
+  if (method === 'POST' && route === '/api/workspace/viewport') {
+    const body = await readJson(req, 64 * 1024);
+    return sendJson(res, 200, { ok: true, viewport: workspace.setViewport(body) });
+  }
+
+  if (method === 'GET' && route === '/api/partner/actions') {
+    return sendJson(res, 200, { actions: partnerActions.list({ limit: Number(url.searchParams.get('limit')) || 100 }) });
+  }
+  const partnerActionMatch = route.match(/^\/api\/partner\/action\/([^/]+)\/(approve|execute|accept|revert|cancel)$/);
+  if (method === 'POST' && partnerActionMatch) {
+    const actionId = decodeSeg(partnerActionMatch[1]);
+    if (actionId === null) throw new HttpError(404, 'not found');
+    const verb = partnerActionMatch[2];
+    const handlers = {
+      approve: partnerActions.approve, execute: partnerActions.execute, accept: partnerActions.accept,
+      revert: partnerActions.revert, cancel: partnerActions.cancel,
+    };
+    return sendJson(res, 200, { ok: true, action: handlers[verb](actionId) });
   }
 
   /* Direction Graph v2: structured production memory underneath the visual board. */
@@ -245,6 +383,14 @@ async function handleApi(req, res, url, deps) {
     return sendJson(res, 200, { ok: true, shotId: body.shotId, slot: body.slot, anchor });
   }
 
+  if (method === 'POST' && route === '/api/direction/shot-frame-ref') {
+    const body = await readJson(req, 1024 * 1024);
+    if (typeof body.shotId !== 'string' || !body.shotId) throw new HttpError(400, 'shotId is required');
+    if (typeof body.slot !== 'string' || !body.slot) throw new HttpError(400, 'slot is required');
+    const frameRef = direction.setShotFrameRef(body.shotId, body.slot, body.frameRef == null ? null : body.frameRef);
+    return sendJson(res, 200, { ok: true, shotId: body.shotId, slot: body.slot, frameRef });
+  }
+
   const directionSpecMatch = route.match(/^\/api\/direction\/shot\/([^/]+)\/spec$/);
   if (method === 'GET' && directionSpecMatch) {
     const shotId = decodeSeg(directionSpecMatch[1]);
@@ -267,32 +413,98 @@ async function handleApi(req, res, url, deps) {
     if (body.seed !== undefined) comfy.normalizeSeed(body.seed); // validate now
 
     const { shotId, layerId, prompt, negative, seed } = body;
-    const jobId = queue.submit(async () => {
+    // Generation inputs are creative provenance too. Store the exact source
+    // crop and mask before queueing so a future take can always explain what
+    // it was derived from, even after the live canvas moves on.
+    const sourceRegionAsset = blobs.putPng(imageBuffer);
+    const maskAsset = blobs.putPng(maskBuffer);
+    const baseRevisionId = typeof body.baseRevisionId === 'string' ? body.baseRevisionId.slice(0, 160) : null;
+    const region = body.region && typeof body.region === 'object' ? body.region : null;
+    const lasso = Array.isArray(body.lasso) ? body.lasso : [];
+
+    const jobId = queue.submit(async ({ setPhase, jobId: runningJobId } = {}) => {
+      if (setPhase) setPhase('generating');
       const result = await comfyImpl.runInpaint({
         shotId, layerId, prompt, negative: negative || '', seed,
         imageBuffer, maskBuffer,
       });
-      // Phone-safe delivery: mirror the output into Raindesk's same-origin
-      // asset store so clients never need to reach ComfyUI's 127.0.0.1 URL
-      // (which is client-local and broken on any non-localhost device).
-      try {
-        if (comfyImpl.fetchImageBytes && result && Array.isArray(result.images) && result.images[0]) {
-          const bytes = await comfyImpl.fetchImageBytes(result.images[0]);
-          const stored = assets.store(shotId, bytes);
-          return { ...result, imageUrl: stored.url, comfyUrl: result.imageUrl };
-        }
-      } catch (_e) { /* fall back to the ComfyUI URL */ }
-      return result;
-    }, { shotId, layerId: layerId || null });
+
+      // A generation is not considered safely finished until its output is
+      // mirrored into Raindesk's immutable blob store. This prevents a take
+      // from pointing only at ComfyUI's ephemeral/local URL.
+      if (setPhase) setPhase('mirroring');
+      if (!comfyImpl.fetchImageBytes || !result || !Array.isArray(result.images) || !result.images[0]) {
+        throw new Error('generation completed but its output could not be mirrored safely');
+      }
+      const bytes = await comfyImpl.fetchImageBytes(result.images[0]);
+      validatePngBuffer(bytes, 'generated output');
+      const resultAsset = blobs.putPng(bytes);
+      const take = takes.createCandidate({
+        shotId, jobId: runningJobId, prompt, negative: negative || '', seed,
+        baseRevisionId, sourceRegionAssetSha: sourceRegionAsset.sha,
+        maskAssetSha: maskAsset.sha, resultAssetSha: resultAsset.sha,
+        region, lasso,
+      });
+      return {
+        ...result,
+        imageUrl: `/api/blob/${resultAsset.sha}`,
+        comfyUrl: result.imageUrl,
+        takeId: take.id,
+        resultAssetSha: resultAsset.sha,
+      };
+    }, {
+      shotId, layerId: layerId || null, baseRevisionId,
+      sourceRegionAssetSha: sourceRegionAsset.sha, maskAssetSha: maskAsset.sha, region,
+    });
     return sendJson(res, 200, { jobId });
+  }
+
+  const genCancelMatch = route.match(/^\/api\/gen\/([^/]+)\/cancel$/);
+  if (method === 'POST' && genCancelMatch) {
+    const id = decodeSeg(genCancelMatch[1]);
+    if (id === null) throw new HttpError(404, 'not found');
+    const cancelled = queue.cancel(id);
+    if (!cancelled.ok) {
+      if (cancelled.reason === 'not_found') throw new HttpError(404, 'no such job');
+      if (cancelled.reason === 'running') throw new HttpError(409, 'generation is already running and cannot be safely cancelled yet');
+      throw new HttpError(409, 'generation is already settled');
+    }
+    return sendJson(res, 200, { ok: true, job: queue.view(cancelled.job) });
+  }
+
+  if (method === 'GET' && route === '/api/jobs') {
+    return sendJson(res, 200, {
+      jobs: jobStore.list({ shotId: url.searchParams.get('shotId') || null, limit: Number(url.searchParams.get('limit')) || 100 }),
+    });
   }
 
   const genMatch = route.match(/^\/api\/gen\/([^/]+)$/);
   if (method === 'GET' && genMatch) {
     const seg = decodeSeg(genMatch[1]);
-    const job = seg === null ? null : queue.get(seg);
+    const job = seg === null ? null : (queue.get(seg) || jobStore.get(seg));
     if (!job) throw new HttpError(404, 'no such job');
     return sendJson(res, 200, queue.view(job));
+  }
+
+  if (method === 'GET' && route === '/api/takes') {
+    return sendJson(res, 200, {
+      takes: takes.list({
+        shotId: url.searchParams.get('shotId') || null,
+        status: url.searchParams.get('status') || null,
+        limit: Number(url.searchParams.get('limit')) || 200,
+      }),
+    });
+  }
+
+  const takeStatusMatch = route.match(/^\/api\/take\/([^/]+)\/(accept|reject|reopen)$/);
+  if (method === 'POST' && takeStatusMatch) {
+    const id = decodeSeg(takeStatusMatch[1]);
+    if (id === null) throw new HttpError(404, 'not found');
+    const body = await readJson(req, 64 * 1024);
+    const status = takeStatusMatch[2] === 'accept' ? 'accepted'
+      : (takeStatusMatch[2] === 'reopen' ? 'candidate' : 'rejected');
+    const updated = takes.setStatus(id, status, { revisionId: body.revisionId || null });
+    return sendJson(res, 200, { ok: true, take: updated });
   }
 
   const assetMatch = route.match(/^\/api\/assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9._-]{1,128})$/);
@@ -305,6 +517,79 @@ async function handleApi(req, res, url, deps) {
     res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': stat.size });
     await pipeline(fs.createReadStream(filePath), res);
     return;
+  }
+
+  if (method === 'POST' && route === '/api/blob') {
+    const contentType = String(req.headers['content-type'] || '');
+    if (!/multipart\/form-data/i.test(contentType)) throw new HttpError(400, 'expected multipart/form-data');
+    const buf = await readBody(req, UPLOAD_BODY_LIMIT);
+    const parts = parseMultipart(buf, contentType);
+    const filePart = parts.find((p) => p.filename) || parts.find((p) => p.name === 'file' || p.name === 'image');
+    if (!filePart || !filePart.body.length) throw new HttpError(400, 'no file part in upload');
+    return sendJson(res, 200, blobs.putPng(filePart.body));
+  }
+
+  const blobMatch = route.match(/^\/api\/blob\/([a-f0-9]{64})$/);
+  if (method === 'GET' && blobMatch) {
+    const filePath = blobs.resolve(blobMatch[1]);
+    if (!filePath) throw new HttpError(404, 'no such blob');
+    const stat = await fs.promises.stat(filePath);
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Content-Length': stat.size,
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'ETag': `"${blobMatch[1]}"`,
+    });
+    await pipeline(fs.createReadStream(filePath), res);
+    return undefined;
+  }
+
+  const documentMatch = route.match(/^\/api\/shot\/([^/]+)\/document$/);
+  if (documentMatch) {
+    const shotId = decodeSeg(documentMatch[1]);
+    if (shotId === null) throw new HttpError(404, 'not found');
+    if (method === 'GET') {
+      const current = shotDocuments.readCurrent(shotId);
+      if (!current) throw new HttpError(404, 'no editable shot document');
+      return sendJson(res, 200, current);
+    }
+    if (method === 'POST') {
+      const body = await readJson(req, 4 * 1024 * 1024);
+      if (!body || typeof body.document !== 'object') throw new HttpError(400, 'document is required');
+      const saved = shotDocuments.save(shotId, body.document, {
+        baseRevisionId: body.baseRevisionId || null,
+        reason: body.reason || 'edit',
+      });
+      return sendJson(res, 200, saved);
+    }
+  }
+
+  const revisionsMatch = route.match(/^\/api\/shot\/([^/]+)\/revisions$/);
+  if (method === 'GET' && revisionsMatch) {
+    const shotId = decodeSeg(revisionsMatch[1]);
+    if (shotId === null) throw new HttpError(404, 'not found');
+    return sendJson(res, 200, shotDocuments.list(shotId));
+  }
+
+  const revisionMatch = route.match(/^\/api\/shot\/([^/]+)\/revision\/([^/]+)$/);
+  if (method === 'GET' && revisionMatch) {
+    const shotId = decodeSeg(revisionMatch[1]);
+    const revisionId = decodeSeg(revisionMatch[2]);
+    if (shotId === null || revisionId === null) throw new HttpError(404, 'not found');
+    return sendJson(res, 200, shotDocuments.readRevision(shotId, revisionId));
+  }
+
+  const restoreMatch = route.match(/^\/api\/shot\/([^/]+)\/revision\/([^/]+)\/restore$/);
+  if (method === 'POST' && restoreMatch) {
+    const shotId = decodeSeg(restoreMatch[1]);
+    const revisionId = decodeSeg(restoreMatch[2]);
+    if (shotId === null || revisionId === null) throw new HttpError(404, 'not found');
+    const body = await readJson(req, 64 * 1024);
+    const restored = shotDocuments.restore(shotId, revisionId, {
+      baseRevisionId: body.baseRevisionId || null,
+      reason: body.reason || 'restore revision',
+    });
+    return sendJson(res, 201, restored);
   }
 
   const shotMatch = route.match(/^\/api\/shot\/([^/]+)$/);
@@ -439,18 +724,22 @@ async function serveStatic(req, res, url) {
 /* ---------------------------------------------------------------- server */
 
 function createServer(deps = {}) {
-  const queue = deps.queue || new GenQueue();
+  const queue = deps.queue || new GenQueue({ store: jobStore });
   const comfyImpl = deps.comfyImpl || deps.comfy || comfy;
   const agentImpl = deps.agentImpl || deps.agent || agent;
   const partnerImpl = deps.partnerImpl || partner.createPartner({ agentImpl });
+  const authToken = deps.authToken || null;
 
   const server = http.createServer((req, res) => {
     let promise;
     try {
       const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
-      promise = url.pathname.startsWith('/api/')
-        ? handleApi(req, res, url, { queue, comfyImpl, agentImpl, partnerImpl })
-        : serveStatic(req, res, url);
+      promise = (async () => {
+        if (await handleRemoteAuth(req, res, url, authToken)) return undefined;
+        return url.pathname.startsWith('/api/')
+          ? handleApi(req, res, url, { queue, comfyImpl, agentImpl, partnerImpl })
+          : serveStatic(req, res, url);
+      })();
     } catch (_e) {
       promise = Promise.reject(new HttpError(404, 'not found'));
     }
@@ -472,13 +761,25 @@ function createServer(deps = {}) {
       }
     });
   });
-  server.raindesk = { queue, comfyImpl, agentImpl, partnerImpl };
+  server.raindesk = { queue, comfyImpl, agentImpl, partnerImpl, authToken: Boolean(authToken) };
   return server;
 }
 
-function start({ host = HOST, port = PORT } = {}) {
+function start({
+  host = HOST,
+  port = PORT,
+  authToken = process.env.RAINDESK_REMOTE_TOKEN || null,
+  allowWildcard = process.env.RAINDESK_ALLOW_WILDCARD === '1',
+} = {}) {
   return new Promise((resolve, reject) => {
-    const server = createServer();
+    try {
+      validateBindOptions({ host, authToken, allowWildcard });
+      jobStore.recoverInterrupted();
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    const server = createServer({ authToken: isLoopbackHost(host) ? null : authToken });
     server.once('error', reject);
     server.listen(port, host, () => {
       const addr = server.address();
@@ -497,4 +798,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, start, HOST, PORT, PUBLIC_DIR, parseMultipart, safePublicPath, sendJson };
+module.exports = {
+  createServer, start, HOST, PORT, PUBLIC_DIR, parseMultipart, safePublicPath, sendJson,
+  isLoopbackHost, isWildcardHost, validateBindOptions, authCookieValue, requestAuthorized,
+};

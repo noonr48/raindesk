@@ -62,7 +62,7 @@ test('visual direction bridge creates provisional scope, asks partner, then stor
     caption: 'camera spirals from behind them up to the face',
   });
 
-  assert.equal(result.scope.shotId, 'legacy_S03');
+  assert.equal(result.scope.shotId, 'S03');
   assert.equal(graph.scenes[0].id, 'legacy_board');
   assert.equal(graph.shots[0].source.legacyShotId, 'S03');
   assert.match(calls[0].message, /camera spirals/);

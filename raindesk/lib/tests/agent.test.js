@@ -61,22 +61,29 @@ test('embedded fallback preset knows the film constraints from BOARD.md', () => 
   assert.match(agent.FALLBACK_PRESET, /gore stays out/i);
 });
 
-test('buildArgv uses json mode headless invocation with argv message', () => {
-  const argv = agent.buildArgv('hello there', '/tmp/preset.txt');
+test('buildArgv keeps creative message out of the process list', () => {
+  const argv = agent.buildArgv('private creative direction', '/tmp/preset.txt');
   assert.deepEqual(argv, [
     '-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills',
-    '--append-system-prompt', '/tmp/preset.txt', 'hello there',
+    '--append-system-prompt', '/tmp/preset.txt',
   ]);
+  assert.equal(argv.includes('private creative direction'), false);
 });
 
-test('buildArgv caps message length defensively (emoji-safe truncation)', () => {
+test('prepareMessage caps stdin payload defensively (emoji-safe truncation)', () => {
   const long = 'x'.repeat(20000);
-  const argv = agent.buildArgv(long, '/tmp/p.txt');
-  assert.equal(argv[argv.length - 1].length, agent.MESSAGE_MAX);
-  // a trailing lone high surrogate at the cap is stripped, never dangles
+  assert.equal(agent.prepareMessage(long).length, agent.MESSAGE_MAX);
   const lone = 'a'.repeat(agent.MESSAGE_MAX - 1) + '\uD83D';
-  const cappedLone = agent.buildArgv(lone, '/tmp/p.txt');
-  assert.equal(cappedLone[cappedLone.length - 1].length, agent.MESSAGE_MAX - 1);
+  assert.equal(agent.prepareMessage(lone).length, agent.MESSAGE_MAX - 1);
+});
+
+test('chat sends the creative prompt through stdin, not argv', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-agent-stdin-'));
+  const fake = path.join(dir, 'fake-pi');
+  fs.writeFileSync(fake, `#!/usr/bin/env node\nlet s='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'saw:'+s}]}}));});\n`);
+  fs.chmodSync(fake, 0o755);
+  const reply = await agent.chat('camera spirals behind her face', { binary: fake, timeoutMs: 3000 });
+  assert.equal(reply, 'saw:camera spirals behind her face');
 });
 
 test('parseReply extracts the LAST assistant text from an NDJSON stream', () => {

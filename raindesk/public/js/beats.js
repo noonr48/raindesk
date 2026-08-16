@@ -145,12 +145,12 @@
       return { ...extra, legacyShotId: shot && shot.id, surface: 'beat_trail' };
     }
 
-    async function askPartner(message) {
+    async function askPartner(message, contextExtra = {}) {
       if (busy || !api || !api.partnerTurn || !shot) return null;
       busy = true;
       root.classList.add('busy');
       try {
-        const response = await api.partnerTurn(message, { context: context() });
+        const response = await api.partnerTurn(message, { context: { ...context(), ...contextExtra } });
         if (response && onPartnerMessage) onPartnerMessage(response.message, response.nextMoves || []);
         await refresh();
         return response;
@@ -164,7 +164,31 @@
       const v = input.value.trim();
       if (!v || busy) return;
       input.value = '';
-      await askPartner(v);
+
+      // Preserve the artist's words before inference. Enrichment is async and
+      // may fail; the creative thought must still exist in the project.
+      let pinned = null;
+      try {
+        const s = await ensureScope();
+        if (s && s.shotId && api.createDirectionBeat) {
+          const created = await api.createDirectionBeat({
+            shotId: s.shotId,
+            description: v,
+            rawDirection: v,
+            movement: {},
+            camera: {},
+            status: 'provisional',
+            source: { kind: 'user_beat_trail' },
+          });
+          pinned = created && created.beat ? created.beat : null;
+          await refresh();
+        }
+      } catch (_e) {
+        input.value = v;
+        list.appendChild(el('div', 'beat-trail-empty', 'could not pin that beat yet - your words are still here.'));
+        return;
+      }
+      await askPartner(v, pinned ? { precreatedBeatId: pinned.id } : {});
     }
 
     closeBtn.addEventListener('click', closePanel);

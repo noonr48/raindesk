@@ -75,17 +75,21 @@ function loadPreset(candidates = PRESET_CANDIDATES) {
  * opts: { binary (default 'pi'), timeoutMs (default 120000) } — seams for tests.
  */
 /**
- * Build the pi argv for one companion turn. Message rides as the positional
- * argv (spawn has no shell — no injection surface; cap length defensively).
+ * Build the pi argv for one companion turn. Artist/project context never rides
+ * in the process list; it is written to stdin after spawn.
  */
 const MESSAGE_MAX = 16000; // aligned with server CHAT_MESSAGE_LIMIT (16*1024) minus slack
 
-function buildArgv(message, systemPromptArg) {
+function prepareMessage(message) {
   let msg = String(message ?? '').slice(0, MESSAGE_MAX);
   // never split a surrogate pair at the cap (emoji-safe truncation)
   if (msg.length && /[\uD800-\uDBFF]$/.test(msg)) msg = msg.slice(0, -1);
+  return msg;
+}
+
+function buildArgv(_message, systemPromptArg) {
   return ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills',
-    '--append-system-prompt', systemPromptArg, msg];
+    '--append-system-prompt', systemPromptArg];
 }
 
 /**
@@ -125,9 +129,9 @@ function chat(message, opts = {}) {
     try {
       child = spawn(binary, buildArgv(message, systemPromptArg),
         { stdio: ['pipe', 'pipe', 'pipe'] });
-      // Message rides argv; end stdin immediately so a piped-stdin reader
-      // (pi auto-reads piped stdin) sees EOF instead of blocking.
-      child.stdin.end();
+      // Pi consumes piped stdin as the user prompt. Keeping creative context
+      // out of argv avoids leaking it through process listings.
+      child.stdin.end(prepareMessage(message));
     } catch (_e) {
       resolve(FALLBACK_REPLY);
       return;
@@ -156,6 +160,6 @@ function chat(message, opts = {}) {
 }
 
 module.exports = {
-  chat, loadPreset, buildArgv, parseReply, PRESET_PATH, PRESET_CANDIDATES,
+  chat, loadPreset, prepareMessage, buildArgv, parseReply, PRESET_PATH, PRESET_CANDIDATES,
   FALLBACK_REPLY, FALLBACK_PRESET, CHAT_TIMEOUT_MS, MESSAGE_MAX,
 };

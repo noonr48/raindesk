@@ -183,65 +183,130 @@ test('gen export without a lasso uses the whole canvas (%8 dims)', () => {
 
 /* ---------------------------------------------------------------- commit */
 
-test('commit: ONLY inside-lasso pixels change; outside byte-identical; undo restores exactly', () => {
+test('commit: accepted take becomes a separate raster layer; base stays byte-identical; undo removes only the take', () => {
   const W = 64; const H = 64;
   const core = new RainCanvasCore({ width: W, height: H });
   const base = core.ensureBase();
   core.setLayerBuffer(base.id, solidRGBA(W, H, [10, 20, 30]));
-  core.setActiveLayer(base.id); // commit target
 
   const pts = circlePoints(32, 32, 14);
   core.beginLasso();
   for (const p of pts) core.extendLasso(p);
   assert.ok(core.closeLasso());
 
-  const assets = core.exportGenAssets({ feather: 4 }); // small feather → RW/RH=40 (%8)
+  const assets = core.exportGenAssets({ feather: 4 });
   const { region } = assets;
-  assert.equal(region.w % 8, 0);
-  assert.equal(region.h % 8, 0);
-
-  // take: solid red, same size as region
   const take = solidRGBA(region.w, region.h, [255, 0, 0]);
   core.beginTakeSession(assets);
   core.pushTake(take);
 
-  // independent inside/outside classification (binary fill of the same polygon)
-  const inside = scanlineFill(pts, 0, 0, W, H, new Uint8Array(W * H));
-  assert.equal(inside[3 * W + 3], 0, 'far corner classified outside (sanity)');
-  assert.equal(inside[32 * W + 32], 1, 'center classified inside (sanity)');
+  const beforeBase = new Uint8ClampedArray(core.getLayerBuffer(base.id).data);
+  const layer = core.commitTake({ sourceTakeId: 'take_S01_17' });
+  assert.equal(layer.kind, 'gen');
+  assert.equal(layer.sourceTakeId, 'take_S01_17');
+  assert.equal(core.layers.length, 2, 'take is its own editable raster layer');
+  assert.deepEqual(
+    Array.from(core.getLayerBuffer(base.id).data),
+    Array.from(beforeBase),
+    'base bytes never change during generation commit',
+  );
 
-  const before = new Uint8ClampedArray(core.getLayerBuffer(base.id).data);
-
-  assert.ok(core.commitTake(), 'commit succeeds');
-
-  const after = core.getLayerBuffer(base.id).data;
-  let changedInside = 0;
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4;
-      const samePixel = before[i] === after[i] && before[i + 1] === after[i + 1] &&
-        before[i + 2] === after[i + 2] && before[i + 3] === after[i + 3];
-      if (inside[y * W + x] === 0) {
-        assert.ok(samePixel, `outside pixel (${x},${y}) byte-identical`);
-      } else if (!samePixel) {
-        changedInside += 1;
-      }
-    }
-  }
-  assert.ok(changedInside > 50, `inside pixels changed (${changedInside})`);
-  assert.deepEqual(px(after, 32, 32, W), [255, 0, 0, 255], 'deep-inside pixel = take color (cov 1)');
+  const composite = core.compositeVisible().data;
+  assert.deepEqual(px(composite, 32, 32, W), [255, 0, 0, 255], 'take appears in composite');
+  assert.equal(px(core.getLayerBuffer(layer.id).data, 3, 3, W)[3], 0, 'generated layer stays transparent outside lasso');
   assert.equal(core.session, null, 'session closed after commit');
 
-  // undo restores the exact prior bytes
   const rec = core.undo();
-  assert.equal(rec.type, 'commit');
-  const restored = core.getLayerBuffer(base.id).data;
-  for (let i = 0; i < before.length; i++) {
-    assert.equal(restored[i], before[i], `undo restores byte ${i}`);
-  }
-  // undo resurrects the session + lasso so the owner can re-commit another take
+  assert.equal(rec.type, 'commitLayer');
+  assert.equal(rec.sourceTakeId, 'take_S01_17', 'undo receipt keeps take provenance for lifecycle reconciliation');
+  assert.equal(core.layerById(layer.id), null, 'undo removes only generated layer');
+  assert.deepEqual(px(core.compositeVisible().data, 32, 32, W), [10, 20, 30, 255]);
   assert.ok(core.currentTake(), 'take session restored by undo');
   assert.equal(core.lasso && core.lasso.closed, true, 'lasso restored by undo');
+});
+
+test('regression: commit -> draw -> undo stroke never erases committed generated pixels', () => {
+  const W = 64; const H = 64;
+  const core = new RainCanvasCore({ width: W, height: H });
+  const base = core.ensureBase();
+  core.setLayerBuffer(base.id, solidRGBA(W, H, [10, 20, 30]));
+  const pen = core.addLayer({ name: 'notes', kind: 'pen' });
+
+  const pts = circlePoints(32, 32, 14);
+  core.beginLasso();
+  for (const p of pts) core.extendLasso(p);
+  core.closeLasso();
+  const assets = core.exportGenAssets({ feather: 4 });
+  core.beginTakeSession(assets);
+  core.pushTake(solidRGBA(assets.region.w, assets.region.h, [255, 0, 0]));
+  const gen = core.commitTake({ name: 'accepted take' });
+
+  core.setActiveLayer(pen.id);
+  core.addStroke(pen.id, {
+    points: [{ x: 4, y: 4 }, { x: 10, y: 10 }],
+    color: '#e07856',
+    width: 3,
+  });
+  const beforeUndo = px(core.getLayerBuffer(gen.id).data, 32, 32, W);
+  assert.deepEqual(beforeUndo, [255, 0, 0, 255], 'committed take exists before stroke undo');
+
+  const rec = core.undo();
+  assert.equal(rec.type, 'stroke');
+  assert.equal(pen.strokes.length, 0, 'stroke removed');
+  assert.deepEqual(
+    px(core.getLayerBuffer(gen.id).data, 32, 32, W),
+    beforeUndo,
+    'accepted raster take survives vector replay',
+  );
+});
+
+test('editable shot document metadata round-trips vector strokes and raster layer identities', () => {
+  const W = 32; const H = 32;
+  const core = new RainCanvasCore({ width: W, height: H });
+  const base = core.ensureBase();
+  core.setLayerBuffer(base.id, solidRGBA(W, H, [1, 2, 3]));
+  const pen = core.addLayer({ name: 'notes', kind: 'pen' });
+  core.addStroke(pen.id, {
+    points: [{ x: 2, y: 2 }, { x: 20, y: 20 }],
+    color: '#112233',
+    width: 2,
+  });
+  const raster = core.addLayer({ name: 'paint', kind: 'raster' });
+  core.setLayerBuffer(raster.id, solidRGBA(W, H, [20, 30, 40], 128));
+
+  const doc = core.toDocument({
+    shotId: 'S01',
+    assetRefsByLayerId: { [base.id]: 'a'.repeat(64), [raster.id]: 'b'.repeat(64) },
+  });
+  assert.equal(doc.layers.find((l) => l.id === pen.id).assetSha, null);
+  assert.equal(doc.layers.find((l) => l.id === pen.id).strokes.length, 1);
+  assert.equal(doc.layers.find((l) => l.id === raster.id).assetSha, 'b'.repeat(64));
+
+  // Generated layers retain the durable candidate they came from.
+  const gen = core.addLayer({ name: 'accepted gen', kind: 'gen' });
+  gen.sourceTakeId = 'take_S01_99';
+  core.setLayerBuffer(gen.id, solidRGBA(W, H, [70, 80, 90], 255));
+  const doc2 = core.toDocument({
+    shotId: 'S01',
+    assetRefsByLayerId: { [base.id]: 'a'.repeat(64), [raster.id]: 'b'.repeat(64), [gen.id]: 'c'.repeat(64) },
+  });
+  assert.equal(doc2.layers.find((l) => l.id === gen.id).sourceTakeId, 'take_S01_99');
+
+  const restored = new RainCanvasCore({ width: W, height: H });
+  restored.loadDocument(doc2, {
+    [base.id]: core.getLayerBuffer(base.id).data,
+    [raster.id]: core.getLayerBuffer(raster.id).data,
+    [gen.id]: core.getLayerBuffer(gen.id).data,
+  });
+  assert.equal(restored.layers.length, 4);
+  assert.equal(restored.layerById(gen.id).sourceTakeId, 'take_S01_99');
+  assert.equal(restored.layerById(pen.id).strokes.length, 1);
+  assert.deepEqual(px(restored.getLayerBuffer(raster.id).data, 4, 4, W), [20, 30, 40, 128]);
+  assert.deepEqual(
+    px(restored.getLayerBuffer(pen.id).data, 10, 10, W).slice(0, 3),
+    [0x11, 0x22, 0x33],
+    'vector layer re-rasterizes from stored strokes',
+  );
 });
 
 /* ------------------------------------------------------------ take stack */

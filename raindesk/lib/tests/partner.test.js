@@ -58,6 +58,7 @@ test('structured partner turn keeps casual message and routes movement/camera wo
   assert.equal(turn.nextMoves.length, 2);
   assert.ok(turn.workflow.some((w) => w.id === 'performance_closeup'));
   assert.equal(turn.boardActions[0].disposition, 'proposal');
+  assert.equal(turn.actions[0].status, 'proposed', 'permission gate persists the model proposal separately');
   assert.ok(turn.intentId);
   assert.ok(turn.captured && turn.captured.beatId, 'interpreted movement is documented as a provisional beat');
   const after = direction.readGraph();
@@ -160,4 +161,152 @@ test('fallback interpretation recognizes camera language without inventing a too
   assert.equal(interpreted.kind, 'camera');
   assert.match(interpreted.camera.path, /spirals/);
   assert.ok(interpreted.confidence < 0.5, 'fallback stays explicitly provisional');
+});
+
+test('Watch mode is genuinely read-only, including legacy bridging and beat capture', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  direction.setProject({ partnerMode: 'watch' });
+  const before = direction.readGraph();
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat() {
+      return JSON.stringify({
+        message: 'I see the fist beat.',
+        interpretation: { kind: 'movement', movement: { actor: 'Tom', action: 'shakes his fist' }, confidence: 0.8 },
+        nextMoves: [], workflowHints: ['character_motion'],
+        boardActions: [{ type: 'create_beat', payload: { shotId: 'S01' } }],
+      });
+    } },
+    directionImpl: direction,
+  });
+  const turn = await partner.turn({
+    message: 'Tom shakes his fist before the fight',
+    context: { legacyShotId: 'S01', legacyBeat: 'fight starts' },
+  });
+  assert.equal(turn.permissionMode, 'watch');
+  assert.equal(turn.intentId, null);
+  assert.equal(turn.captured, null);
+  assert.equal(turn.boardActions[0].disposition, 'advisory');
+  assert.equal(turn.actions[0].status, 'advisory');
+  assert.deepEqual(direction.readGraph(), before, 'Watch mode performs no semantic project mutation');
+});
+
+test('Partner context pruning always sends valid JSON rather than a truncated fragment', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const seen = [];
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat(prompt) {
+      const m = prompt.match(/Current context \(may be partial\):\n([\s\S]*?)\n\n/);
+      assert.ok(m, 'context block present');
+      const parsed = JSON.parse(m[1]);
+      seen.push(parsed);
+      return JSON.stringify({ message: 'Got it.', interpretation: { kind: 'review', confidence: 0.5 }, nextMoves: [] });
+    } },
+    directionImpl: direction,
+  });
+  await partner.turn({
+    message: 'help me look at this',
+    context: {
+      canvas: { width: 1024, height: 1024 },
+      nearbyNotes: Array.from({ length: 60 }, (_, i) => `note-${i} ${'x'.repeat(900)}`),
+      visibleLayers: Array.from({ length: 40 }, (_, i) => ({ id: `L${i}`, kind: 'pen', visible: true })),
+      artRevisionId: 'rev_test',
+    },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].artRevisionId, 'rev_test');
+  assert.ok(JSON.stringify(seen[0]).length <= 7000, 'context stays inside budget as valid JSON');
+});
+
+test('Partner enriches a pre-pinned Beat Trail entry instead of creating a duplicate', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'pin_scene', title: 'Fight' });
+  direction.createShot({ id: 'pin_shot', sceneId: scene.id, title: 'Gesture' });
+  const raw = direction.createBeat({
+    id: 'pin_beat', shotId: 'pin_shot', rawDirection: 'he shakes his fist once',
+    description: 'he shakes his fist once', source: { kind: 'user_beat_trail' },
+  });
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat() { return JSON.stringify({
+      message: 'Yep, one sharp warning gesture.',
+      interpretation: { kind: 'movement', movement: { actor: 'Tom', action: 'one sharp fist shake' }, confidence: 0.8 },
+      nextMoves: [], workflowHints: ['character_motion'], boardActions: [],
+    }); } },
+    directionImpl: direction,
+  });
+  const turn = await partner.turn({
+    message: raw.rawDirection,
+    context: { sceneId: scene.id, shotId: 'pin_shot', precreatedBeatId: raw.id },
+  });
+  assert.equal(turn.captured.beatId, raw.id);
+  assert.equal(turn.captured.enriched, true);
+  const spec = direction.shotSpec('pin_shot');
+  assert.equal(spec.beats.length, 1, 'no duplicate beat created');
+  assert.equal(spec.beats[0].rawDirection, raw.rawDirection);
+  assert.equal(spec.beats[0].movement.action, 'one sharp fist shake');
+});
+
+test('Partner preserves a multi-event directing interpretation and its useful timing relationships', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'multi_scene', title: 'Rooftop fight' });
+  direction.createShot({ id: 'multi_shot', sceneId: scene.id, title: 'Closing exchange' });
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat(prompt) {
+      assert.match(prompt, /split them into lightweight events/i);
+      return JSON.stringify({
+        message: 'I have the overlap and the push-in tied to the line.',
+        interpretation: {
+          kind: 'movement',
+          movement: { actor: 'A', action: 'pre-fight exchange' },
+          events: [
+            { id: 'tongue', kind: 'performance', description: 'tongue click', actor: 'A' },
+            { id: 'fist', kind: 'action', description: 'fist shake', actor: 'A', bodyPart: 'right fist' },
+            { id: 'line', kind: 'dialogue', description: 'speaks', actor: 'A', dialogue: 'line' },
+            { id: 'push', kind: 'camera', description: 'pushes inward', camera: { path: 'push in' } },
+            { id: 'catch', kind: 'contact', description: 'catches wrist', actor: 'B', contact: { initiatorActor: 'B', initiatorBodyPart: 'left hand', receiverActor: 'A', receiverBodyPart: 'right wrist' } },
+          ],
+          relations: [
+            { type: 'overlaps', from: 'tongue', to: 'fist' },
+            { type: 'during', from: 'push', to: 'line' },
+            { type: 'after', from: 'catch', to: 'line' },
+          ],
+          confidence: 0.9,
+        },
+        nextMoves: [], workflowHints: ['contact_action', 'camera_reveal'], boardActions: [],
+      });
+    } },
+    directionImpl: direction,
+  });
+  const turn = await partner.turn({
+    message: 'he clicks his tongue while shaking his fist, speaks as the camera pushes in, then she catches his wrist',
+    context: { sceneId: scene.id, shotId: 'multi_shot' },
+  });
+  const beat = direction.shotSpec('multi_shot').beats.find((b) => b.id === turn.captured.beatId);
+  assert.equal(beat.events.length, 5);
+  assert.equal(beat.relations.length, 3);
+  assert.equal(beat.events.find((e) => e.id === 'catch').kind, 'contact');
+  assert.equal(beat.relations.find((r) => r.type === 'during').to, 'line');
+});
+
+test('Partner persists recent conversation so short follow-ups can refer to prior creative choices', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'memory_scene', title: 'Choice' });
+  direction.createShot({ id: 'memory_shot', sceneId: scene.id, title: 'Three takes' });
+  const prompts = [];
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat(prompt) {
+      prompts.push(prompt);
+      return JSON.stringify({
+        message: prompts.length === 1 ? 'I would keep three rough directions.' : 'Got it - the second direction, expression only.',
+        interpretation: { kind: 'review', confidence: 0.7 },
+        nextMoves: [], workflowHints: [], boardActions: [],
+      });
+    } },
+    directionImpl: direction,
+  });
+  const first = await partner.turn({ message: 'make three rough directions', context: { sceneId: scene.id, shotId: 'memory_shot' } });
+  const second = await partner.turn({ message: 'use the second one, but only its expression', context: { sceneId: scene.id, shotId: 'memory_shot' } });
+  assert.ok(first.turnId);
+  assert.ok(second.turnId);
+  assert.match(prompts[1], /make three rough directions/);
+  assert.match(prompts[1], /I would keep three rough directions/);
 });

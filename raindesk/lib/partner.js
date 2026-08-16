@@ -11,6 +11,8 @@
 
 const direction = require('./direction');
 const router = require('./workflow-router');
+const partnerTurns = require('./partner-turns');
+const partnerActions = require('./partner-actions');
 
 const BOARD_ACTIONS = new Set([
   'focus', 'open_panel', 'close_panel', 'move_panel', 'dock_panel',
@@ -129,19 +131,93 @@ function kickstartSeed(summary) {
 }
 
 function compactContext(summary, extra) {
+  const pickScene = (scene) => scene ? {
+    id: scene.id, title: text(scene.title, 400), description: text(scene.description, 1200),
+    purpose: text(scene.purpose, 800), mood: text(scene.mood, 500),
+    participants: Array.isArray(scene.participants) ? scene.participants.slice(0, 12) : [],
+    status: scene.status,
+  } : null;
+  const pickShot = (shot) => shot ? {
+    id: shot.id, sceneId: shot.sceneId, title: text(shot.title, 400),
+    description: text(shot.description, 1200), purpose: text(shot.purpose, 800),
+    startFrame: shot.startFrame || null, endFrame: shot.endFrame || null,
+    cameraCues: shot.cameraCues || { start: null, end: null },
+    camera: shot.camera || {}, preserve: Array.isArray(shot.preserve) ? shot.preserve.slice(0, 12) : [],
+    status: shot.status,
+  } : null;
   const context = {
-    direction: summary,
+    direction: {
+      project: summary.project ? {
+        title: text(summary.project.title, 400),
+        creativeState: summary.project.creativeState,
+        partnerMode: summary.project.partnerMode,
+        activeSceneId: summary.project.activeSceneId,
+        activeShotId: summary.project.activeShotId,
+      } : null,
+      counts: summary.counts,
+      activeScene: pickScene(summary.activeScene),
+      activeShot: pickShot(summary.activeShot),
+      activeBeats: Array.isArray(summary.activeBeats) ? summary.activeBeats.slice(-10).map((beat) => ({
+        id: beat.id, order: beat.order, rawDirection: text(beat.rawDirection, 800),
+        description: text(beat.description, 800), movement: beat.movement || {},
+        events: Array.isArray(beat.events) ? beat.events.slice(-12) : [],
+        relations: Array.isArray(beat.relations) ? beat.relations.slice(-16) : [],
+        camera: beat.camera || {}, dialogue: text(beat.dialogue, 500), status: beat.status,
+      })) : [],
+      activeAnnotations: Array.isArray(summary.activeAnnotations) ? summary.activeAnnotations.slice(-8).map((ann) => ({
+        id: ann.id, kind: ann.kind, rawText: text(ann.rawText, 700),
+        interpretation: ann.interpretation || {}, status: ann.status,
+      })) : [],
+      openQuestions: Array.isArray(summary.openQuestions) ? summary.openQuestions.slice(-6) : [],
+    },
     activeSelection: isObject(extra && extra.selection) ? extra.selection : null,
     activeCanvas: isObject(extra && extra.canvas) ? extra.canvas : null,
-    nearbyNotes: Array.isArray(extra && extra.nearbyNotes) ? extra.nearbyNotes.slice(0, 12) : [],
+    artRevisionId: text(extra && extra.artRevisionId, 128) || null,
+    visibleLayers: Array.isArray(extra && extra.visibleLayers) ? extra.visibleLayers.slice(0, 48) : [],
+    recentConversation: Array.isArray(extra && extra.recentConversation)
+      ? extra.recentConversation.slice(-8).map((turn) => ({
+        user: text(turn && (turn.user || turn.userMessage), 1000),
+        partner: text(turn && (turn.partner || turn.partnerMessage), 1000),
+      })) : [],
+    nearbyNotes: Array.isArray(extra && extra.nearbyNotes)
+      ? extra.nearbyNotes.slice(-12).map((n) => text(n, 700)).filter(Boolean)
+      : [],
   };
-  const raw = JSON.stringify(context);
-  return raw.length > MAX_CONTEXT_CHARS ? raw.slice(0, MAX_CONTEXT_CHARS) + '…' : raw;
+
+  // Always emit valid JSON. When context is too large, remove complete
+  // low-priority items rather than cutting serialized JSON mid-token.
+  const encode = () => JSON.stringify(context);
+  let raw = encode();
+  const buckets = [
+    context.nearbyNotes,
+    context.recentConversation,
+    context.direction.activeAnnotations,
+    context.direction.activeBeats,
+    context.direction.openQuestions,
+  ];
+  let guard = 0;
+  while (raw.length > MAX_CONTEXT_CHARS && guard++ < 128) {
+    const bucket = buckets.find((arr) => Array.isArray(arr) && arr.length > 1);
+    if (!bucket) break;
+    bucket.shift();
+    raw = encode();
+  }
+  if (raw.length > MAX_CONTEXT_CHARS && context.direction.activeShot) {
+    context.direction.activeShot.description = text(context.direction.activeShot.description, 400);
+    context.direction.activeShot.purpose = text(context.direction.activeShot.purpose, 300);
+    raw = encode();
+  }
+  if (raw.length > MAX_CONTEXT_CHARS && context.direction.activeScene) {
+    context.direction.activeScene.description = text(context.direction.activeScene.description, 300);
+    context.direction.activeScene.purpose = text(context.direction.activeScene.purpose, 250);
+    raw = encode();
+  }
+  return raw;
 }
 
 function buildPrompt({ message, summary, extraContext, kickstart }) {
   const seed = kickstart ? kickstartSeed(summary) : null;
-  return `RAINDESK PARTNER TURN\n\nYou are the single creative partner visible to the artist. The artist stays in the art space: sketches, arrows, captions, movement descriptions, camera ideas and casual conversation. You quietly translate that into scene -> shot -> beat intent and production workflows. Never make them choose technical tools or pipeline nodes.\n\nImportant behaviour:\n- Talk like a concise creative partner, not a production dashboard.\n- When the artist is stuck, reduce scope and offer 2-3 low-commitment ways to start. Do not ask them to define the whole project.\n- Preserve the artist's raw wording. Interpret movement in terms of actor, preparation, action, body part, target/contact, path, quality, timing, emotion, follow-through and camera relationship when useful.\n- Interpret camera notes in terms of start framing, path, target, landing framing and timing when useful.\n- Prefer reversible takes and preserve boundaries over destructive regeneration.\n- Ask at most ONE clarifying question, only when ambiguity materially changes the creative meaning.\n- Board actions are suggestions unless permission mode allows harmless organisation.\n\nCurrent context (may be partial):\n${compactContext(summary, extraContext)}\n\n${seed ? `If useful, use this anti-freeze seed rather than making the user invent structure:\n${JSON.stringify(seed)}\n\n` : ''}Artist message:\n${text(message, 6000) || '(no message; they asked for a starting nudge)'}\n\nReturn JSON ONLY with this shape:\n{\n  "message": "1-4 short conversational sentences",\n  "interpretation": {\n    "kind": "creative_direction|movement|camera|performance|edit|setup|review",\n    "scene": "optional",\n    "shot": "optional",\n    "movement": {"actor":"","preparation":"","action":"","bodyPart":"","target":"","path":"","quality":"","timing":"","emotion":"","followThrough":"","cameraRelation":""},\n    "camera": {"start":"","framingStart":"","path":"","target":"","end":"","framingEnd":"","timing":"","quality":""},\n    "editScope": "optional",\n    "preserve": ["optional constraints"],\n    "confidence": 0.0\n  },\n  "nextMoves": [{"label":"short button label","prompt":"what selecting it tells you","kind":"continue"}],\n  "workflowHints": ["optional stable recipe ids such as camera_reveal or contact_action"],\n  "boardActions": [{"type":"focus|open_panel|move_panel|dock_panel|pin_reference|create_variant|compare_takes|arrange|link|create_scene|create_shot|create_beat|add_annotation", "targetId":"optional", "payload":{}}],\n  "question": "optional single clarifying question"\n}`;
+  return `RAINDESK PARTNER TURN\n\nYou are the single creative partner visible to the artist. The artist stays in the art space: sketches, arrows, captions, movement descriptions, camera ideas and casual conversation. You quietly translate that into scene -> shot -> beat intent and production workflows. Never make them choose technical tools or pipeline nodes.\n\nImportant behaviour:\n- Talk like a concise creative partner, not a production dashboard.\n- When the artist is stuck, reduce scope and offer 2-3 low-commitment ways to start. Do not ask them to define the whole project.\n- Preserve the artist's raw wording. Interpret movement in terms of actor, preparation, action, body part, target/contact, path, quality, timing, emotion, follow-through and camera relationship when useful.\n- When one sentence contains multiple meaningful actions, performance moments, dialogue, camera moves, sounds or contacts, split them into lightweight events and express only useful timing relationships such as before/after/during/overlaps/follows. Do not over-segment simple direction.\n- Interpret camera notes in terms of start framing, path, target, landing framing and timing when useful.\n- Prefer reversible takes and preserve boundaries over destructive regeneration.\n- Ask at most ONE clarifying question, only when ambiguity materially changes the creative meaning.\n- Board actions are suggestions unless permission mode allows harmless organisation.\n\nCurrent context (may be partial):\n${compactContext(summary, extraContext)}\n\n${seed ? `If useful, use this anti-freeze seed rather than making the user invent structure:\n${JSON.stringify(seed)}\n\n` : ''}Artist message:\n${text(message, 6000) || '(no message; they asked for a starting nudge)'}\n\nReturn JSON ONLY with this shape:\n{\n  "message": "1-4 short conversational sentences",\n  "interpretation": {\n    "kind": "creative_direction|movement|camera|performance|edit|setup|review",\n    "scene": "optional",\n    "shot": "optional",\n    "movement": {"actor":"","preparation":"","action":"","bodyPart":"","target":"","path":"","quality":"","timing":"","emotion":"","followThrough":"","cameraRelation":""},\n    "camera": {"start":"","framingStart":"","path":"","target":"","end":"","framingEnd":"","timing":"","quality":""},\n    "events": [{"id":"e1","kind":"action|performance|dialogue|camera|contact|sound","description":"","actor":"","bodyPart":"","target":"","path":"","quality":"","emotion":"","timing":"","dialogue":"","sound":"","contact":{"initiatorActor":"","initiatorBodyPart":"","receiverActor":"","receiverBodyPart":"","target":"","quality":""}}],\n    "relations": [{"type":"before|after|during|overlaps|follows|causes|simultaneous","from":"e1","to":"e2","description":"optional"}],\n    "editScope": "optional",\n    "preserve": ["optional constraints"],\n    "confidence": 0.0\n  },\n  "nextMoves": [{"label":"short button label","prompt":"what selecting it tells you","kind":"continue"}],\n  "workflowHints": ["optional stable recipe ids such as camera_reveal or contact_action"],\n  "boardActions": [{"type":"focus|open_panel|move_panel|dock_panel|pin_reference|create_variant|compare_takes|arrange|link|create_scene|create_shot|create_beat|add_annotation", "targetId":"optional", "payload":{}}],\n  "question": "optional single clarifying question"\n}`;
 }
 
 function mergeWorkflows(parsed, message, kickstart) {
@@ -240,14 +316,37 @@ function captureInterpretedBeat(directionImpl, envelope, message, context, inten
   const movement = isObject(interpretation.movement) ? interpretation.movement : {};
   const camera = isObject(interpretation.camera) ? interpretation.camera : {};
   const preserve = Array.isArray(interpretation.preserve) ? interpretation.preserve : [];
+  const events = Array.isArray(interpretation.events) ? interpretation.events : [];
+  const relations = Array.isArray(interpretation.relations) ? interpretation.relations : [];
   const timing = isObject(interpretation.timing) ? interpretation.timing :
     (movement.timing ? { relationship: text(movement.timing, 2000) } : {});
+
+  if (context.precreatedBeatId && typeof directionImpl.updateBeat === 'function') {
+    const precreated = (graph.beats || []).find((beat) => beat.id === context.precreatedBeatId);
+    if (precreated && precreated.shotId === context.shotId) {
+      const beat = directionImpl.updateBeat(precreated.id, {
+        description: text(interpretation.description || interpretation.action || rawDirection, 4000),
+        movement,
+        events,
+        relations,
+        camera,
+        timing,
+        dialogue: text(interpretation.dialogue, 4000),
+        preserve,
+        status: 'provisional',
+        enrichment: { kind: 'partner_capture', intentId: intent.id, interpretationKind: kind },
+      });
+      return { beatId: beat.id, shotId: beat.shotId, existing: true, enriched: true };
+    }
+  }
 
   const beat = directionImpl.createBeat({
     shotId: context.shotId,
     description: text(interpretation.description || interpretation.action || rawDirection, 4000),
     rawDirection,
     movement,
+    events,
+    relations,
     camera,
     timing,
     dialogue: text(interpretation.dialogue, 4000),
@@ -258,12 +357,29 @@ function captureInterpretedBeat(directionImpl, envelope, message, context, inten
   return { beatId: beat.id, shotId: beat.shotId, existing: false };
 }
 
-function createPartner({ agentImpl, directionImpl = direction } = {}) {
+function createPartner({ agentImpl, directionImpl = direction, turnStore = partnerTurns, actionStore = partnerActions } = {}) {
   if (!agentImpl || typeof agentImpl.chat !== 'function') throw new Error('agentImpl.chat is required');
 
   async function turn({ message = '', mode = null, context = {} } = {}) {
     const resolvedContext = isObject(context) ? { ...context } : {};
-    if (!resolvedContext.shotId && resolvedContext.legacyShotId && typeof directionImpl.ensureLegacyShot === 'function') {
+    // Permission mode is read before any legacy bridging because Watch must be
+    // genuinely read-only, including semantic project state.
+    let graph = directionImpl.readGraph();
+    const partnerMode = graph.project && graph.project.partnerMode || 'suggest';
+
+    if (turnStore && typeof turnStore.recent === 'function') {
+      try {
+        resolvedContext.recentConversation = turnStore.recent({
+          projectId: graph.project && graph.project.id || 'project',
+          sceneId: resolvedContext.sceneId || graph.project.activeSceneId || null,
+          shotId: resolvedContext.shotId || graph.project.activeShotId || null,
+          limit: 6,
+        }).map((turn) => ({ userMessage: turn.userMessage, partnerMessage: turn.partnerMessage }));
+      } catch (_e) { /* conversational memory must never block the live turn */ }
+    }
+
+    if (partnerMode !== 'watch' && !resolvedContext.shotId &&
+      resolvedContext.legacyShotId && typeof directionImpl.ensureLegacyShot === 'function') {
       try {
         const bridge = directionImpl.ensureLegacyShot(resolvedContext.legacyShotId, {
           beat: resolvedContext.legacyBeat || '',
@@ -271,12 +387,11 @@ function createPartner({ agentImpl, directionImpl = direction } = {}) {
         });
         resolvedContext.sceneId = bridge.sceneId;
         resolvedContext.shotId = bridge.shotId;
+        graph = directionImpl.readGraph();
       } catch (_e) { /* context bridging must never block conversation */ }
     }
 
-    const graph = directionImpl.readGraph();
     const summary = directionImpl.summary(graph);
-    const partnerMode = graph.project && graph.project.partnerMode || 'suggest';
     const kickstart = looksStuck(message, mode, summary);
     const prompt = buildPrompt({ message, summary, extraContext: resolvedContext, kickstart });
     let rawReply = '';
@@ -287,25 +402,66 @@ function createPartner({ agentImpl, directionImpl = direction } = {}) {
     });
 
     let intent = null;
-    try {
-      intent = directionImpl.recordIntent({
-        raw: message || (kickstart ? '[kickstart]' : ''),
-        kind: text(envelope.interpretation.kind, 128) || 'creative_direction',
-        sceneId: resolvedContext.sceneId || undefined,
-        shotId: resolvedContext.shotId || undefined,
-        interpretation: envelope.interpretation,
-        workflowHints: envelope.workflow.map((w) => w.id),
-        status: 'provisional',
-        source: { kind: 'partner_turn', kickstart },
-      });
-    } catch (_e) { /* chat should never fail because logging failed */ }
-
     let captured = null;
-    try {
-      captured = captureInterpretedBeat(directionImpl, envelope, message, resolvedContext, intent);
-    } catch (_e) { /* documentation should not break the live creative conversation */ }
+    if (partnerMode !== 'watch') {
+      try {
+        intent = directionImpl.recordIntent({
+          raw: message || (kickstart ? '[kickstart]' : ''),
+          kind: text(envelope.interpretation.kind, 128) || 'creative_direction',
+          sceneId: resolvedContext.sceneId || undefined,
+          shotId: resolvedContext.shotId || undefined,
+          interpretation: envelope.interpretation,
+          workflowHints: envelope.workflow.map((w) => w.id),
+          status: 'provisional',
+          source: { kind: 'partner_turn', kickstart },
+        });
+      } catch (_e) { /* conversation stays live even if semantic logging fails */ }
 
-    return { ...envelope, intentId: intent ? intent.id : null, captured };
+      try {
+        captured = captureInterpretedBeat(directionImpl, envelope, message, resolvedContext, intent);
+      } catch (_e) { /* raw conversation survives independently of enrichment */ }
+    }
+
+    let persistedTurn = null;
+    if (turnStore && typeof turnStore.record === 'function') {
+      try {
+        persistedTurn = turnStore.record({
+          projectId: graph.project && graph.project.id || 'project',
+          sceneId: resolvedContext.sceneId || graph.project.activeSceneId || null,
+          shotId: resolvedContext.shotId || graph.project.activeShotId || null,
+          userMessage: message,
+          partnerMessage: envelope.message,
+          permissionMode: partnerMode,
+          interpretation: envelope.interpretation,
+          nextMoves: envelope.nextMoves,
+          workflow: envelope.workflow,
+          boardActions: envelope.boardActions,
+          intentId: intent ? intent.id : null,
+          captured,
+        });
+      } catch (_e) { /* memory failure does not strand the artist */ }
+    }
+
+    const actionRecords = [];
+    if (actionStore && typeof actionStore.recordProposal === 'function') {
+      for (const action of envelope.boardActions) {
+        try {
+          actionRecords.push(actionStore.recordProposal(action, {
+            permissionMode: partnerMode,
+            turnId: persistedTurn ? persistedTurn.id : null,
+          }));
+        } catch (_e) { /* malformed proposals remain harmless model output */ }
+      }
+    }
+
+    return {
+      ...envelope,
+      permissionMode: partnerMode,
+      intentId: intent ? intent.id : null,
+      captured,
+      turnId: persistedTurn ? persistedTurn.id : null,
+      actions: actionRecords,
+    };
   }
 
   return { turn };

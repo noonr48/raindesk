@@ -1,5 +1,5 @@
 /*
- * Raindesk Partner drawer — casual co-creation chat + take history (localStorage).
+ * Raindesk Partner drawer — casual co-creation chat + durable take history.
  * Standalone module: builds its DOM inside a provided root element, talks to
  * the backend ONLY through the injected api object (public/js/api.js), so it
  * can be dropped into any container (overlay drawer <1024px, docked rail ≥1024px).
@@ -214,31 +214,51 @@
 
     /* ------------------------------------------------- my gens history */
 
-    function renderGens() {
+    function renderTakeRows(gens) {
       gensList.innerHTML = '';
-      const gens = loadGens();
       if (!gens.length) {
         gensList.appendChild(el('div', 'gens-empty',
-          'nothing here yet ⚡\u00A0— every GEN you run lands in this list with its prompt'));
+          'nothing here yet — rough takes will collect here as you explore'));
         return;
       }
       for (const g of gens) {
         const row = el('div', 'gen-row');
         const meta = el('div', 'gen-meta');
-        meta.appendChild(el('div', 'gen-shot', `${g.shotLabel || g.shotId || 'shot'} µ take ${g.takeCount || 1}`));
+        const durable = Boolean(g.resultAssetSha);
+        const status = g.status || (g.committed ? 'accepted' : 'candidate');
+        meta.appendChild(el('div', 'gen-shot', `${g.shotLabel || g.shotId || 'shot'} · ${status}`));
         meta.appendChild(el('div', 'gen-prompt', g.prompt || ''));
-        meta.appendChild(el('div', 'gen-time', `${timeLabel(g.ts)}${g.committed ? ' µ committed ✅' : ''}`));
+        const when = g.createdAt || g.ts || Date.now();
+        meta.appendChild(el('div', 'gen-time', `${timeLabel(when)}${durable ? ' · saved' : ''}`));
         row.appendChild(meta);
-        if (g.imageUrl) {
+        const imageUrl = durable ? `/api/blob/${g.resultAssetSha}` : g.imageUrl;
+        if (imageUrl) {
           const img = el('img', 'gen-thumb');
           img.loading = 'lazy';
           img.alt = 'generated take';
-          img.src = g.imageUrl;
+          img.src = imageUrl;
           img.addEventListener('error', () => { img.remove(); });
           row.appendChild(img);
         }
         gensList.appendChild(row);
       }
+    }
+
+    async function renderGens() {
+      gensList.innerHTML = '';
+      gensList.appendChild(el('div', 'gens-empty', 'gathering takes…'));
+      if (api.listTakes) {
+        try {
+          const ctx = partnerContext();
+          const shotId = ctx && ctx.legacyShotId ? ctx.legacyShotId : null;
+          const response = await api.listTakes({ shotId, limit: MAX_GENS });
+          if (response && Array.isArray(response.takes)) {
+            renderTakeRows(response.takes);
+            return;
+          }
+        } catch (_e) { /* fall through to legacy/offline cache */ }
+      }
+      renderTakeRows(loadGens());
     }
 
     function recordGen(entry) {

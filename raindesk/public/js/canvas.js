@@ -25,7 +25,15 @@
   /* ------------------------------------------------------------- PNG codec */
 
   const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  const LAYER_KINDS = ['base', 'pen', 'temp', 'gen'];
+  // Layer semantics are intentionally separated by content type.
+  // `pen` remains as a backwards-compatible alias for a vector drawing layer.
+  // Generated/accepted raster pixels must never live inside a replayable vector
+  // layer, otherwise undoing a later stroke can erase accepted artwork.
+  const LAYER_KINDS = ['base', 'pen', 'vector', 'raster', 'temp', 'gen'];
+  function isVectorKind(kind) { return kind === 'pen' || kind === 'vector'; }
+  function isRasterKind(kind) {
+    return kind === 'base' || kind === 'raster' || kind === 'temp' || kind === 'gen';
+  }
   const MAX_UNDO = 100; // bounded undo: oldest records fall off; earliest actions become permanent
   const INF = 1e7;
 
@@ -423,6 +431,7 @@
         visible: true,
         data: new Uint8ClampedArray(this.width * this.height * 4),
         strokes: [],
+        sourceTakeId: null,
       };
     }
 
@@ -484,7 +493,10 @@
     addStroke(layerId, stroke) {
       const layer = this.layerById(layerId);
       if (!layer) throw new Error(`no such layer "${layerId}"`);
-      if (layer.kind === 'base') throw new Error('base layer is locked — draw on a pen layer');
+      if (!isVectorKind(layer.kind)) {
+        if (layer.kind === 'base') throw new Error('base layer is locked — draw on a pen layer');
+        throw new Error('strokes require a vector/pen layer');
+      }
       if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length) {
         throw new Error('stroke needs points');
       }
@@ -502,8 +514,106 @@
     }
 
     _rasterLayer(layer) {
+      if (!isVectorKind(layer.kind)) throw new Error('only vector/pen layers can be re-rasterized');
       layer.data.fill(0);
       for (const s of layer.strokes) rasterStrokeInto(layer.data, this.width, this.height, s);
+    }
+
+    /**
+     * Return editable document metadata for this canvas. Raster bytes are
+     * referenced externally through `assetRefsByLayerId`; vector layers remain
+     * reconstructable from their stored strokes.
+     */
+    toDocument({ shotId = null, revisionId = null, assetRefsByLayerId = {} } = {}) {
+      return {
+        schemaVersion: 1,
+        shotId,
+        revisionId,
+        canvas: { width: this.width, height: this.height },
+        activeLayerId: this.activeLayerId,
+        layers: this._layers.map((layer, index) => ({
+          id: layer.id,
+          name: layer.name,
+          kind: layer.kind,
+          visible: layer.visible !== false,
+          order: index,
+          strokes: isVectorKind(layer.kind)
+            ? layer.strokes.map((st) => ({
+              id: st.id,
+              points: st.points.map((pt) => ({ x: pt.x, y: pt.y })),
+              color: st.color,
+              width: st.width,
+            }))
+            : [],
+          assetSha: isRasterKind(layer.kind) ? (assetRefsByLayerId[layer.id] || null) : null,
+          sourceTakeId: layer.kind === 'gen' && layer.sourceTakeId ? layer.sourceTakeId : null,
+        })),
+      };
+    }
+
+    /**
+     * Hydrate a complete editable document. `layerBuffers` maps layer id to
+     * RGBA bytes loaded from the content-addressed asset store.
+     */
+    loadDocument(doc, layerBuffers = {}) {
+      if (!doc || doc.schemaVersion !== 1 || !doc.canvas || !Array.isArray(doc.layers)) {
+        throw new Error('unsupported shot document');
+      }
+      if (doc.canvas.width !== this.width || doc.canvas.height !== this.height) {
+        throw new Error('shot document canvas size mismatch');
+      }
+      const seen = new Set();
+      const layers = [];
+      let seq = 0;
+      for (const raw of doc.layers.slice().sort((a, b) => (a.order || 0) - (b.order || 0))) {
+        if (!raw || typeof raw.id !== 'string' || !raw.id || seen.has(raw.id)) {
+          throw new Error('shot document has invalid layer ids');
+        }
+        if (!LAYER_KINDS.includes(raw.kind)) throw new Error(`unsupported layer kind "${raw.kind}"`);
+        seen.add(raw.id);
+        const layer = {
+          id: raw.id,
+          name: String(raw.name || raw.kind),
+          kind: raw.kind,
+          visible: raw.visible !== false,
+          data: new Uint8ClampedArray(this.width * this.height * 4),
+          strokes: [],
+          sourceTakeId: raw.kind === 'gen' && raw.sourceTakeId ? String(raw.sourceTakeId) : null,
+        };
+        const m = /^L(\d+)$/.exec(raw.id);
+        if (m) seq = Math.max(seq, Number(m[1]) || 0);
+        if (isVectorKind(layer.kind)) {
+          layer.strokes = Array.isArray(raw.strokes) ? raw.strokes.map((st) => ({
+            id: String(st.id || `st${++seq}`),
+            points: Array.isArray(st.points)
+              ? st.points.map((pt) => ({ x: Number(pt.x) || 0, y: Number(pt.y) || 0 }))
+              : [],
+            color: st.color,
+            width: st.width,
+          })) : [];
+          for (const st of layer.strokes) {
+            const sm = /^st(\d+)$/.exec(st.id);
+            if (sm) seq = Math.max(seq, Number(sm[1]) || 0);
+          }
+          for (const st of layer.strokes) rasterStrokeInto(layer.data, this.width, this.height, st);
+        } else {
+          const buf = layerBuffers[layer.id];
+          if (buf) {
+            if (buf.length !== layer.data.length) throw new Error(`buffer size mismatch for ${layer.id}`);
+            layer.data.set(buf);
+          }
+        }
+        layers.push(layer);
+      }
+      this._layers = layers;
+      this._seq = seq;
+      this._undo = [];
+      this.session = null;
+      this.lasso = null;
+      this.activeLayerId = doc.activeLayerId && seen.has(doc.activeLayerId)
+        ? doc.activeLayerId
+        : (layers.length ? layers[layers.length - 1].id : null);
+      return this;
     }
 
     /* composite + export ------------------------------------------- */
@@ -646,24 +756,28 @@
       this.lasso = null;
     }
 
-    /** Composite the current take through the feathered lasso onto the active layer. */
-    commitTake() {
+    /**
+     * Commit the current take as its own raster generation layer.
+     *
+     * This is intentionally non-destructive: accepted generated pixels never
+     * share storage with replayable pen strokes. A later stroke undo therefore
+     * cannot erase an accepted take.
+     */
+    commitTake({ name = 'gen take', sourceTakeId = null } = {}) {
       const s = this.session;
       if (!s || s.takeIndex < 0) throw new Error('no take to commit');
-      const layer = this.activeLayer();
-      if (!layer) throw new Error('no active layer');
       const take = s.takes[s.takeIndex];
       const { x, y, w, h } = s.region;
 
-      // snapshot the (canvas-clamped) affected rect for undo
       const cx = Math.max(0, x); const cy = Math.max(0, y);
       const cw = Math.min(w, this.width - cx); const ch = Math.min(h, this.height - cy);
       if (cw <= 0 || ch <= 0) throw new Error('region outside canvas');
-      const prev = new Uint8ClampedArray(cw * ch * 4);
-      for (let ry = 0; ry < ch; ry++) {
-        const dOff = ((cy + ry) * this.width + cx) * 4;
-        prev.set(layer.data.subarray(dOff, dOff + cw * 4), ry * cw * 4);
-      }
+
+      const prevActive = this.activeLayerId;
+      const layer = this._newLayer(name, 'gen');
+      layer.sourceTakeId = sourceTakeId ? String(sourceTakeId).slice(0, 160) : null;
+      this._layers.push(layer);
+      this.activeLayerId = layer.id;
 
       for (let ry = 0; ry < h; ry++) {
         const gy = y + ry;
@@ -673,7 +787,7 @@
           const gx = x + rx;
           if (gx < 0 || gx >= this.width) continue;
           const a = s.cov[ry * w + rx];
-          if (a <= 0) continue; // outside lasso: byte-identical, untouched
+          if (a <= 0) continue;
           const si = (ry * w + rx) * 4;
           blendSourceOver(layer.data, (rowBase + gx) * 4,
             take[si], take[si + 1], take[si + 2], take[si + 3], a);
@@ -681,15 +795,15 @@
       }
 
       this._undo.push({
-        type: 'commit',
+        type: 'commitLayer',
         layerId: layer.id,
-        rect: { x: cx, y: cy, w: cw, h: ch },
-        prev,
+        prevActive,
         session: { ...s, takes: s.takes.slice() },
+        sourceTakeId: layer.sourceTakeId,
       });
       if (this._undo.length > MAX_UNDO) this._undo.shift();
       this.session = null;
-      return true;
+      return layer;
     }
 
     /* undo ---------------------------------------------------------- */
@@ -705,14 +819,11 @@
           layer.strokes = layer.strokes.filter((st) => st.id !== rec.strokeId);
           this._rasterLayer(layer);
         }
-      } else if (rec.type === 'commit') {
-        const layer = this.layerById(rec.layerId);
-        if (layer && rec.rect) {
-          const { x, y, w, h } = rec.rect;
-          for (let ry = 0; ry < h; ry++) {
-            const dOff = ((y + ry) * this.width + x) * 4;
-            layer.data.set(rec.prev.subarray(ry * w * 4, ry * w * 4 + w * 4), dOff);
-          }
+      } else if (rec.type === 'commitLayer') {
+        this._layers = this._layers.filter((l) => l.id !== rec.layerId);
+        this.activeLayerId = rec.prevActive || null;
+        if (!this.layerById(this.activeLayerId)) {
+          this.activeLayerId = this._layers.length ? this._layers[this._layers.length - 1].id : null;
         }
         this.session = rec.session;
         this.lasso = { points: rec.session.lassoPoints.slice(), closed: true };
@@ -796,6 +907,6 @@
 
   return {
     RainCanvasCore, encodePNG, decodePNG, coverageMask, scanlineFill,
-    boundsOf, paintRainCity, PNG_SIG,
+    boundsOf, paintRainCity, PNG_SIG, LAYER_KINDS, isVectorKind, isRasterKind,
   };
 });
