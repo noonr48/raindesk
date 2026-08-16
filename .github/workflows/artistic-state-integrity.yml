@@ -1,0 +1,97 @@
+name: Artistic State Integrity
+
+on:
+  push:
+    branches:
+      - 'chatgpt/artistic-state-integrity-v1'
+  pull_request:
+    paths:
+      - 'raindesk/**'
+      - '.github/workflows/artistic-state-integrity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check integrity substrate
+        working-directory: raindesk
+        run: |
+          node --check server.js
+          node --check lib/blobs.js
+          node --check lib/shot-documents.js
+          node --check lib/takes.js
+          node --check lib/job-store.js
+          node --check lib/workspace.js
+          node --check lib/partner-actions.js
+          node --check lib/partner-turns.js
+          node --check lib/direction.js
+          node --check lib/partner.js
+          node --check public/js/canvas.js
+          node --check public/js/api.js
+          node --check public/js/app.js
+          node --check dev/browser-integrity-smoke.js
+
+      - name: Run complete Raindesk suite
+        working-directory: raindesk
+        run: npm test
+
+      - name: Boot real app and verify editable browser persistence
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          DATA_DIR="$(mktemp -d)"
+          RAINDESK_DATA_DIR="$DATA_DIR" RAINDESK_HOST=127.0.0.1 node server.js >/tmp/raindesk-integrity-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$DATA_DIR"' EXIT
+          for i in $(seq 1 80); do
+            if curl -fsS http://127.0.0.1:17600/ >/dev/null; then break; fi
+            sleep 0.1
+          done
+          curl -fsS http://127.0.0.1:17600/ >/dev/null
+
+          BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
+          if [ -z "$BROWSER" ]; then
+            echo "Chromium/Chrome not available" >&2
+            exit 1
+          fi
+          export CHROME_BIN="$BROWSER"
+
+          mkdir -p artifacts/integrity
+          DOM="$($BROWSER --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=2400 \
+            --dump-dom http://127.0.0.1:17600/ 2>/tmp/raindesk-integrity-chromium.log)"
+          printf '%s\n' "$DOM" > artifacts/integrity/desktop-dom.html
+          grep -q 'data-raindesk-boot="ready"' artifacts/integrity/desktop-dom.html
+          ! grep -q 'raindesk failed to load its scripts' artifacts/integrity/desktop-dom.html
+
+          node dev/browser-integrity-smoke.js http://127.0.0.1:17600/ | tee artifacts/integrity/browser-editability.json
+
+          "$BROWSER" --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=2400 \
+            --window-size=1440,900 \
+            --screenshot="$(pwd)/artifacts/integrity/desktop-1440x900.png" \
+            http://127.0.0.1:17600/
+          "$BROWSER" --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=2400 \
+            --window-size=390,844 \
+            --screenshot="$(pwd)/artifacts/integrity/mobile-390x844.png" \
+            http://127.0.0.1:17600/
+
+      - name: Upload integrity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-artistic-integrity
+          path: raindesk/artifacts/integrity/*
+          if-no-files-found: warn
+          retention-days: 7
