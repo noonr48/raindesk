@@ -349,4 +349,4 @@ async function handleApi(req, res, url, deps) {
 
   if (method === 'POST' && route === '/api/partner/turn') {
     if (chatInFlight >= CHAT_CONCURRENCY) {
-            throw new HttpError(429, 'partner is already thinking with you - one moment');
+                  throw new HttpError(429, 'partner is already thinking with you - one moment');
