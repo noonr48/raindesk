@@ -61,12 +61,22 @@
      const kickstart = looksStuck(message, mode, summary);
 -    const prompt = buildPrompt({ message, summary, extraContext: context, kickstart });
 +    const prompt = buildPrompt({ message, summary, extraContext: resolvedContext, kickstart });
+     let rawReply = '';
+     try { rawReply = await agentImpl.chat(prompt); } catch (_e) { rawReply = ''; }
+     const parsed = parseJsonObject(rawReply);
 @@ -198,8 +245,8 @@
+       intent = directionImpl.recordIntent({
+         raw: message || (kickstart ? '[kickstart]' : ''),
+         kind: text(envelope.interpretation.kind, 128) || 'creative_direction',
 -        sceneId: context.sceneId || undefined,
 -        shotId: context.shotId || undefined,
 +        sceneId: resolvedContext.sceneId || undefined,
 +        shotId: resolvedContext.shotId || undefined,
+         interpretation: envelope.interpretation,
+         workflowHints: envelope.workflow.map((w) => w.id),
+         status: 'provisional',
 @@ -207,7 +254,12 @@
+       });
      } catch (_e) { /* chat should never fail because logging failed */ }
  
 -    return { ...envelope, intentId: intent ? intent.id : null };
@@ -76,7 +86,13 @@
 +    } catch (_e) { /* documentation should not break the live creative conversation */ }
 +
 +    return { ...envelope, intentId: intent ? intent.id : null, captured };
+   }
+ 
+   return { turn };
 @@ -215,5 +267,5 @@
+ 
+ module.exports = {
+   BOARD_ACTIONS, parseJsonObject, normalizeNextMoves, normalizeBoardActions,
 -  looksStuck, kickstartSeed, buildPrompt, createPartner,
 +  looksStuck, kickstartSeed, buildPrompt, captureInterpretedBeat, createPartner,
  };
