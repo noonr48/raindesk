@@ -27,7 +27,7 @@ jobs:
           ref: chatgpt/direction-partner-v2
           fetch-depth: 0
 
-      - name: Reconstruct tested partner integration if transfer was damaged
+      - name: Reconstruct tested partner integration and apply direction pen
         run: |
           changed=0
           if ! node --check server.js >/dev/null 2>&1; then
@@ -42,11 +42,33 @@ jobs:
             node --check lib/tests/routes.test.js
             changed=1
           fi
+
+          if ! grep -q 'RaindeskDirection' public/js/app.js; then
+            patch -p0 < dev/public-js-app-direction.patch
+            changed=1
+          fi
+          if ! grep -q 'data-tool="direction"' public/index.html; then
+            patch -p0 < dev/public-index-direction.patch
+            changed=1
+          fi
+          if ! grep -q 'addPartnerNote' public/js/chat.js; then
+            patch -p0 < dev/public-js-chat-direction.patch
+            changed=1
+          fi
+          if ! grep -q 'direction-caption' public/css/app.css; then
+            patch -p0 < dev/public-css-direction.patch
+            changed=1
+          fi
+
+          node --check public/js/app.js
+          node --check public/js/chat.js
+          node --check public/js/direction.js
+
           if [ "$changed" = "1" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add server.js lib/tests/routes.test.js
-            git commit -m "raindesk: restore tested partner integration sources"
+            git add server.js lib/tests/routes.test.js public/index.html public/js/app.js public/js/chat.js public/css/app.css
+            git commit -m "raindesk: integrate visual direction pen"
             git push origin HEAD:chatgpt/direction-partner-v2
           fi
 
@@ -63,6 +85,8 @@ jobs:
           node --check lib/tests/routes.test.js
           node --check public/js/api.js
           node --check public/js/chat.js
+          node --check public/js/direction.js
+          node --check public/js/app.js
 
       - name: Run Raindesk tests
         run: npm test
