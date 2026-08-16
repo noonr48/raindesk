@@ -46,7 +46,7 @@
     const api = opts.api;
     const shotLabel = opts.shotLabel || (() => 'shot');
     const contextProvider = typeof opts.contextProvider === 'function' ? opts.contextProvider : null;
-    const listeners = { open: [], close: [], turn: [] };
+    const listeners = { open: [], close: [], turn: [], action: [] };
     let tab = 'agent';
     let busy = false;
 
@@ -166,6 +166,83 @@
       chatList.scrollTop = chatList.scrollHeight;
     }
 
+    function actionLabel(action) {
+      if (!action) return 'board action';
+      if (action.label) return action.label;
+      const target = action.targetId ? ` ${action.targetId.replace(/^panel_/, '')}` : '';
+      return String(action.type || 'board action').replaceAll('_', ' ') + target;
+    }
+
+    function addActionReceipt(action) {
+      const wrap = el('div', 'partner-action-receipt');
+      wrap.appendChild(el('span', 'partner-action-copy', actionLabel(action)));
+      if (action.status === 'completed' || action.status === 'accepted') {
+        if (action.status === 'completed') {
+          const keep = el('button', 'partner-action-btn', 'keep');
+          keep.type = 'button';
+          keep.addEventListener('click', async () => {
+            try {
+              const res = await api.mutatePartnerAction(action.id, 'accept');
+              wrap.replaceWith(addActionReceipt(res && res.action || { ...action, status: 'accepted' }));
+            } catch (_e) { /* receipt remains undoable */ }
+          });
+          wrap.appendChild(keep);
+        }
+        const undo = el('button', 'partner-action-btn', 'undo');
+        undo.type = 'button';
+        undo.addEventListener('click', async () => {
+          try {
+            const res = await api.mutatePartnerAction(action.id, 'revert');
+            wrap.replaceWith(addActionReceipt(res && res.action || { ...action, status: 'reverted' }));
+            listeners.action.forEach((f) => { try { f(res && res.action); } catch (_e) {} });
+          } catch (_e) {}
+        });
+        wrap.appendChild(undo);
+      } else if (action.status === 'reverted') {
+        wrap.appendChild(el('small', '', 'undone'));
+      } else if (action.status === 'accepted') {
+        wrap.appendChild(el('small', '', 'kept'));
+      }
+      chatList.appendChild(wrap); chatList.scrollTop = chatList.scrollHeight;
+      return wrap;
+    }
+
+    async function processPartnerActions(response) {
+      const actions = response && Array.isArray(response.actions) ? response.actions : [];
+      for (const action of actions.slice(0, 8)) {
+        if (!action || !action.id || !action.executable || action.status === 'advisory') continue;
+        if (action.status === 'approved') {
+          // Act mode: only actions pre-approved by the server-side permission
+          // gate reach this path. The model itself never directly moves UI.
+          try {
+            const res = await api.mutatePartnerAction(action.id, 'execute');
+            const executed = res && res.action;
+            if (executed) { addActionReceipt(executed); listeners.action.forEach((f) => { try { f(executed); } catch (_e) {} }); }
+          } catch (_e) {}
+          continue;
+        }
+        if (action.status === 'proposed') {
+          const row = el('div', 'partner-action-proposal');
+          row.appendChild(el('span', 'partner-action-copy', actionLabel(action)));
+          const tryBtn = el('button', 'partner-action-btn', 'try it'); tryBtn.type = 'button';
+          const noBtn = el('button', 'partner-action-btn quiet', 'not now'); noBtn.type = 'button';
+          tryBtn.addEventListener('click', async () => {
+            try {
+              await api.mutatePartnerAction(action.id, 'approve');
+              const res = await api.mutatePartnerAction(action.id, 'execute');
+              const executed = res && res.action;
+              if (executed) { row.replaceWith(addActionReceipt(executed)); listeners.action.forEach((f) => { try { f(executed); } catch (_e) {} }); }
+            } catch (_e) {}
+          });
+          noBtn.addEventListener('click', async () => {
+            try { await api.mutatePartnerAction(action.id, 'cancel'); } catch (_e) {}
+            row.remove();
+          });
+          row.append(tryBtn, noBtn); chatList.appendChild(row);
+        }
+      }
+    }
+
     async function runPartner(message, mode = null) {
       if (busy) return;
       busy = true;
@@ -189,6 +266,7 @@
         ? response.message.trim() : CHAT_FALLBACK;
       addBubble('agent', reply);
       addMoves(response && response.nextMoves);
+      await processPartnerActions(response);
       listeners.turn.forEach((f) => { try { f(response); } catch (_e) { /* observer only */ } });
     }
 

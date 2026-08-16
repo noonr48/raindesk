@@ -26,7 +26,7 @@ test('Beat Trail is loaded as a minimizable creative panel, not a fixed inspecto
 });
 
 test('ordinary Partner turns can refresh a visible Beat Trail', () => {
-  assert.match(chat, /listeners = \{ open: \[\], close: \[\], turn: \[\] \}/);
+  assert.match(chat, /listeners = \{ open: \[\], close: \[\], turn: \[\], action: \[\] \}/);
   assert.match(chat, /listeners\.turn\.forEach/);
   assert.match(app, /state\.drawer\.on\(['"]turn['"]/);
 });

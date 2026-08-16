@@ -44,8 +44,10 @@ test('desktop overlays anchor to the artboard rect, not the viewport', () => {
   }
 });
 
-test('drawer docks open by default on desktop (matchMedia gate present)', () => {
-  assert.match(appJs, /matchMedia\('\(min-width: 1024px\)'\)/, 'auto-open gate present');
+test('desktop Partner placement is owned by the persistent workspace shell', () => {
+  assert.match(appJs, /panel_partner/, 'Partner has a stable workspace object id');
+  assert.match(appJs, /state\.workspaceUI\.isDesktop/, 'desktop drawer layout consults workspace shell');
+  assert.doesNotMatch(appJs, /matchMedia\('\(min-width: 1024px\)'\).*drawer\.open/s, 'legacy forced desktop rail is removed');
 });
 
 test('backdrop is a scene-matched gradient (no flat void)', () => {

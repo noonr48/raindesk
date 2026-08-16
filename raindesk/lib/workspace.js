@@ -118,11 +118,13 @@ function applyAction(action = {}) {
 
   let inverse;
   if (type === 'move_panel') {
-    inverse = { type, targetId, payload: { x: obj.x, y: obj.y, width: obj.width, height: obj.height, rotation: obj.rotation, scale: obj.scale } };
+    inverse = { type, targetId, payload: { x: obj.x, y: obj.y, width: obj.width, height: obj.height, rotation: obj.rotation, scale: obj.scale, dock: obj.dock } };
     for (const key of ['x', 'y', 'width', 'height', 'rotation', 'scale']) {
       if (payload[key] !== undefined) obj[key] = finite(payload[key], obj[key], key === 'width' || key === 'height' ? 40 : (key === 'scale' ? 0.05 : -10000000), key === 'scale' ? 64 : 10000000);
     }
-    obj.dock = null;
+    if (payload.dock === undefined) obj.dock = null;
+    else if (payload.dock === null || DOCKS.has(payload.dock)) obj.dock = payload.dock;
+    else throw new HttpError(400, 'invalid dock position');
   } else if (type === 'dock_panel') {
     inverse = { type, targetId, payload: { dock: obj.dock } };
     const dock = payload.dock == null ? null : payload.dock;

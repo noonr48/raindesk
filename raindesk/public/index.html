@@ -80,6 +80,15 @@
   <!-- lightweight micro-action trail: Partner fills this from normal direction/chat -->
   <div id="beatTrail" aria-hidden="true"></div>
 
+  <!-- scenes / shot strip: desktop workspace panel, minimisable to the shelf -->
+  <div id="scenesPanel" class="workspace-scenes-panel" aria-hidden="true">
+    <div class="workspace-panel-head"><strong>Scenes</strong><button id="scenesClose" type="button" aria-label="close scenes">×</button></div>
+    <div id="sceneRows" class="workspace-scene-rows"></div>
+  </div>
+
+  <!-- panel shelf behaves like lightweight removable tabs for the current desk -->
+  <nav id="panelShelf" class="workspace-panel-shelf" aria-label="workspace panels"></nav>
+
   <!-- layers panel -->
   <div id="layersPanel" class="panel">
     <h4 id="panelTitle">Layers</h4>
@@ -108,6 +117,7 @@
 <script src="js/chat.js"></script>
 <script src="js/direction.js"></script>
 <script src="js/beats.js"></script>
+<script src="js/workspace-ui.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

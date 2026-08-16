@@ -18,8 +18,9 @@
   const CHAT = window.RaindeskChat;
   const DIR = window.RaindeskDirection;
   const BEATS = window.RaindeskBeats;
+  const WSPACE = window.RaindeskWorkspaceUI;
 
-  if (!RC || !API || !CHAT || !DIR || !BEATS) {
+  if (!RC || !API || !CHAT || !DIR || !BEATS || !WSPACE) {
     document.addEventListener('DOMContentLoaded', () => {
       const el = document.createElement('div');
       el.className = 'boot-error';
@@ -53,6 +54,7 @@
     takeMeta: [], // aligned with core.session.takes; durable server take ids/provenance
     drawer: null,
     beatTrail: null,
+    workspaceUI: null,
     dirty: true,
     gesture: null, // { kind:'lasso'|'pen'|'direction', points:[], ... }
     directionMarks: [],
@@ -133,6 +135,7 @@
         .filter((m) => m && m.rawText)
         .slice(-8)
         .map((m) => m.rawText),
+      workspace: state.workspaceUI && state.workspaceUI.context ? state.workspaceUI.context() : null,
     };
   }
 
@@ -315,6 +318,8 @@
     await loadShotIntoCore(shot);
     await hydrateDirectionMarks(shot);
     if (state.beatTrail) state.beatTrail.setShot(shot);
+    renderScenesPanel();
+    if (state.workspaceUI) state.workspaceUI.refresh().catch(() => {});
     updateTitle();
     updateHint();
     syncGenBar();
@@ -364,16 +369,59 @@
     });
     state.drawer.on('turn', () => {
       if (state.beatTrail && state.beatTrail.isOpen()) state.beatTrail.refresh();
+      if (state.workspaceUI) state.workspaceUI.refresh().catch(() => {});
     });
+    state.drawer.on('action', () => {
+      if (state.workspaceUI) state.workspaceUI.refresh().catch(() => {});
+    });
+
+    renderScenesPanel();
+    $('scenesClose').addEventListener('click', () => $('scenesPanel').classList.remove('open'));
+
+    state.workspaceUI = WSPACE.WorkspaceShell({ api: API, shelf: $('panelShelf') });
+    state.workspaceUI.registerPanel({
+      id: 'panel_layers', key: 'layers', type: 'layers_panel', label: 'Layers',
+      element: $('layersPanel'), handle: $('layersPanel').querySelector('h4'),
+      visibilityTarget: $('layersPanel'), visibleClass: 'open',
+      open: () => { panelOpen = true; $('layersPanel').classList.add('open'); renderPanel(); },
+      close: () => { panelOpen = false; $('layersPanel').classList.remove('open'); },
+    });
+    state.workspaceUI.registerPanel({
+      id: 'panel_scenes', key: 'scenes', type: 'sequence_strip', label: 'Scenes',
+      element: $('scenesPanel'), handle: $('scenesPanel').querySelector('.workspace-panel-head'),
+      visibilityTarget: $('scenesPanel'), visibleClass: 'open',
+      open: () => { $('scenesPanel').classList.add('open'); renderScenesPanel(); },
+      close: () => $('scenesPanel').classList.remove('open'),
+    });
+    state.workspaceUI.registerPanel({
+      id: 'panel_beats', key: 'beats', type: 'beat_trail', label: 'Beats',
+      element: $('beatTrail'), handle: $('beatTrail').querySelector('.beat-trail-head'),
+      visibilityTarget: $('beatTrail'), visibleClass: 'open',
+      isOpen: () => state.beatTrail && state.beatTrail.isOpen(),
+      open: () => state.beatTrail && state.beatTrail.open(),
+      close: () => state.beatTrail && state.beatTrail.close(),
+    });
+    state.workspaceUI.registerPanel({
+      id: 'panel_partner', key: 'partner', type: 'partner_panel', label: 'Partner',
+      element: $('drawer').querySelector('.chat-panel'), handle: $('drawer').querySelector('.chat-tabs'),
+      visibilityTarget: $('drawer'), visibleClass: 'open',
+      isOpen: () => state.drawer && state.drawer.isOpen(),
+      open: () => state.drawer && state.drawer.open('agent'),
+      close: () => state.drawer && state.drawer.close(),
+    });
+    await state.workspaceUI.init();
+
     $('drawerHandle').addEventListener('click', () => {
       if (state.drawer.isOpen()) state.drawer.close();
       else state.drawer.open('agent');
     });
-    // ≥1024px the drawer docks right: shrink the stage instead of overlaying.
-    state.drawer.on('open', () => { document.body.classList.add('drawer-open'); resize(); });
+    // Mobile keeps the legacy overlay drawer. Desktop Partner placement is
+    // owned by the persistent workspace object instead of shrinking the art.
+    state.drawer.on('open', () => {
+      document.body.classList.toggle('drawer-open', !(state.workspaceUI && state.workspaceUI.isDesktop()));
+      resize();
+    });
     state.drawer.on('close', () => { document.body.classList.remove('drawer-open'); resize(); });
-    // desktop: the companion docks open by default — the artboard owns the layout
-    if (window.matchMedia('(min-width: 1024px)').matches) state.drawer.open('agent');
 
     updateTitle();
     updateHint();
@@ -639,6 +687,7 @@
         closeSheet();
         $('penpop').classList.remove('open');
         $('layersPanel').classList.remove('open');
+        $('scenesPanel').classList.remove('open');
         if (state.beatTrail) state.beatTrail.close();
         if (state.drawer) state.drawer.close();
       }
@@ -938,6 +987,27 @@
       return;
     }
     scheduleShotSave('undo');
+  }
+
+  /* --------------------------------------------------------- scenes panel */
+
+  function renderScenesPanel() {
+    const wrap = $('sceneRows');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const shots = state.board && Array.isArray(state.board.shots) ? state.board.shots : [];
+    for (const shot of shots) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'workspace-scene-row' + (state.shot && state.shot.id === shot.id ? ' active' : '');
+      const id = document.createElement('strong'); id.textContent = shot.id;
+      const copy = document.createElement('span');
+      const beat = shot.beat || 'untitled scene'; copy.textContent = beat.length > 58 ? beat.slice(0, 57) + '…' : beat;
+      const lane = document.createElement('small'); lane.textContent = String(shot.lane || '').replace('_', ' ');
+      row.append(id, copy, lane);
+      row.addEventListener('click', () => openShot(shot.id));
+      wrap.appendChild(row);
+    }
   }
 
   /* -------------------------------------------------------- layers panel */

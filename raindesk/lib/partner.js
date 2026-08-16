@@ -182,6 +182,16 @@ function compactContext(summary, extra) {
     nearbyNotes: Array.isArray(extra && extra.nearbyNotes)
       ? extra.nearbyNotes.slice(-12).map((n) => text(n, 700)).filter(Boolean)
       : [],
+    workspace: isObject(extra && extra.workspace) ? {
+      viewport: isObject(extra.workspace.viewport) ? extra.workspace.viewport : null,
+      objects: Array.isArray(extra.workspace.objects) ? extra.workspace.objects.slice(0, 32).map((obj) => ({
+        id: text(obj && obj.id, 128), type: text(obj && obj.type, 128),
+        entityRef: obj && obj.entityRef || null, x: Number(obj && obj.x) || 0, y: Number(obj && obj.y) || 0,
+        width: Number(obj && obj.width) || 0, height: Number(obj && obj.height) || 0,
+        dock: text(obj && obj.dock, 32) || null, visible: obj ? obj.visible !== false : false,
+        collapsed: Boolean(obj && obj.collapsed),
+      })).filter((obj) => obj.id) : [],
+    } : null,
   };
 
   // Always emit valid JSON. When context is too large, remove complete
@@ -194,7 +204,8 @@ function compactContext(summary, extra) {
     context.direction.activeAnnotations,
     context.direction.activeBeats,
     context.direction.openQuestions,
-  ];
+    context.workspace && context.workspace.objects,
+  ].filter(Boolean);
   let guard = 0;
   while (raw.length > MAX_CONTEXT_CHARS && guard++ < 128) {
     const bucket = buckets.find((arr) => Array.isArray(arr) && arr.length > 1);
