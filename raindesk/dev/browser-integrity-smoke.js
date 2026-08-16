@@ -105,19 +105,33 @@ async function documentState(cdp) {
 }
 
 async function drawStroke(cdp, dx = 0) {
-  return value(cdp, `(async()=>{
+  // Use the CDP input domain rather than dispatchEvent(new PointerEvent(...)).
+  // Synthetic DOM PointerEvents are not registered as active pointers by
+  // Chromium, so app.js setPointerCapture(pointerId) correctly rejects them.
+  // CDP mouse input exercises the same native pointer path as a real artist.
+  const raw = await value(cdp, `(()=>{
     const c=document.getElementById('canvas');
     const r=c.getBoundingClientRect();
-    const x=r.left+r.width*0.42+${Number(dx)};
-    const y=r.top+r.height*0.42;
-    const fire=(type,cx,cy,buttons)=>c.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:41,pointerType:'mouse',isPrimary:true,buttons,clientX:cx,clientY:cy}));
-    fire('pointerdown',x,y,1);
-    fire('pointermove',x+24,y+12,1);
-    fire('pointermove',x+48,y+22,1);
-    fire('pointerup',x+48,y+22,0);
-    await new Promise(r=>setTimeout(r,1100));
-    return true;
+    return JSON.stringify({
+      x:r.left+r.width*0.42+${Number(dx)},
+      y:r.top+r.height*0.42
+    });
   })()`);
+  const { x, y } = JSON.parse(raw);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1,
+  });
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: x + 24, y: y + 12, button: 'left', buttons: 1,
+  });
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: x + 48, y: y + 22, button: 'left', buttons: 1,
+  });
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: x + 48, y: y + 22, button: 'left', buttons: 0, clickCount: 1,
+  });
+  await timeout(1300);
 }
 
 async function main() {
