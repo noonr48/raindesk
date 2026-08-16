@@ -25,28 +25,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: chatgpt/direction-partner-v2
+          fetch-depth: 0
 
-      - name: Repair partner route transfer encoding if needed
+      - name: Reconstruct tested partner server if transfer was damaged
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('server.js')
-          data = p.read_bytes()
-          marker = b"throw new HttpError(429, 'partner is already thinking"
-          if marker in data:
-              start = data.index(marker)
-              end = data.find(b"\n", start)
-              if end == -1:
-                  end = len(data)
-              line = b"      throw new HttpError(429, 'partner is already thinking with you - one moment');"
-              data = data[:start] + line + data[end:]
-              p.write_bytes(data)
-          PY
-          if ! git diff --quiet -- server.js; then
+          if ! node --check server.js >/dev/null 2>&1; then
+            git show fb668ccb0f838dac90a3af68febc64c544fc3e6a:raindesk/server.js > server.js
+            patch -p0 < dev/server-partner.patch
+            node --check server.js
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add server.js
-            git commit -m "raindesk: repair partner route encoding"
+            git commit -m "raindesk: restore tested partner server integration"
             git push origin HEAD:chatgpt/direction-partner-v2
           fi
 
