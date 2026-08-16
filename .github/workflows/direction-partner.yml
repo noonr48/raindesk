@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -28,32 +28,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Promote tested camera and movement slice
-        run: |
-          set -euo pipefail
-          if ! grep -q 'function setShotAnchor' raindesk/lib/direction.js; then
-            cd raindesk
-            patch -p1 < dev/next-slice-1.patch
-            patch -p1 < dev/next-slice-2.patch
-            patch -p1 < dev/next-slice-3.patch
-            patch -p1 < dev/next-slice-4.patch
-            npm test
-            cd ..
-
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add raindesk/lib/direction.js raindesk/lib/partner.js raindesk/lib/workflow-router.js \
-              raindesk/lib/tests/direction.test.js raindesk/lib/tests/partner.test.js raindesk/lib/tests/routes.test.js \
-              raindesk/server.js raindesk/public/js/api.js raindesk/public/js/app.js raindesk/public/js/chat.js \
-              raindesk/public/js/direction.js raindesk/tests/frontend/api.test.js \
-              raindesk/tests/frontend/direction.test.js raindesk/tests/frontend/direction-ui.test.js
-            git rm raindesk/dev/next-slice-1.patch raindesk/dev/next-slice-2.patch \
-              raindesk/dev/next-slice-3.patch raindesk/dev/next-slice-4.patch
-            git commit -m "raindesk: anchor camera direction and harden Partner movement capture"
-            git push origin HEAD:chatgpt/direction-partner-v2
-          fi
-
-      - name: Syntax check Partner and direction integration
+      - name: Syntax check Partner + direction integration
         working-directory: raindesk
         run: |
           node --check server.js
