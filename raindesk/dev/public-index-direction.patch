@@ -1,0 +1,15 @@
+--- public/index.html
++++ public/index.html
+@@ -33,0 +34 @@
++    <button class="tool" data-tool="direction" title="draw direction"><span>&#8605;</span><small>DIRECT</small></button>
+@@ -53,0 +55,8 @@
++  <!-- direction pen caption: appears at the end of a drawn camera/action arrow -->
++  <div id="directionCaption" class="direction-caption" aria-hidden="true">
++    <input id="directionCaptionInput" type="text" maxlength="500"
++           placeholder="what does this movement / camera do?" autocomplete="off">
++    <button id="directionCaptionSave" type="button">tell partner</button>
++    <button id="directionCaptionCancel" class="direction-caption-cancel" type="button" aria-label="cancel">&times;</button>
++  </div>
++
+@@ -95,0 +105 @@
++<script src="js/direction.js"></script>
