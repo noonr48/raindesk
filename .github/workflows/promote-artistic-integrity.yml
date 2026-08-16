@@ -35,11 +35,13 @@ jobs:
           echo '0191d75a5e8a6235df6769f6c8741b776a1573e8f8bc488f1d818d140b4dcd98  /tmp/artistic-integrity.patch' | sha256sum -c -
 
       - name: Apply exact hardened source diff
-        working-directory: raindesk
         run: |
           set -euo pipefail
-          git apply --check /tmp/artistic-integrity.patch
-          git apply /tmp/artistic-integrity.patch
+          git apply --check --directory=raindesk /tmp/artistic-integrity.patch
+          git apply --directory=raindesk /tmp/artistic-integrity.patch
+          test -f raindesk/lib/blobs.js
+          test -f raindesk/lib/shot-documents.js
+          test -f raindesk/ARTISTIC_STATE_INTEGRITY.md
 
       - name: Syntax check hardened substrate
         working-directory: raindesk
