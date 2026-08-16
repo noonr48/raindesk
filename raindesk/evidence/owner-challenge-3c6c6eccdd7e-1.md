@@ -85,6 +85,10 @@ plus the git SHA at the time:
   `file-inspection-test_run-1f509286921fbe25`
 - round-13 close certification @ 93c2487 (44/44, exit 0): receipt
   `file-inspection-test_run-46f90fe8102aebcc`
+- round-15 close certification @ 4e6d0e8 (44/44, exit 0): receipt
+  `file-inspection-test_run-9a5b66b7fb97a752`
+- round-16 close certification @ 3fcc5f3 (44/44, exit 0): receipt
+  `file-inspection-test_run-a826d29c531290b7`
 
 ## Wave-cycle termination trigger (round-7/8/9 corrections)
 
