@@ -92,3 +92,16 @@ test('fresh scope with matching revision and canonical selection passes', () => 
   }) } };
   assert.equal(handoff.sameScope(scoped, root, doc), true);
 });
+
+test('absent live-scope seam or legacy request without frozen form degrades to the shot check', () => {
+  const doc = { documentElement: { dataset: { raindeskShotId: 'S01' } }, getElementById() { return null; } };
+  const scoped = request({ scope: {
+    shotId: 'S01', artRevisionId: 'rev_1', selectionFingerprint: 'a'.repeat(24),
+    selectionStable: handoff.stableSelection({ type: 'lasso', points: [{ x: 10, y: 10 }] }),
+  } });
+  // Seam entirely absent (scripts failed / pre-upgrade page): still same shot → pass, never crash.
+  assert.equal(handoff.sameScope(scoped, {}, doc), true);
+  // Legacy request carrying only the fingerprint (no selectionStable): shot check governs.
+  const legacy = request({ scope: { shotId: 'S01', artRevisionId: null, selectionFingerprint: 'a'.repeat(24) } });
+  assert.equal(handoff.sameScope(legacy, {}, doc), true);
+});
