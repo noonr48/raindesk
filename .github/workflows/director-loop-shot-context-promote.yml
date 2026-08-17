@@ -1,0 +1,55 @@
+name: Promote Director Loop Shot Context Fix
+
+on:
+  push:
+    branches:
+      - 'chatgpt/director-loop-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reconstruct exact locally tested patch
+        run: |
+          set -euo pipefail
+          cp raindesk/dev/.director-loop-shot-context/patch.b64 /tmp/patch.b64
+          echo 'ded637539ff0bd498885b6a32be340049b5515fa8545ae52b629a3edb336fca4  /tmp/patch.b64' | sha256sum -c -
+          base64 -d /tmp/patch.b64 > /tmp/patch.bz2
+          echo '22d22745be1fa532aa4aa47d7c73bea76253c6a363ed144128f0625d52cbf42a  /tmp/patch.bz2' | sha256sum -c -
+          bzip2 -dc /tmp/patch.bz2 > /tmp/patch.diff
+          echo 'ec71b54c9ef8bb1b93bfb90fb7bc041cba3a32e92d9fc3258aba64f4b2ebad7b  /tmp/patch.diff' | sha256sum -c -
+          git apply --check /tmp/patch.diff
+
+      - name: Apply and validate shot-context fix
+        run: |
+          set -euo pipefail
+          git apply /tmp/patch.diff
+          grep -q 'body.append(list, detail)' raindesk/public/js/beats.js
+          grep -q 'root.append(head, frames, constraints, body, form, stuck)' raindesk/public/js/beats.js
+          node --check raindesk/public/js/beats.js
+          cd raindesk
+          npm test
+
+      - name: Promote source and remove transport scaffolding
+        run: |
+          set -euo pipefail
+          rm -rf raindesk/dev/.director-loop-shot-context
+          rm -f .github/workflows/director-loop-shot-context-promote.yml
+          git config user.name 'Raindesk CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && { echo 'nothing to promote'; exit 1; }
+          git commit -m 'raindesk: keep shot context visible while directing beats'
+          git push origin HEAD:chatgpt/director-loop-v1
