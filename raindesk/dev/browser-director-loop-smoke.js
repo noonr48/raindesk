@@ -92,6 +92,8 @@ async function clickSelector(cdp, selector) {
   const r = await box(cdp, selector);
   if (!r || r.width <= 0 || r.height <= 0) throw new Error(`click target missing: ${selector}`);
   const x = r.x + r.width / 2; const y = r.y + r.height / 2;
+  const exposed = await value(cdp, `(()=>{const target=document.querySelector(${JSON.stringify(selector)});if(!target)return false;const hit=document.elementFromPoint(${x},${y});return !!hit&&(hit===target||target.contains(hit))})()`);
+  if (!exposed) throw new Error(`click target is clipped or obscured: ${selector}`);
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
@@ -191,10 +193,10 @@ async function main() {
     await clickSelector(cdp, '#beatTrail .shot-frame-strip [data-frame-slot="start"] .shot-frame-set');
     await waitFor(cdp, `(async()=>{const s=await (await fetch('/api/direction/shot/${shot.id}/spec')).json();return !!(s.shot&&s.shot.startFrame&&s.shot.startFrame.referenceId)})()`, 'shot start frame', 15000);
     await waitFor(cdp, `!document.getElementById('beatTrail').classList.contains('busy')`, 'shot frame UI ready');
-    await clickSelector(cdp, `#beatTrail .beat-row[data-beat-id="${firstBeatId}"] .beat-pose-strip [data-frame-slot="start"] .shot-frame-set`);
+    await clickSelector(cdp, `#beatTrail .active-beat-detail[data-beat-id="${firstBeatId}"] [data-frame-slot="start"] .shot-frame-set`);
     await waitFor(cdp, `(async()=>{const s=await (await fetch('/api/direction/shot/${shot.id}/spec')).json();const b=(s.beats||[]).find(x=>x.id===${JSON.stringify(firstBeatId)});return !!(b&&b.startFrame&&b.startFrame.referenceId)})()`, 'beat start pose', 15000);
     await waitFor(cdp, `!document.getElementById('beatTrail').classList.contains('busy')`, 'beat start UI ready');
-    await clickSelector(cdp, `#beatTrail .beat-row[data-beat-id="${firstBeatId}"] .beat-pose-strip [data-frame-slot="end"] .shot-frame-set`);
+    await clickSelector(cdp, `#beatTrail .active-beat-detail[data-beat-id="${firstBeatId}"] [data-frame-slot="end"] .shot-frame-set`);
     await waitFor(cdp, `(async()=>{const s=await (await fetch('/api/direction/shot/${shot.id}/spec')).json();const b=(s.beats||[]).find(x=>x.id===${JSON.stringify(firstBeatId)});return !!(b&&b.endFrame&&b.endFrame.referenceId)})()`, 'beat end pose', 15000);
     await waitFor(cdp, `!document.getElementById('beatTrail').classList.contains('busy')`, 'beat end UI ready');
 

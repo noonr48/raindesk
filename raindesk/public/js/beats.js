@@ -83,7 +83,9 @@
     const onCaptureFrame = typeof opts.onCaptureFrame === 'function' ? opts.onCaptureFrame : null;
     let shot = opts.shot || null;
     let open = false;
-    let busy = false;
+    let captureBusy = false;
+    let partnerQueue = Promise.resolve();
+    let partnerPending = 0;
     let scope = null;
     let lastSpec = null;
     let activeBeatId = null;
@@ -105,6 +107,10 @@
     const frames = el('div', 'shot-frame-strip');
     const constraints = el('div', 'shot-constraints');
     const list = el('div', 'beat-trail-list');
+    const detail = el('div', 'active-beat-detail');
+    detail.setAttribute('aria-hidden', 'true');
+    const body = el('div', 'beat-trail-body');
+    body.append(frames, constraints, list, detail);
 
     const form = el('div', 'beat-trail-form');
     const input = el('input', 'beat-trail-input');
@@ -117,7 +123,7 @@
     const stuck = el('button', 'beat-trail-stuck', 'help me find the next beat');
     stuck.type = 'button';
 
-    root.append(head, frames, constraints, list, form, stuck);
+    root.append(head, body, form, stuck);
 
     function isOpen() { return open; }
     function setOpen(next) {
@@ -181,10 +187,10 @@
       set.type = 'button';
       set.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!onCaptureFrame || busy) return;
-        busy = true; root.classList.add('busy');
+        if (!onCaptureFrame || captureBusy) return;
+        captureBusy = true; root.classList.add('busy');
         try { await onCaptureFrame(slot, context); await refresh(); }
-        finally { busy = false; root.classList.remove('busy'); }
+        finally { captureBusy = false; root.classList.remove('busy'); }
       });
       footer.appendChild(set);
       if (frame) {
@@ -276,13 +282,28 @@
       return pose;
     }
 
+    function renderActiveBeatDetail(beat) {
+      detail.innerHTML = '';
+      detail.classList.toggle('open', Boolean(beat));
+      detail.setAttribute('aria-hidden', beat ? 'false' : 'true');
+      if (!beat) {
+        delete detail.dataset.beatId;
+        return;
+      }
+      detail.dataset.beatId = beat.id;
+      const heading = el('div', 'active-beat-detail-head');
+      heading.appendChild(el('span', 'active-beat-kicker', `beat ${beat.order || ''}`.trim()));
+      heading.appendChild(el('span', 'active-beat-summary', beatLine(beat)));
+      detail.append(heading, renderBeatPoseRefs(beat));
+    }
+
     async function editBeat(beat, value) {
       const v = text(value);
       if (!v || !api.updateDirectionBeat) return;
       await api.updateDirectionBeat(beat.id, { rawDirection: v, description: v });
       editingBeatId = null;
       await refresh();
-      await askPartner(v, { precreatedBeatId: beat.id, activeBeatId: beat.id });
+      askPartner(v, { precreatedBeatId: beat.id, activeBeatId: beat.id }).catch(() => {});
     }
 
     async function moveBeat(beat, delta) {
@@ -339,7 +360,6 @@
         editor.append(field, save, cancel); row.appendChild(editor);
         requestAnimationFrame(() => field.focus());
       }
-      if (beat.id === activeBeatId) row.appendChild(renderBeatPoseRefs(beat));
       return row;
     }
 
@@ -352,20 +372,32 @@
       if (activeBeatId && !beats.some((b) => b.id === activeBeatId)) activeBeatId = null;
       if (!beats.length) {
         list.appendChild(el('div', 'beat-trail-empty', 'nothing pinned yet — rough is enough.'));
+        renderActiveBeatDetail(null);
         notifyActive(null);
         return;
       }
       beats.forEach((beat, i) => list.appendChild(renderBeatRow(beat, i, beats)));
-      notifyActive(activeBeat());
+      const selected = activeBeat();
+      renderActiveBeatDetail(selected);
+      notifyActive(selected);
       if (activeBeatId) {
         requestAnimationFrame(() => {
           const row = list.querySelector(`.beat-row[data-beat-id="${activeBeatId}"]`);
           if (!row) return;
-          const top = row.offsetTop;
-          const bottom = top + row.offsetHeight;
-          if (top < list.scrollTop) list.scrollTop = top;
-          else if (bottom > list.scrollTop + list.clientHeight) {
-            list.scrollTop = Math.max(0, bottom - list.clientHeight);
+          // Row + selected-detail are contiguous creative material. If they fit
+          // together, keep both visible. If not, prioritise the compact Beat
+          // row and its edit/reorder controls; the pose detail scrolls below.
+          const top = list.offsetTop + row.offsetTop;
+          const bottom = detail.classList.contains('open')
+            ? detail.offsetTop + detail.offsetHeight
+            : top + row.offsetHeight;
+          if (bottom - top <= body.clientHeight) {
+            if (top < body.scrollTop) body.scrollTop = top;
+            else if (bottom > body.scrollTop + body.clientHeight) {
+              body.scrollTop = Math.max(0, bottom - body.clientHeight);
+            }
+          } else {
+            body.scrollTop = Math.max(0, top);
           }
         });
       }
@@ -403,22 +435,32 @@
       };
     }
 
-    async function askPartner(message, contextExtra = {}) {
-      if (busy || !api || !api.partnerTurn || !shot) return null;
-      busy = true; root.classList.add('busy');
-      try {
-        const response = await api.partnerTurn(message, { context: { ...context(), ...contextExtra } });
-        if (response && onPartnerMessage) onPartnerMessage(response.message, response.nextMoves || []);
-        await refresh();
-        return response;
-      } finally {
-        busy = false; root.classList.remove('busy');
-      }
+    function askPartner(message, contextExtra = {}) {
+      if (!api || !api.partnerTurn || !shot) return Promise.resolve(null);
+      const run = async () => {
+        partnerPending += 1;
+        root.classList.add('partner-busy');
+        try {
+          const response = await api.partnerTurn(message, { context: { ...context(), ...contextExtra } });
+          if (response && onPartnerMessage) onPartnerMessage(response.message, response.nextMoves || []);
+          await refresh();
+          return response;
+        } finally {
+          partnerPending = Math.max(0, partnerPending - 1);
+          if (!partnerPending) root.classList.remove('partner-busy');
+        }
+      };
+      // Enrichment is serialized so several raw-first edits can happen without
+      // racing Partner writes. The artist never waits for this queue to keep
+      // sketching, reordering, or pinning visual direction.
+      const task = partnerQueue.then(run, run);
+      partnerQueue = task.catch(() => null);
+      return task;
     }
 
     async function submit() {
       const v = input.value.trim();
-      if (!v || busy) return;
+      if (!v || captureBusy) return;
       input.value = '';
       let pinned = null;
       try {
@@ -440,7 +482,7 @@
         list.appendChild(el('div', 'beat-trail-empty', 'could not pin that beat yet — your words are still here.'));
         return;
       }
-      await askPartner(v, pinned ? { precreatedBeatId: pinned.id, activeBeatId: pinned.id } : {});
+      askPartner(v, pinned ? { precreatedBeatId: pinned.id, activeBeatId: pinned.id } : {}).catch(() => {});
     }
 
     closeBtn.addEventListener('click', closePanel);

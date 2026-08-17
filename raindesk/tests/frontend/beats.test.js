@@ -40,6 +40,8 @@ test('Beat Trail is loaded as a minimizable creative panel with start/end and ke
   assert.match(beatsSource, /constraint-row/);
   assert.match(beatsSource, /onCaptureFrame/);
   assert.match(beatsSource, /setDirectionShotConstraints/);
+  assert.match(beatsSource, /active-beat-detail/);
+  assert.doesNotMatch(beatsSource, /row\.appendChild\(renderBeatPoseRefs\(beat\)\)/);
 });
 
 test('ordinary Partner turns can refresh a visible Beat Trail', () => {
@@ -53,7 +55,7 @@ test('Beat Trail pins raw artist wording before Partner enrichment and reuses th
   const submitEnd = beatsSource.indexOf('closeBtn.addEventListener', submitAt);
   const submit = beatsSource.slice(submitAt, submitEnd);
   const pinAt = submit.indexOf('await api.createDirectionBeat');
-  const partnerAt = submit.indexOf('await askPartner(v');
+  const partnerAt = submit.indexOf('askPartner(v');
   assert.ok(pinAt !== -1 && partnerAt !== -1 && pinAt < partnerAt, 'raw beat save happens before Partner call');
   assert.match(submit, /precreatedBeatId: pinned\.id/);
   assert.match(submit, /source: \{ kind: 'user_beat_trail' \}/);
@@ -65,4 +67,15 @@ test('Beat Trail editing is non-destructive by default and exposes active beat c
   assert.match(beatsSource, /activeBeatId:/);
   assert.match(beatsSource, /selectBeat/);
   assert.match(beatsSource, /reorderDirectionBeats/);
+});
+
+
+test('Partner enrichment stays in the background instead of freezing Beat edits', () => {
+  const submitAt = beatsSource.indexOf('async function submit()');
+  const submitEnd = beatsSource.indexOf('closeBtn.addEventListener', submitAt);
+  const submit = beatsSource.slice(submitAt, submitEnd);
+  assert.doesNotMatch(submit, /await askPartner\(v/);
+  assert.match(submit, /askPartner\(v[\s\S]*?\.catch\(\(\) => \{\}\)/);
+  assert.match(beatsSource, /partnerQueue = Promise\.resolve\(\)/);
+  assert.match(beatsSource, /partner-busy/);
 });
