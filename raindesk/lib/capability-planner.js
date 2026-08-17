@@ -10,6 +10,7 @@
 
 const core = require('./capability-planner-core');
 const adapters = require('./production-adapters');
+const { summarizeStatus } = core;
 
 const ADAPTER_DRIVEN = new Set([
   'local_image_take', 'camera_previs', 'pose_blocking', 'performance_motion',
@@ -67,16 +68,6 @@ function capabilityState(capabilityId, registry = adapters.defaultRegistry) {
   };
 }
 
-function summarizeStatus(stages) {
-  if (!stages.length) return 'idle';
-  const productive = stages.filter((stage) => stage.phase === 'produce');
-  if (stages.some((stage) => stage.state === 'needs_evidence')) return 'needs_evidence';
-  if (productive.some((stage) => stage.state === 'unavailable')) return 'blocked';
-  if (productive.length && productive.every((stage) => stage.state === 'planning_only')) return 'planning_only';
-  if (stages.some((stage) => ['planning_only', 'unavailable'].includes(stage.state))) return 'partial';
-  return 'ready';
-}
-
 function rebuildPlan(basePlan, registry) {
   const mode = basePlan.permissionMode;
   const stages = basePlan.stages.map((stage) => {
@@ -111,10 +102,16 @@ function rebuildPlan(basePlan, registry) {
   });
   const available = stages.filter((stage) => ['operational', 'review_take'].includes(stage.state));
   if (mode === 'watch' && available.length) blockedBy.push({ kind: 'permission', key: 'watch', stageId: null });
+  const hasExecutableProductionStage = stages.some((stage) => stage.phase === 'produce'
+    && ['operational', 'review_take'].includes(stage.state)
+    && ['proposal', 'auto'].includes(stage.disposition));
+  const preparatoryOnly = stages.length > 0 && !stages.some((stage) => stage.phase === 'produce');
 
   return {
     ...basePlan,
     status: summarizeStatus(stages),
+    hasExecutableProductionStage,
+    preparatoryOnly,
     canProceed: mode !== 'watch' && available.length > 0,
     reviewRequired: stages.some((stage) => stage.reviewRequired),
     stages,

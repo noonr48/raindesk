@@ -176,8 +176,8 @@ function summarizeStatus(stages) {
   const productive = stages.filter((stage) => stage.phase === 'produce');
   if (stages.some((stage) => stage.state === 'needs_evidence')) return 'needs_evidence';
   if (productive.some((stage) => stage.state === 'unavailable')) return 'blocked';
-  if (productive.length && productive.every((stage) => stage.state === 'planning_only')) return 'planning_only';
-  if (stages.some((stage) => ['planning_only', 'unavailable'].includes(stage.state))) return 'partial';
+  if (productive.some((stage) => ['operational', 'review_take'].includes(stage.state))) return 'ready';
+  if (productive.length) return 'planning_only';
   return 'ready';
 }
 
@@ -200,10 +200,16 @@ function plan(workflows, { context = {}, permissionMode = 'suggest' } = {}) {
   });
   const available = stages.filter((stage) => ['operational', 'review_take'].includes(stage.state));
   if (mode === 'watch' && available.length) blockedBy.push({ kind: 'permission', key: 'watch', stageId: null });
+  const hasExecutableProductionStage = stages.some((stage) => stage.phase === 'produce'
+    && ['operational', 'review_take'].includes(stage.state)
+    && ['proposal', 'auto'].includes(stage.disposition));
+  const preparatoryOnly = stages.length > 0 && !stages.some((stage) => stage.phase === 'produce');
   return {
     schemaVersion: 1,
     recipeIds,
     status: summarizeStatus(stages),
+    hasExecutableProductionStage,
+    preparatoryOnly,
     permissionMode: mode,
     canProceed: mode !== 'watch' && available.length > 0,
     reviewRequired: stages.some((stage) => stage.reviewRequired),
@@ -220,5 +226,5 @@ function getCapability(id) { return CAPABILITIES[id] || null; }
 
 module.exports = {
   CAPABILITIES, RECIPE_STAGES, AUTO_SAFE, hasEditRegion, evidence, normalizeWorkflows,
-  permissionDisposition, plan, getCapability,
+  permissionDisposition, plan, getCapability, summarizeStatus,
 };
