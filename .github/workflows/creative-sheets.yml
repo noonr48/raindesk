@@ -33,6 +33,7 @@ jobs:
           node --check public/js/workspace-ui.js
           node --check public/js/api.js
           node --check public/js/creative-desk.js
+          node --check public/js/creative-sheets-gestures.js
           node --check dev/browser-integrity-smoke.js
           node --check dev/browser-workspace-smoke.js
           node --check dev/browser-director-loop-smoke.js
