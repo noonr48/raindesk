@@ -6,10 +6,12 @@
  * Converts stable creative workflow recipes into an honest execution contract.
  * Recipes describe what the artist means; capabilities describe what Raindesk
  * can actually perform today. A recipe name never implies that a production
- * adapter exists.
+ * adapter exists, and capability availability never overrides Partner
+ * permission mode.
  */
 
 const CAPABILITY_STATES = new Set(['operational', 'review_take', 'planning_only', 'unavailable']);
+const AUTO_SAFE = new Set(['direction_packet', 'workspace_arrangement', 'reference_evidence', 'identity_authority']);
 
 const CAPABILITIES = Object.freeze({
   direction_packet: {
@@ -50,91 +52,53 @@ const CAPABILITIES = Object.freeze({
   },
   camera_previs: {
     id: 'camera_previs', state: 'planning_only', phase: 'produce',
-    label: 'Camera previs',
-    purpose: 'Turn camera start/path/landing direction into spatial or temporal camera output.',
-    executor: null, reversible: true,
+    label: 'Camera previs', purpose: 'Turn camera start/path/landing direction into spatial or temporal camera output.', executor: null, reversible: true,
   },
   pose_blocking: {
     id: 'pose_blocking', state: 'planning_only', phase: 'produce',
-    label: 'Pose/blocking adapter',
-    purpose: 'Produce controllable body poses and transitions from movement intent.',
-    executor: null, reversible: true,
+    label: 'Pose/blocking adapter', purpose: 'Produce controllable body poses and transitions from movement intent.', executor: null, reversible: true,
   },
   performance_motion: {
     id: 'performance_motion', state: 'planning_only', phase: 'produce',
-    label: 'Performance motion adapter',
-    purpose: 'Produce controlled face/gaze/mouth/breath acting from performance intent.',
-    executor: null, reversible: true,
+    label: 'Performance motion adapter', purpose: 'Produce controlled face/gaze/mouth/breath acting from performance intent.', executor: null, reversible: true,
   },
   contact_geometry: {
     id: 'contact_geometry', state: 'planning_only', phase: 'produce',
-    label: 'Contact/action geometry adapter',
-    purpose: 'Resolve explicit inter-body contact, side consistency and mechanics.',
-    executor: null, reversible: true,
+    label: 'Contact/action geometry adapter', purpose: 'Resolve explicit inter-body contact, side consistency and mechanics.', executor: null, reversible: true,
   },
   multi_actor_blocking: {
     id: 'multi_actor_blocking', state: 'planning_only', phase: 'produce',
-    label: 'Multi-actor blocking adapter',
-    purpose: 'Coordinate several actors through shared space, collision and occlusion.',
-    executor: null, reversible: true,
+    label: 'Multi-actor blocking adapter', purpose: 'Coordinate several actors through shared space, collision and occlusion.', executor: null, reversible: true,
   },
   environment_build: {
     id: 'environment_build', state: 'planning_only', phase: 'produce',
-    label: 'Environment construction adapter',
-    purpose: 'Produce controllable location/layout/atmosphere changes beyond a bounded image edit.',
-    executor: null, reversible: true,
+    label: 'Environment construction adapter', purpose: 'Produce controllable location/layout/atmosphere changes beyond a bounded image edit.', executor: null, reversible: true,
   },
   comic_layout: {
     id: 'comic_layout', state: 'planning_only', phase: 'produce',
-    label: 'Comic/page layout adapter',
-    purpose: 'Project accepted beats into panel geometry and reading order.',
-    executor: null, reversible: true,
+    label: 'Comic/page layout adapter', purpose: 'Project accepted beats into panel geometry and reading order.', executor: null, reversible: true,
   },
   animatic_timing: {
     id: 'animatic_timing', state: 'planning_only', phase: 'produce',
-    label: 'Animatic/timing adapter',
-    purpose: 'Assemble accepted beats into durations, cuts, holds and sound anchors.',
-    executor: null, reversible: true,
+    label: 'Animatic/timing adapter', purpose: 'Assemble accepted beats into durations, cuts, holds and sound anchors.', executor: null, reversible: true,
   },
   visual_inspection: {
     id: 'visual_inspection', state: 'unavailable', phase: 'inspect',
-    label: 'Automatic visual inspection',
-    purpose: 'Inspect raw reference pixels and derive visual facts.',
-    executor: null, reversible: true,
+    label: 'Automatic visual inspection', purpose: 'Inspect raw reference pixels and derive visual facts.', executor: null, reversible: true,
   },
 });
 
 const RECIPE_STAGES = Object.freeze({
-  creative_kickstart: [
-    ['direction_packet'], ['workspace_arrangement'],
-  ],
-  local_refinement: [
-    ['direction_packet'], ['local_image_take', ['shot_scope', 'edit_region']], ['take_lifecycle'],
-  ],
-  camera_reveal: [
-    ['direction_packet'], ['camera_previs', ['shot_scope', 'start_frame', 'end_frame']],
-  ],
-  character_motion: [
-    ['direction_packet'], ['identity_authority'], ['pose_blocking', ['shot_scope']],
-  ],
-  performance_closeup: [
-    ['direction_packet'], ['identity_authority'], ['performance_motion', ['shot_scope']],
-  ],
-  contact_action: [
-    ['direction_packet'], ['identity_authority'], ['contact_geometry', ['shot_scope', 'multiple_characters']], ['pose_blocking', ['shot_scope']],
-  ],
-  choreography: [
-    ['direction_packet'], ['identity_authority'], ['multi_actor_blocking', ['shot_scope', 'multiple_characters']],
-  ],
-  environment_establish: [
-    ['direction_packet'], ['reference_evidence'], ['environment_build', ['shot_scope']],
-  ],
-  comic_pacing: [
-    ['direction_packet'], ['comic_layout'],
-  ],
-  animatic_pass: [
-    ['direction_packet'], ['animatic_timing', ['shot_scope']],
-  ],
+  creative_kickstart: [['direction_packet'], ['workspace_arrangement']],
+  local_refinement: [['direction_packet'], ['local_image_take', ['shot_scope', 'edit_region']], ['take_lifecycle']],
+  camera_reveal: [['direction_packet'], ['camera_previs', ['shot_scope', 'start_frame', 'end_frame']]],
+  character_motion: [['direction_packet'], ['identity_authority'], ['pose_blocking', ['shot_scope']]],
+  performance_closeup: [['direction_packet'], ['identity_authority'], ['performance_motion', ['shot_scope']]],
+  contact_action: [['direction_packet'], ['identity_authority'], ['contact_geometry', ['shot_scope', 'multiple_characters']], ['pose_blocking', ['shot_scope']]],
+  choreography: [['direction_packet'], ['identity_authority'], ['multi_actor_blocking', ['shot_scope', 'multiple_characters']]],
+  environment_establish: [['direction_packet'], ['reference_evidence'], ['environment_build', ['shot_scope']]],
+  comic_pacing: [['direction_packet'], ['comic_layout']],
+  animatic_pass: [['direction_packet'], ['animatic_timing', ['shot_scope']]],
 });
 
 function isObject(value) { return Boolean(value && typeof value === 'object' && !Array.isArray(value)); }
@@ -172,7 +136,16 @@ function normalizeWorkflows(workflows) {
   return out;
 }
 
-function stageFor(recipeId, spec, facts, index) {
+function permissionDisposition(capability, stageState, permissionMode) {
+  if (['planning_only', 'unavailable', 'needs_evidence'].includes(stageState)) return 'blocked';
+  if (permissionMode === 'watch') return 'advisory';
+  if (capability.state === 'review_take') return 'proposal';
+  if (permissionMode === 'suggest') return 'proposal';
+  if (permissionMode === 'act' && AUTO_SAFE.has(capability.id)) return 'auto';
+  return 'proposal';
+}
+
+function stageFor(recipeId, spec, facts, index, permissionMode) {
   const capabilityId = spec[0];
   const requiredEvidence = Array.isArray(spec[1]) ? spec[1] : [];
   const capability = CAPABILITIES[capabilityId];
@@ -194,6 +167,7 @@ function stageFor(recipeId, spec, facts, index) {
     requiredEvidence,
     missingEvidence,
     reviewRequired: capability.state === 'review_take',
+    disposition: permissionDisposition(capability, state, permissionMode),
   };
 }
 
@@ -208,12 +182,13 @@ function summarizeStatus(stages) {
 }
 
 function plan(workflows, { context = {}, permissionMode = 'suggest' } = {}) {
+  const mode = ['watch', 'suggest', 'act'].includes(permissionMode) ? permissionMode : 'suggest';
   const recipeIds = normalizeWorkflows(workflows);
   const facts = evidence(context);
   const stages = [];
   for (const recipeId of recipeIds) {
     RECIPE_STAGES[recipeId].forEach((spec, index) => {
-      const stage = stageFor(recipeId, spec, facts, index);
+      const stage = stageFor(recipeId, spec, facts, index, mode);
       if (stage) stages.push(stage);
     });
   }
@@ -223,17 +198,20 @@ function plan(workflows, { context = {}, permissionMode = 'suggest' } = {}) {
     if (stage.state === 'unavailable') items.push({ kind: 'capability', key: stage.capabilityId, stageId: stage.id });
     return items;
   });
-  const nextExecutable = stages.filter((stage) => ['operational', 'review_take'].includes(stage.state));
+  const available = stages.filter((stage) => ['operational', 'review_take'].includes(stage.state));
+  if (mode === 'watch' && available.length) blockedBy.push({ kind: 'permission', key: 'watch', stageId: null });
   return {
     schemaVersion: 1,
     recipeIds,
     status: summarizeStatus(stages),
-    permissionMode: ['watch', 'suggest', 'act'].includes(permissionMode) ? permissionMode : 'suggest',
-    canProceed: nextExecutable.length > 0,
+    permissionMode: mode,
+    canProceed: mode !== 'watch' && available.length > 0,
     reviewRequired: stages.some((stage) => stage.reviewRequired),
     evidence: facts,
     stages,
-    nextExecutable: nextExecutable.map((stage) => stage.id),
+    availableStages: available.map((stage) => stage.id),
+    autoExecutable: stages.filter((stage) => stage.disposition === 'auto').map((stage) => stage.id),
+    reviewableStages: stages.filter((stage) => stage.capabilityState === 'review_take' && stage.state !== 'needs_evidence').map((stage) => stage.id),
     blockedBy,
   };
 }
@@ -241,5 +219,6 @@ function plan(workflows, { context = {}, permissionMode = 'suggest' } = {}) {
 function getCapability(id) { return CAPABILITIES[id] || null; }
 
 module.exports = {
-  CAPABILITIES, RECIPE_STAGES, hasEditRegion, evidence, normalizeWorkflows, plan, getCapability,
+  CAPABILITIES, RECIPE_STAGES, AUTO_SAFE, hasEditRegion, evidence, normalizeWorkflows,
+  permissionDisposition, plan, getCapability,
 };
