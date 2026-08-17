@@ -18,6 +18,9 @@
   function sameExceptMedia(a, b) {
     return JSON.stringify(withoutMedia(a)) === JSON.stringify(withoutMedia(b));
   }
+  function sameMedia(a, b) {
+    return JSON.stringify((a && a.media) || []) === JSON.stringify((b && b.media) || []);
+  }
   function mergeCurrentMedia(incoming, current) {
     const merged = clone(incoming || {});
     merged.media = clone(current && current.media || []);
@@ -48,6 +51,11 @@
         // Retry only when the server advanced *solely* in media[]. Any title,
         // stroke, kind, canvas or meta change remains a real conflict.
         if (!current || !base || !sameExceptMedia(base.document, current.document)) throw error;
+        // Auto-merge is only safe for a caller that did not itself change
+        // media[] relative to its base (for example a stroke/title edit). A
+        // stale reference-card edit remains a real conflict instead of losing
+        // the user's intended media transform.
+        if (!sameMedia(document, base.document)) throw error;
         const merged = mergeCurrentMedia(document, current.document);
         const result = await original(sheetId, merged, {
           ...options,
@@ -61,5 +69,5 @@
     return api;
   }
 
-  return { clone, withoutMedia, sameExceptMedia, mergeCurrentMedia, install };
+  return { clone, withoutMedia, sameExceptMedia, sameMedia, mergeCurrentMedia, install };
 });
