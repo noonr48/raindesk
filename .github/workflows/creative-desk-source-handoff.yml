@@ -1,0 +1,26 @@
+name: Creative Desk Source Handoff
+
+on:
+  push:
+    branches:
+      - 'chatgpt/creative-desk-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package exact source checkout
+        run: |
+          set -euo pipefail
+          tar -czf /tmp/raindesk-creative-desk-source.tar.gz --exclude='.git' .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-creative-desk-source
+          path: /tmp/raindesk-creative-desk-source.tar.gz
+          retention-days: 1
