@@ -25,7 +25,7 @@ This gives the artist two simultaneous scales without losing either:
 - **Beat list:** sequence, reorder, rewrite, branch/remove;
 - **Selected Beat detail:** start/end pose references and the visual directing material for the moment currently being refined.
 
-The Beat body is one scrollable creative surface, so a resized floating Beat window remains usable without hiding reorder controls or pose references in clipped DOM.
+Shot-level context is deliberately stable while micro-beats are explored: shot start/landing references and `keep` / `change` boundaries remain fixed above the Beat viewport. Only the Beat list and selected-Beat detail scroll. Focusing a micro-action therefore cannot push the shot's framing or preservation contract out of reach.
 
 ## Non-blocking Partner enrichment
 
@@ -62,7 +62,7 @@ When DIRECT is attached to a selected beat, the Partner enriches that beat rathe
 
 ## Validation
 
-The selected-Beat refactor is promoted only after the full **128-test** Node suite passes.
+The selected-Beat and shot-context refactors are promoted only after the full **128-test** Node suite passes.
 
 The permanent read-only Director Loop workflow then runs:
 
