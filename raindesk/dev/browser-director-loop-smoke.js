@@ -190,10 +190,13 @@ async function main() {
     // Pin actual art references: shot start and the beat's start/end poses.
     await clickSelector(cdp, '#beatTrail .shot-frame-strip [data-frame-slot="start"] .shot-frame-set');
     await waitFor(cdp, `(async()=>{const s=await (await fetch('/api/direction/shot/${shot.id}/spec')).json();return !!(s.shot&&s.shot.startFrame&&s.shot.startFrame.referenceId)})()`, 'shot start frame', 15000);
+    await waitFor(cdp, `!document.getElementById('beatTrail').classList.contains('busy')`, 'shot frame UI ready');
     await clickSelector(cdp, `#beatTrail .beat-row[data-beat-id="${firstBeatId}"] .beat-pose-strip [data-frame-slot="start"] .shot-frame-set`);
     await waitFor(cdp, `(async()=>{const s=await (await fetch('/api/direction/shot/${shot.id}/spec')).json();const b=(s.beats||[]).find(x=>x.id===${JSON.stringify(firstBeatId)});return !!(b&&b.startFrame&&b.startFrame.referenceId)})()`, 'beat start pose', 15000);
+    await waitFor(cdp, `!document.getElementById('beatTrail').classList.contains('busy')`, 'beat start UI ready');
     await clickSelector(cdp, `#beatTrail .beat-row[data-beat-id="${firstBeatId}"] .beat-pose-strip [data-frame-slot="end"] .shot-frame-set`);
     await waitFor(cdp, `(async()=>{const s=await (await fetch('/api/direction/shot/${shot.id}/spec')).json();const b=(s.beats||[]).find(x=>x.id===${JSON.stringify(firstBeatId)});return !!(b&&b.endFrame&&b.endFrame.referenceId)})()`, 'beat end pose', 15000);
+    await waitFor(cdp, `!document.getElementById('beatTrail').classList.contains('busy')`, 'beat end UI ready');
 
     // Natural keep/change boundaries.
     await inputText(cdp, '#beatTrail .constraint-row.preserve .constraint-input', 'face identity', true);
@@ -232,9 +235,9 @@ async function main() {
     // Leave a useful acceptance view behind: reopen Beats if needed and focus
     // the annotated beat so CI screenshots show the actual directing surface.
     const beatsOpen = Boolean(await value(cdp, `document.getElementById('beatTrail').classList.contains('open')`));
-    if (!beatsOpen) await clickSelector(cdp, '[data-tool=\"beats\"]');
+    if (!beatsOpen) await clickSelector(cdp, '[data-tool="beats"]');
     await waitFor(cdp, `document.getElementById('beatTrail').classList.contains('open')`, 'Beat Trail acceptance view');
-    await clickSelector(cdp, `#beatTrail .beat-row[data-beat-id=\"${firstBeatId}\"]`);
+    await clickSelector(cdp, `#beatTrail .beat-row[data-beat-id="${firstBeatId}"]`);
     await delay(350);
     if (process.env.DIRECTOR_LOOP_SCREENSHOT) {
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
