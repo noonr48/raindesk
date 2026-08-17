@@ -110,7 +110,7 @@
     const detail = el('div', 'active-beat-detail');
     detail.setAttribute('aria-hidden', 'true');
     const body = el('div', 'beat-trail-body');
-    body.append(frames, constraints, list, detail);
+    body.append(list, detail);
 
     const form = el('div', 'beat-trail-form');
     const input = el('input', 'beat-trail-input');
@@ -123,7 +123,7 @@
     const stuck = el('button', 'beat-trail-stuck', 'help me find the next beat');
     stuck.type = 'button';
 
-    root.append(head, body, form, stuck);
+    root.append(head, frames, constraints, body, form, stuck);
 
     function isOpen() { return open; }
     function setOpen(next) {
