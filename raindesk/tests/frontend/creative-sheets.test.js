@@ -7,6 +7,8 @@ const desk = require('../../public/js/creative-desk');
 
 const source = fs.readFileSync(path.join(__dirname, '../../public/js/creative-desk.js'), 'utf8');
 const css = fs.readFileSync(path.join(__dirname, '../../public/css/creative-desk.css'), 'utf8');
+const index = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
+const gestures = fs.readFileSync(path.join(__dirname, '../../public/js/creative-sheets-gestures.js'), 'utf8');
 
 test('Creative Sheets use sheet: entity refs without replacing stable world object ids', () => {
   assert.equal(desk.sheetIdFromEntityRef('sheet:sheet_character_primary'), 'sheet_character_primary');
@@ -32,6 +34,15 @@ test('Creative Desk exposes raw drawing, dynamic plus tab, rename/undo and tab r
   assert.match(source, /catch \(_e\) \{ \/\* keep the desk usable offline/);
   assert.match(css, /\.creative-sheet-canvas/);
   assert.match(css, /desk-panning \.creative-sheet-canvas/);
+});
+
+test('sheet title pointer ownership is captured before header/world dragging without cancelling dblclick', () => {
+  assert.match(index, /creative-desk\.js[\s\S]*creative-sheets-gestures\.js[\s\S]*app\.js/);
+  assert.match(gestures, /document\.addEventListener\('pointerdown'/);
+  assert.match(gestures, /\.creative-sheet-title/);
+  assert.match(gestures, /event\.stopPropagation\(\)/);
+  assert.doesNotMatch(gestures, /preventDefault/);
+  assert.match(source, /title\.addEventListener\('dblclick'/);
 });
 
 test('Partner Creative Desk context is bounded to sheet summary rather than stroke point payloads', () => {
