@@ -339,6 +339,14 @@ function captureInterpretedBeat(directionImpl, envelope, message, context, inten
   const selection = isObject(context.selection) ? context.selection : {};
   const rawDirection = text(selection.rawText || message, 12000);
   if (!rawDirection) return null;
+
+  // Duplicate-turn dedupe (handover §9D adjacent): an identical resent message
+  // mints a fresh intent (new intentId), so the intentId check above misses it.
+  // Reuse a prior partner-captured beat in this shot with identical raw wording
+  // instead of stacking a duplicate provisional beat.
+  const prior = (graph.beats || []).find((beat) => beat && beat.shotId === context.shotId &&
+    beat.rawDirection === rawDirection && beat.source && beat.source.kind === 'partner_capture');
+  if (prior) return { beatId: prior.id, shotId: prior.shotId, existing: true, deduped: true };
   const movement = isObject(interpretation.movement) ? interpretation.movement : {};
   const camera = isObject(interpretation.camera) ? interpretation.camera : {};
   const preserve = Array.isArray(interpretation.preserve) ? interpretation.preserve : [];

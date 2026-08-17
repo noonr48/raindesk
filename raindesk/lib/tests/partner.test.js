@@ -407,3 +407,22 @@ test('beat-scoped DIRECT annotation enriches the selected beat instead of creati
   assert.equal(spec.beats[0].rawDirection, 'she catches his wrist', 'raw Beat Trail wording stays authoritative');
   assert.equal(spec.beats[0].events[0].kind, 'contact');
 });
+
+test('an identical resent message reuses the prior captured beat instead of stacking a duplicate', async () => {
+  const scene = direction.createScene({ id: 'dupe_scene', title: 'Resend' });
+  direction.createShot({ id: 'dupe_shot', sceneId: scene.id, title: 'Resend shot' });
+  const fakeAgent = { async chat() { return JSON.stringify({
+    message: 'read it again the same way',
+    interpretation: { kind: 'movement', movement: { actor: 'A', action: 'shakes fist', bodyPart: 'fist' }, confidence: 0.8 },
+    nextMoves: [], workflowHints: ['character_motion'], boardActions: [],
+  }); } };
+  const partner = partnerModule.createPartner({ agentImpl: fakeAgent, directionImpl: direction });
+  const input = { message: 'the character shakes his fist before the fight', context: { sceneId: 'dupe_scene', shotId: 'dupe_shot' } };
+  const first = await partner.turn(input);
+  const second = await partner.turn(input);
+  assert.equal(second.captured.beatId, first.captured.beatId);
+  assert.equal(second.captured.existing, true);
+  assert.equal(second.captured.deduped, true);
+  const spec = direction.shotSpec('dupe_shot');
+  assert.equal(spec.beats.length, 1, 'resent identical direction must not stack a duplicate provisional beat');
+});
