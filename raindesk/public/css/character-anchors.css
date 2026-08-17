@@ -1,0 +1,4 @@
+.character-anchor-lock, .character-shot-bind { font-size:13px !important; }
+.character-anchor-lock.locked { color:#9b4f39 !important; background:rgba(224,120,86,.12) !important; }
+.character-anchor-lock.stale { outline:1px dashed rgba(224,120,86,.62); }
+.character-shot-bind.bound { color:#345d68 !important; background:rgba(111,151,163,.16) !important; }
