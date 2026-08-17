@@ -285,6 +285,26 @@
   function getWorkspace() { return GET('/api/workspace'); }
   function upsertWorkspaceObject(object) { return POST('/api/workspace/object', object); }
   function setWorkspaceViewport(viewport) { return POST('/api/workspace/viewport', viewport); }
+
+  /* ---------------------------------------------------- creative sheets */
+
+  function listSheets() { return GET('/api/sheets'); }
+  function createSheet(input = {}) { return POST('/api/sheet', input); }
+  function getSheet(id) { return GET(`/api/sheet/${encodeURIComponent(id)}`); }
+  function saveSheet(id, document, { baseRevisionId = null, reason = 'edit sheet' } = {}) {
+    return POST(`/api/sheet/${encodeURIComponent(id)}`, {
+      document, baseRevisionId: baseRevisionId || undefined, reason,
+    });
+  }
+  function getSheetRevisions(id) { return GET(`/api/sheet/${encodeURIComponent(id)}/revisions`); }
+  function getSheetRevision(id, revisionId) {
+    return GET(`/api/sheet/${encodeURIComponent(id)}/revision/${encodeURIComponent(revisionId)}`);
+  }
+  function restoreSheetRevision(id, revisionId, { baseRevisionId = null, reason = 'restore sheet revision' } = {}) {
+    return POST(`/api/sheet/${encodeURIComponent(id)}/revision/${encodeURIComponent(revisionId)}/restore`, {
+      baseRevisionId: baseRevisionId || undefined, reason,
+    });
+  }
   function listPartnerActions(limit = 100) { return GET(`/api/partner/actions?limit=${encodeURIComponent(limit)}`); }
   function mutatePartnerAction(id, verb) {
     if (!['approve', 'execute', 'accept', 'revert', 'cancel'].includes(verb)) {
@@ -354,7 +374,9 @@
     submitGen, pollGen, cancelGen, listJobs, listTakes, acceptTake, rejectTake, reopenTake, fetchImageRGBA,
     getShot, uploadLayer, shotImageUrl,
     uploadBlob, blobUrl, getShotDocument, saveShotDocument, getShotRevisions, getShotRevision, restoreShotRevision,
-    getWorkspace, upsertWorkspaceObject, setWorkspaceViewport, listPartnerActions, mutatePartnerAction,
+    getWorkspace, upsertWorkspaceObject, setWorkspaceViewport,
+    listSheets, createSheet, getSheet, saveSheet, getSheetRevisions, getSheetRevision, restoreSheetRevision,
+    listPartnerActions, mutatePartnerAction,
     sendChat,
     DEMO_BOARD,
   };

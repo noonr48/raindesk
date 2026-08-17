@@ -706,3 +706,55 @@ test('Director Loop routes update/reorder beats, keep/change constraints, and be
     assert.deepEqual(spec.shot.change, ['right hand']);
   });
 });
+
+test('creative sheet API creates, revisions, lists and restores vector documents', async (t) => {
+  await withServer(t, { comfyImpl: fakeComfy(), agentImpl: agentEcho }, async (base) => {
+    let res = await fetch(`${base}/api/sheet`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheetId: 'route_sheet', title: 'Roof gestures', kind: 'sketch' }),
+    });
+    assert.equal(res.status, 201);
+    const created = (await res.json()).revision;
+    assert.equal(created.document.title, 'Roof gestures');
+    assert.equal(created.document.strokes.length, 0);
+
+    res = await fetch(`${base}/api/sheet/route_sheet`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseRevisionId: created.revisionId,
+        reason: 'draw first line',
+        document: {
+          ...created.document,
+          strokes: [{ id: 's1', color: '#222', width: 2, points: [{ x: 10, y: 20 }, { x: 40, y: 60 }] }],
+        },
+      }),
+    });
+    assert.equal(res.status, 200);
+    const saved = (await res.json()).revision;
+    assert.equal(saved.document.strokes.length, 1);
+
+    res = await fetch(`${base}/api/sheets`);
+    const listed = await res.json();
+    assert.ok(listed.sheets.some((s) => s.sheetId === 'route_sheet' && s.strokeCount === 1));
+
+    res = await fetch(`${base}/api/sheet/route_sheet/revisions`);
+    const history = await res.json();
+    assert.equal(history.currentRevisionId, saved.revisionId);
+    assert.equal(history.revisions.length, 2);
+
+    res = await fetch(`${base}/api/sheet/route_sheet/revision/${created.revisionId}/restore`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseRevisionId: saved.revisionId }),
+    });
+    assert.equal(res.status, 200);
+    const restored = (await res.json()).revision;
+    assert.equal(restored.document.strokes.length, 0);
+    assert.equal(restored.restoredFromRevisionId, created.revisionId);
+
+    res = await fetch(`${base}/api/sheet/route_sheet`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseRevisionId: saved.revisionId, document: saved.document }),
+    });
+    assert.equal(res.status, 409, 'stale sheet writes are rejected');
+  });
+});
