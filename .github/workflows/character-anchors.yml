@@ -1,0 +1,85 @@
+name: Character Anchors v1
+
+on:
+  push:
+    branches:
+      - 'chatgpt/character-anchors-v1'
+  pull_request:
+    branches:
+      - 'chatgpt/reference-board-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  character-anchors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check Character Anchors surface
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check server.js
+          node --check lib/characters.js
+          node --check lib/partner.js
+          node --check public/js/api.js
+          node --check public/js/app.js
+          node --check public/js/shot-context.js
+          node --check public/js/reference-board.js
+          node --check public/js/character-anchors.js
+          node --check dev/browser-character-anchors-smoke.js
+      - name: Run complete Raindesk suite
+        working-directory: raindesk
+        run: npm test
+      - name: Exercise full creative stack + Character Anchors in Chromium
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          DATA_DIR="$(mktemp -d)"
+          RAINDESK_DATA_DIR="$DATA_DIR" RAINDESK_HOST=127.0.0.1 node server.js >/tmp/raindesk-character-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$DATA_DIR"' EXIT
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:17600/ >/dev/null; then break; fi
+            sleep 0.1
+          done
+          curl -fsS http://127.0.0.1:17600/ >/dev/null
+          BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
+          test -n "$BROWSER"
+          export CHROME_BIN="$BROWSER"
+          mkdir -p artifacts/character-anchors
+          run_smoke() {
+            local label="$1"; shift
+            local out="/tmp/${label}.stdout" err="/tmp/${label}.stderr" attempt rc
+            for attempt in 1 2 3; do
+              : >"$out"; : >"$err"
+              set +e; "$@" >"$out" 2>"$err"; rc=$?; set -e
+              if [ "$rc" -eq 0 ]; then cat "$err" >&2; cat "$out"; return 0; fi
+              cat "$err" >&2
+              if grep -q 'Chromium DevTools did not start' "$err" && [ "$attempt" -lt 3 ]; then sleep $((attempt * 2)); continue; fi
+              cat "$out"; return "$rc"
+            done
+          }
+          run_smoke editability node dev/browser-integrity-smoke.js http://127.0.0.1:17600/ | tee artifacts/character-anchors/browser-editability.json
+          run_smoke workspace node dev/browser-workspace-smoke.js http://127.0.0.1:17600/ | tee artifacts/character-anchors/browser-workspace.json
+          run_smoke director-loop node dev/browser-director-loop-smoke.js http://127.0.0.1:17600/ | tee artifacts/character-anchors/browser-director-loop.json
+          run_smoke creative-desk node dev/browser-creative-desk-smoke.js http://127.0.0.1:17600/ | tee artifacts/character-anchors/browser-creative-desk.json
+          run_smoke creative-sheets node dev/browser-creative-sheets-smoke.js http://127.0.0.1:17600/ | tee artifacts/character-anchors/browser-creative-sheets.json
+          run_smoke reference-board node dev/browser-reference-board-smoke.js http://127.0.0.1:17600/ | tee artifacts/character-anchors/browser-reference-board.json
+          export CHARACTER_ANCHORS_SCREENSHOT="$(pwd)/artifacts/character-anchors/character-anchors-1440x900.png"
+          run_smoke character-anchors node dev/browser-character-anchors-smoke.js http://127.0.0.1:17600/ | tee artifacts/character-anchors/browser-character-anchors.json
+          unset CHARACTER_ANCHORS_SCREENSHOT
+      - name: Upload Character Anchors evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-character-anchors-v1
+          path: raindesk/artifacts/character-anchors/*
+          if-no-files-found: warn
+          retention-days: 7
