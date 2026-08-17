@@ -27,7 +27,7 @@ This gives the artist two simultaneous scales without losing either:
 
 Shot-level context is deliberately stable while micro-beats are explored: shot start/landing references and `keep` / `change` boundaries remain fixed above the Beat viewport. Only the Beat list and selected-Beat detail scroll. Focusing a micro-action therefore cannot push the shot's framing or preservation contract out of reach.
 
-Selected-Beat visibility is established synchronously in the same render that publishes a newly added or selected Beat. There is no one-frame state where a Beat exists but its reorder/edit controls are still clipped waiting for a later paint.
+Selected-Beat visibility is established synchronously in the same render that publishes a newly added or selected Beat. The reveal logic measures the row and Beat viewport with `getBoundingClientRect()` and adjusts only the Beat scroll surface. It no longer composes `offsetTop` values from potentially different offset-parent chains. The compact Beat row and its reorder/edit controls are the visibility contract; pose detail may continue below when the floating panel is deliberately small.
 
 ## Non-blocking Partner enrichment
 
@@ -64,7 +64,7 @@ When DIRECT is attached to a selected beat, the Partner enriches that beat rathe
 
 ## Validation
 
-The selected-Beat and shot-context refactors are promoted only after the full **128-test** Node suite passes.
+The selected-Beat, shot-context, and geometry-reveal refactors are promoted only after the full **129-test** Node suite passes.
 
 The permanent read-only Director Loop workflow then runs:
 
