@@ -16,6 +16,25 @@ The artist can stay in visual/directing language:
 
 Raw wording and raw marks remain authoritative. Partner enrichment is provisional structure around them.
 
+## Selected Beat interaction
+
+Beat rows remain compact paper-strip-like ordering controls. Selecting a Beat no longer expands that row into a tall technical editor. Its start/end pose references appear in a stable selected-Beat detail strip beneath the list.
+
+This gives the artist two simultaneous scales without losing either:
+
+- **Beat list:** sequence, reorder, rewrite, branch/remove;
+- **Selected Beat detail:** start/end pose references and the visual directing material for the moment currently being refined.
+
+The Beat body is one scrollable creative surface, so a resized floating Beat window remains usable without hiding reorder controls or pose references in clipped DOM.
+
+## Non-blocking Partner enrichment
+
+Saving a Beat is raw-first and returns immediately. The Partner does not own a global Beat Trail busy state while it interprets that direction.
+
+Partner enrichments run through a serialized background queue. The artist can keep reordering Beats, pinning visual references, drawing DIRECT marks, or adding another idea while the Partner thinks. Frame capture has its own short-lived busy state because it creates immutable artwork provenance; Partner interpretation does not block those local directing actions.
+
+This is an explicit product rule: **the Partner can think in the background, but it must not freeze the desk.**
+
 ## Semantic shape
 
 Direction schema v3 adds:
@@ -43,11 +62,15 @@ When DIRECT is attached to a selected beat, the Partner enriches that beat rathe
 
 ## Validation
 
-The permanent read-only Director Loop workflow runs:
+The selected-Beat refactor is promoted only after the full **128-test** Node suite passes.
 
-- the full Node suite;
+The permanent read-only Director Loop workflow then runs:
+
+- the full Node suite again;
 - editable-artwork Chromium smoke;
 - floating-workspace Chromium smoke;
-- Director Loop native Chromium smoke covering beat creation, beat-scoped DIRECT, frame capture, constraints, reorder, and full reload persistence.
+- Director Loop native Chromium smoke covering raw Beat creation, beat-scoped DIRECT, shot/beat frame capture, keep/change constraints, reorder, and full reload persistence.
+
+The native click harness also rejects controls whose click point is clipped or covered by another floating surface, so a DOM element merely existing is not sufficient acceptance evidence.
 
 This slice intentionally does not yet connect a high-control image/motion adapter. It proves the creative directing language before production models are allowed underneath it.
