@@ -56,3 +56,39 @@ test('surface hand-off scripts load after ChatDrawer and before app boot', () =>
   assert.ok(chat >= 0 && handoffScript > chat && app > handoffScript);
   assert.match(html, /css\/surface-handoff\.css/);
 });
+
+test('stale art revision fails the hand-off scope check', () => {
+  const doc = { documentElement: { dataset: { raindeskShotId: 'S01' } }, getElementById() { return null; } };
+  const scoped = request({ scope: {
+    shotId: 'S01', artRevisionId: 'rev_1', selectionFingerprint: 'a'.repeat(24),
+    selectionStable: handoff.stableSelection({ type: 'lasso', points: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 60 }] }),
+  } });
+  const root = { RaindeskSurfaceState: { liveScope: () => ({ artRevisionId: 'rev_9', selection: null }) } };
+  assert.equal(handoff.sameScope(scoped, root, doc), false);
+});
+
+test('stale selection fails the hand-off scope check structurally', () => {
+  const doc = { documentElement: { dataset: { raindeskShotId: 'S01' } }, getElementById() { return null; } };
+  const scoped = request({ scope: {
+    shotId: 'S01', artRevisionId: 'rev_1', selectionFingerprint: 'a'.repeat(24),
+    selectionStable: handoff.stableSelection({ type: 'lasso', points: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 60 }] }),
+  } });
+  const root = { RaindeskSurfaceState: { liveScope: () => ({
+    artRevisionId: 'rev_1',
+    selection: { type: 'lasso', points: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 61, y: 60 }] },
+  }) } };
+  assert.equal(handoff.sameScope(scoped, root, doc), false);
+});
+
+test('fresh scope with matching revision and canonical selection passes', () => {
+  const doc = { documentElement: { dataset: { raindeskShotId: 'S01' } }, getElementById() { return null; } };
+  const scoped = request({ scope: {
+    shotId: 'S01', artRevisionId: 'rev_1', selectionFingerprint: 'a'.repeat(24),
+    selectionStable: handoff.stableSelection({ type: 'lasso', points: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 60 }] }),
+  } });
+  const root = { RaindeskSurfaceState: { liveScope: () => ({
+    artRevisionId: 'rev_1',
+    selection: { type: 'lasso', points: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 60 }] },
+  }) } };
+  assert.equal(handoff.sameScope(scoped, root, doc), true);
+});
