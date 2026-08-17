@@ -1,0 +1,119 @@
+name: Creative Sheets v1
+
+on:
+  push:
+    branches:
+      - 'chatgpt/creative-sheets-v1'
+  pull_request:
+    branches:
+      - 'chatgpt/creative-desk-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  creative-sheets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check Creative Sheets surface
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check server.js
+          node --check lib/workspace.js
+          node --check lib/sheet-documents.js
+          node --check public/js/app.js
+          node --check public/js/workspace-ui.js
+          node --check public/js/api.js
+          node --check public/js/creative-desk.js
+          node --check dev/browser-integrity-smoke.js
+          node --check dev/browser-workspace-smoke.js
+          node --check dev/browser-director-loop-smoke.js
+          node --check dev/browser-creative-desk-smoke.js
+          node --check dev/browser-creative-sheets-smoke.js
+
+      - name: Run complete Raindesk suite
+        working-directory: raindesk
+        run: npm test
+
+      - name: Exercise artwork, directing, world desk, and revisioned sheets in Chromium
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          DATA_DIR="$(mktemp -d)"
+          RAINDESK_DATA_DIR="$DATA_DIR" RAINDESK_HOST=127.0.0.1 node server.js >/tmp/raindesk-sheets-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$DATA_DIR"' EXIT
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:17600/ >/dev/null; then break; fi
+            sleep 0.1
+          done
+          curl -fsS http://127.0.0.1:17600/ >/dev/null
+          BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
+          test -n "$BROWSER"
+          export CHROME_BIN="$BROWSER"
+          mkdir -p artifacts/creative-sheets
+
+          # Retry only the known hosted-runner Chromium/CDP cold-start failure.
+          # Any application or interaction assertion remains an immediate failure.
+          run_smoke() {
+            local label="$1"; shift
+            local out="/tmp/${label}.stdout"
+            local err="/tmp/${label}.stderr"
+            local attempt rc
+            for attempt in 1 2 3; do
+              : >"$out"; : >"$err"
+              set +e
+              "$@" >"$out" 2>"$err"
+              rc=$?
+              set -e
+              if [ "$rc" -eq 0 ]; then
+                cat "$err" >&2
+                cat "$out"
+                return 0
+              fi
+              cat "$err" >&2
+              if grep -q 'Chromium DevTools did not start' "$err" && [ "$attempt" -lt 3 ]; then
+                echo "Chromium startup failed for ${label}; retrying (${attempt}/3)" >&2
+                sleep $((attempt * 2))
+                continue
+              fi
+              cat "$out"
+              return "$rc"
+            done
+          }
+
+          run_smoke editability node dev/browser-integrity-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/creative-sheets/browser-editability.json
+          run_smoke workspace node dev/browser-workspace-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/creative-sheets/browser-workspace.json
+          run_smoke director-loop node dev/browser-director-loop-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/creative-sheets/browser-director-loop.json
+          run_smoke creative-desk node dev/browser-creative-desk-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/creative-sheets/browser-creative-desk.json
+          export CREATIVE_SHEETS_SCREENSHOT="$(pwd)/artifacts/creative-sheets/creative-sheets-1440x900.png"
+          run_smoke creative-sheets node dev/browser-creative-sheets-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/creative-sheets/browser-creative-sheets.json
+          unset CREATIVE_SHEETS_SCREENSHOT
+
+          "$BROWSER" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --hide-scrollbars \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=3000 \
+            --window-size=390,844 \
+            --screenshot="$(pwd)/artifacts/creative-sheets/mobile-390x844.png" \
+            http://127.0.0.1:17600/
+
+      - name: Upload Creative Sheets evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-creative-sheets-v1
+          path: raindesk/artifacts/creative-sheets/*
+          if-no-files-found: warn
+          retention-days: 7
