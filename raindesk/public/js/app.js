@@ -107,6 +107,19 @@
 
   /* --------------------------------------------------------- init/board */
 
+  // Single seam exposing the live creative scope for surface hand-off
+  // staleness checks (criterion 6). Reads partnerCanvasContext — one source of
+  // truth, no parallel state. Installed on window for surface-handoff.js.
+  window.RaindeskSurfaceState = {
+    liveScope: function () {
+      const ctx = partnerCanvasContext();
+      return {
+        artRevisionId: ctx.artRevisionId || null,
+        selection: ctx.selection || null,
+      };
+    },
+  };
+
   function shotLabel() { return state.shot ? state.shot.id : 'shot'; }
 
   function partnerCanvasContext() {

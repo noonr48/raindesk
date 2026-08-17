@@ -68,6 +68,9 @@ function scopeSnapshot(context = {}) {
     shotId: text(context.shotId || context.legacyShotId, 96) || null,
     artRevisionId: text(context.artRevisionId, 160) || null,
     selectionFingerprint: selectionFingerprint(context.selection),
+    // Frozen canonical form (bounded: ≤96 points, 1/1000 rounding). The surface
+    // mirrors stableSelection and compares structurally — no crypto either side.
+    selectionStable: stableSelection(context.selection),
   });
 }
 

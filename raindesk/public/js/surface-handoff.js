@@ -39,6 +39,65 @@
     return !expected || !current ? false : expected === current;
   }
 
+  // Live-surface fingerprints: the request froze approval-time creative scope;
+  // preparing must refuse when the surface has since changed (criterion 6 —
+  // stale revision or selection fails closed instead of silently editing new state).
+  // The live values come from app.js's own partner context via a single seam:
+  // window.RaindeskSurfaceState.liveScope() (installed by app.js at boot) —
+  // never a parallel copy of app state here.
+  function liveScope(root) {
+    const seam = root && root.RaindeskSurfaceState;
+    if (!seam || typeof seam.liveScope !== 'function') return null;
+    try { return seam.liveScope(); } catch (_e) { return null; }
+  }
+
+  // Byte-parity mirror of the server's stableSelection (lib/adapter-invocations.js):
+  // identical field order (type, region, points, geometry) so frozen canonical
+  // forms compare structurally — JSON.stringify equality across both sides.
+  function stableSelection(selection) {
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection)) return null;
+    const out = { type: text(selection.type, 64) || 'selection' };
+    if (selection.region && typeof selection.region === 'object') {
+      const r = selection.region;
+      out.region = ['x', 'y', 'w', 'h', 'width', 'height'].reduce((acc, key) => {
+        if (Number.isFinite(Number(r[key]))) acc[key] = Math.round(Number(r[key]) * 1000) / 1000;
+        return acc;
+      }, {});
+    }
+    const points = Array.isArray(selection.lasso) ? selection.lasso : (Array.isArray(selection.points) ? selection.points : null);
+    if (points) {
+      out.points = points.slice(0, 96).map((point) => {
+        if (Array.isArray(point)) return point.slice(0, 2).map((value) => Math.round(Number(value) * 1000) / 1000);
+        if (point && typeof point === 'object') return {
+          x: Math.round(Number(point.x) * 1000) / 1000,
+          y: Math.round(Number(point.y) * 1000) / 1000,
+        };
+        return null;
+      }).filter(Boolean);
+    }
+    if (selection.geometry && typeof selection.geometry === 'object') out.geometry = selection.geometry;
+    return out;
+  }
+
+  // Structural comparison against the frozen canonical form (scope.selectionStable).
+  // No digests: plain http means no SubtleCrypto on the client, so hash equality
+  // across contexts is unprovable — comparing the bounded canonical form is exact.
+  function sameScope(request, root, document) {
+    if (!sameShot(request, document)) return false;
+    const scope = request && request.scope;
+    if (!scope) return false;
+    const expectedRevision = text(scope.artRevisionId, 160) || null;
+    const frozenSelection = scope.selectionStable && typeof scope.selectionStable === 'object'
+      ? scope.selectionStable : null;
+    const live = liveScope(root);
+    if (expectedRevision && live && live.artRevisionId && expectedRevision !== live.artRevisionId) return false;
+    if (frozenSelection && live && live.selection) {
+      const mirror = stableSelection(live.selection);
+      if (mirror && JSON.stringify(mirror) !== JSON.stringify(frozenSelection)) return false;
+    }
+    return true;
+  }
+
   function createElement(document, tag, cls, copy) {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -61,7 +120,7 @@
 
     function prepare(request, row) {
       if (!isSupportedRequest(request)) return false;
-      if (!sameShot(request, document)) {
+      if (!sameScope(request, root, document)) {
         row.classList.add('stale');
         row.innerHTML = '';
         row.appendChild(createElement(document, 'span', 'surface-handoff-copy', 'that request belongs to another shot — ask me again here'));
@@ -141,5 +200,5 @@
     return true;
   }
 
-  return { currentShotId, isSupportedRequest, sameShot, SurfaceHandoff, install };
+  return { currentShotId, isSupportedRequest, sameShot, sameScope, stableSelection, SurfaceHandoff, install };
 });

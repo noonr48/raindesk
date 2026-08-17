@@ -15,6 +15,7 @@ test('invocation scope snapshots shot, revision and exact selection identity', (
   assert.equal(scope.artRevisionId, 'rev_12');
   assert.match(scope.selectionFingerprint, /^[a-f0-9]{24}$/);
   assert.equal(scope.selectionFingerprint, invocations.scopeSnapshot(context).selectionFingerprint);
+  assert.deepEqual(scope.selectionStable, { type: 'lasso', points: [{ x: 10, y: 20 }, { x: 40, y: 20 }, { x: 40, y: 50 }] });
 });
 
 test('selection fingerprint changes when the lasso changes', () => {
