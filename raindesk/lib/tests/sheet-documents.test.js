@@ -9,7 +9,7 @@ process.env.RAINDESK_DATA_DIR = scratch;
 const sheets = require('../sheet-documents');
 
 function doc(id, strokes = [], title = 'Loose sketch') {
-  return { schemaVersion: 1, sheetId: id, title, kind: 'sketch', canvas: { width: 700, height: 900 }, strokes, meta: {} };
+  return { schemaVersion: 1, sheetId: id, title, kind: 'sketch', canvas: { width: 700, height: 900 }, media: [], strokes, meta: {} };
 }
 function stroke(id, x = 10) {
   return { id, color: '#333333', width: 2.4, points: [{ x, y: 20 }, { x: x + 25, y: 45 }] };
@@ -46,6 +46,22 @@ test('sheet title and vector state can advance together without rewriting histor
   assert.equal(next.document.title, 'Rooftop hand studies');
   assert.equal(sheets.readRevision('sheet_title', initial.revisionId).document.title, 'Loose sketch');
   assert.equal(sheets.history('sheet_title').revisions.length, 2);
+});
+
+
+test('reference media cards are revisioned with the sheet and summaries stay bounded', () => {
+  const initial = sheets.create({ sheetId: 'sheet_refs', title: 'Refs', kind: 'references' });
+  const document = { ...initial.document, media: [{
+    id: 'ref_1', kind: 'image', sha: 'a'.repeat(64), x: 30, y: 40, width: 280, height: 180, rotation: -4, opacity: 0.8, zIndex: 2, caption: 'roofline',
+  }] };
+  const saved = sheets.save('sheet_refs', document, { baseRevisionId: initial.revisionId, reason: 'add reference' });
+  assert.equal(saved.document.media.length, 1);
+  assert.equal(saved.document.media[0].sha, 'a'.repeat(64));
+  assert.equal(sheets.readRevision('sheet_refs', initial.revisionId).document.media.length, 0);
+  const listed = sheets.list().find((item) => item.sheetId === 'sheet_refs');
+  assert.equal(listed.mediaCount, 1);
+  assert.throws(() => sheets.save('sheet_refs', { ...saved.document, media: [{ kind: 'image', sha: 'bad' }] }, { baseRevisionId: saved.revisionId }), /bad blob sha/);
+  assert.throws(() => sheets.validateDocument('sheet_refs', { ...saved.document, media: [saved.document.media[0], { ...saved.document.media[0] }] }), /media ids must be unique/);
 });
 
 test('sheet validation rejects malformed and unbounded vector input', () => {
