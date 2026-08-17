@@ -1,0 +1,108 @@
+name: Promote Split Beat Viewport
+
+on:
+  push:
+    branches:
+      - 'chatgpt/director-loop-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Apply exact split-viewport transformation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          beats = Path('raindesk/public/js/beats.js')
+          s = beats.read_text()
+          pairs = [
+            ('const viewport = body.getBoundingClientRect();', 'const viewport = list.getBoundingClientRect();'),
+            ('body.scrollTop = Math.max(0, body.scrollTop - (topEdge - rect.top));', 'list.scrollTop = Math.max(0, list.scrollTop - (topEdge - rect.top));'),
+            ('body.scrollTop = Math.max(0, body.scrollTop + (rect.bottom - bottomEdge));', 'list.scrollTop = Math.max(0, list.scrollTop + (rect.bottom - bottomEdge));'),
+          ]
+          for old, new in pairs:
+            if s.count(old) != 1:
+              raise SystemExit(f'expected one beats.js block: {old!r}; found {s.count(old)}')
+            s = s.replace(old, new)
+          beats.write_text(s)
+
+          css = Path('raindesk/public/css/app.css')
+          s = css.read_text()
+          old = '.beat-trail-body { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; }\n.beat-trail-list { overflow:visible; padding:0 8px; }'
+          new = '''.beat-trail-body {\n  flex:1 1 auto; min-height:0; overflow:hidden; display:flex; flex-direction:column;\n}\n.beat-trail-list {\n  flex:1 1 72px; min-height:58px; overflow:auto; overscroll-behavior:contain; padding:0 8px;\n}'''
+          if s.count(old) != 1:
+            raise SystemExit(f'expected one Beat body CSS block, found {s.count(old)}')
+          s = s.replace(old, new)
+          old = '.active-beat-detail { display:none; padding:7px 8px 9px; border-top:1px solid rgba(243,234,216,.09); background:rgba(8,18,23,.20); }'
+          new = '.active-beat-detail { display:none; flex:0 0 auto; max-height:126px; overflow:auto; padding:7px 8px 9px; border-top:1px solid rgba(243,234,216,.09); background:rgba(8,18,23,.20); }'
+          if s.count(old) != 1:
+            raise SystemExit(f'expected one active detail CSS block, found {s.count(old)}')
+          css.write_text(s.replace(old, new))
+
+          access = Path('raindesk/public/css/workspace-accessibility.css')
+          s = access.read_text()
+          marker = 'body.workspace-desktop .beat-trail.workspace-floating-panel { min-height: 410px; }'
+          if marker not in s:
+            anchor = '  body.workspace-desktop .direction-caption { z-index: 1001; }\n'
+            if s.count(anchor) != 1:
+              raise SystemExit('workspace accessibility anchor missing')
+            insert = '''\n  /* Shot context, a compact Beat viewport, and selected pose detail all need\n   * a small guaranteed vertical budget. The panel remains resizable above\n   * this floor, but cannot be collapsed into an unusable strip. */\n  body.workspace-desktop .beat-trail.workspace-floating-panel { min-height: 410px; }\n'''
+            s = s.replace(anchor, anchor + insert)
+          access.write_text(s)
+
+          workspace = Path('raindesk/public/js/workspace-ui.js')
+          s = workspace.read_text()
+          old = "beats:   { id: 'panel_beats',   type: 'beat_trail',     x: 372,  y: 520, width: 350, height: 330, zIndex: 122, visible: false, collapsed: true },"
+          new = "beats:   { id: 'panel_beats',   type: 'beat_trail',     x: 372,  y: 420, width: 350, height: 430, zIndex: 122, visible: false, collapsed: true },"
+          if s.count(old) != 1:
+            raise SystemExit(f'expected one Beat workspace default, found {s.count(old)}')
+          workspace.write_text(s.replace(old, new))
+
+          test = Path('raindesk/tests/frontend/beats.test.js')
+          s = test.read_text()
+          old = '  assert.match(beatsSource, /body\\.getBoundingClientRect\\(\\)/);'
+          new = '  assert.match(beatsSource, /list\\.getBoundingClientRect\\(\\)/);'
+          if s.count(old) != 1:
+            raise SystemExit(f'expected one geometry test viewport assertion, found {s.count(old)}')
+          s = s.replace(old, new)
+          anchor = '  assert.match(beatsSource, /row\\.getBoundingClientRect\\(\\)/);\n'
+          if 'assert.match(beatsSource, /list\\.scrollTop/);' not in s:
+            if s.count(anchor) != 1:
+              raise SystemExit('geometry test row assertion missing')
+            s = s.replace(anchor, anchor + '  assert.match(beatsSource, /list\\.scrollTop/);\n')
+          test.write_text(s)
+          PY
+
+          grep -q 'const viewport = list.getBoundingClientRect()' raindesk/public/js/beats.js
+          grep -q 'beat-trail-list' raindesk/public/css/app.css
+          grep -q 'min-height: 410px' raindesk/public/css/workspace-accessibility.css
+          grep -q 'height: 430' raindesk/public/js/workspace-ui.js
+          node --check raindesk/public/js/beats.js
+          node --check raindesk/public/js/workspace-ui.js
+          cd raindesk
+          npm test
+
+      - name: Promote source and remove temporary workflow
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/director-loop-split-beat-viewport-promote.yml
+          git config user.name 'Raindesk CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && { echo 'nothing to promote'; exit 1; }
+          git commit -m 'raindesk: split Beat list and selected pose viewport'
+          git push origin HEAD:chatgpt/director-loop-v1
