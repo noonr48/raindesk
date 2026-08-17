@@ -221,7 +221,7 @@ test('schema v1 migration unifies legacy bridge shot ids with artwork/document i
   };
   fs.writeFileSync(direction.DIRECTION_PATH, JSON.stringify(old), 'utf8');
   const migrated = direction.readGraph();
-  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.schemaVersion, 3);
   assert.equal(migrated.shots[0].id, 'S05');
   assert.equal(migrated.project.activeShotId, 'S05');
   assert.equal(migrated.beats[0].shotId, 'S05');
@@ -230,4 +230,65 @@ test('schema v1 migration unifies legacy bridge shot ids with artwork/document i
   assert.equal(migrated.beats[0].rawDirection, 'she turns her head');
   assert.equal(migrated.beats[0].events.length, 1);
   assert.deepEqual(migrated.project.mediums, ['storyboard', 'comic', 'animation']);
+});
+
+
+test('Director Loop reorders beats, preserves raw wording, and keeps rejected beats as history', () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'director_scene', title: 'Rooftop' });
+  direction.createShot({ id: 'director_shot', sceneId: scene.id, title: 'Exchange' });
+  const a = direction.createBeat({ id: 'director_a', shotId: 'director_shot', rawDirection: 'tongue click' });
+  const b = direction.createBeat({ id: 'director_b', shotId: 'director_shot', rawDirection: 'fist shake' });
+  const c = direction.createBeat({ id: 'director_c', shotId: 'director_shot', rawDirection: 'wrist catch' });
+  direction.reorderBeats('director_shot', [c.id, a.id, b.id]);
+  let spec = direction.shotSpec('director_shot');
+  assert.deepEqual(spec.beats.map((beat) => beat.id), [c.id, a.id, b.id]);
+  assert.deepEqual(spec.beats.map((beat) => beat.order), [1, 2, 3]);
+  direction.updateBeat(a.id, { status: 'rejected' });
+  spec = direction.shotSpec('director_shot');
+  assert.equal(spec.beats.find((beat) => beat.id === a.id).rawDirection, 'tongue click');
+  assert.equal(spec.beats.find((beat) => beat.id === a.id).status, 'rejected');
+});
+
+test('Director Loop stores keep/change boundaries and explicit shot/beat sketch references', () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'constraint_scene', title: 'Fight' });
+  direction.createShot({ id: 'constraint_shot', sceneId: scene.id, title: 'Contact' });
+  direction.createBeat({ id: 'constraint_beat', shotId: 'constraint_shot', rawDirection: 'she catches his wrist' });
+  const shot = direction.setShotConstraints('constraint_shot', {
+    preserve: ['face', 'camera framing', 'left hand'],
+    change: ['right hand', 'expression'],
+  });
+  assert.deepEqual(shot.preserve, ['face', 'camera framing', 'left hand']);
+  assert.deepEqual(shot.change, ['right hand', 'expression']);
+  direction.setShotFrameRef('constraint_shot', 'start', {
+    kind: 'shot_sketch_reference', referenceId: 'a'.repeat(64), imageUrl: '/api/blob/' + 'a'.repeat(64), sourceRevisionId: 'rev_1',
+  });
+  direction.setBeatFrameRef('constraint_beat', 'start', {
+    kind: 'beat_sketch_reference', referenceId: 'b'.repeat(64), imageUrl: '/api/blob/' + 'b'.repeat(64), sourceRevisionId: 'rev_1',
+  });
+  direction.setBeatFrameRef('constraint_beat', 'end', {
+    kind: 'beat_sketch_reference', referenceId: 'c'.repeat(64), imageUrl: '/api/blob/' + 'c'.repeat(64), sourceRevisionId: 'rev_2',
+  });
+  const spec = direction.shotSpec('constraint_shot');
+  assert.equal(spec.shot.startFrame.referenceId, 'a'.repeat(64));
+  assert.equal(spec.beats[0].startFrame.referenceId, 'b'.repeat(64));
+  assert.equal(spec.beats[0].endFrame.referenceId, 'c'.repeat(64));
+  assert.deepEqual(spec.shot.preserve, ['face', 'camera framing', 'left hand']);
+  assert.deepEqual(spec.shot.change, ['right hand', 'expression']);
+});
+
+test('beat-scoped visual direction belongs to the assembled shot spec', () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'mark_scene', title: 'Motion' });
+  direction.createShot({ id: 'mark_shot', sceneId: scene.id, title: 'Hand move' });
+  direction.createBeat({ id: 'mark_beat', shotId: 'mark_shot', rawDirection: 'hand rises before the line' });
+  direction.addAnnotation({
+    id: 'mark_arrow', scopeType: 'beat', scopeId: 'mark_beat', kind: 'actor_motion',
+    rawText: 'hand curves upward', geometry: { type: 'path', points: [{ x: 10, y: 20 }, { x: 80, y: 40 }] },
+  });
+  const spec = direction.shotSpec('mark_shot');
+  assert.equal(spec.annotations.length, 1);
+  assert.equal(spec.annotations[0].scopeType, 'beat');
+  assert.equal(spec.annotations[0].scopeId, 'mark_beat');
 });

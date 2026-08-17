@@ -54,6 +54,7 @@
     takeMeta: [], // aligned with core.session.takes; durable server take ids/provenance
     drawer: null,
     beatTrail: null,
+    activeBeatId: null,
     workspaceUI: null,
     dirty: true,
     gesture: null, // { kind:'lasso'|'pen'|'direction', points:[], ... }
@@ -107,6 +108,9 @@
 
   function partnerCanvasContext() {
     const lasso = core && core.lasso && core.lasso.closed ? core.lasso : null;
+    const beat = state.beatTrail && state.beatTrail.getActiveBeat ? state.beatTrail.getActiveBeat() : null;
+    const spec = state.beatTrail && state.beatTrail.getSpec ? state.beatTrail.getSpec() : null;
+    const shotSpec = spec && spec.shot || null;
     const lassoPoints = lasso
       ? lasso.points.filter((_p, i) => i % Math.max(1, Math.floor(lasso.points.length / 48)) === 0)
         .slice(0, 48).map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }))
@@ -123,6 +127,17 @@
         pendingTakes: core && core.session ? core.session.takes.length : 0,
       },
       selection: lasso ? { type: 'lasso', points: lassoPoints } : null,
+      activeBeatId: beat && beat.id || state.activeBeatId || null,
+      activeBeat: beat ? {
+        id: beat.id, order: beat.order, rawDirection: beat.rawDirection || beat.description || '',
+        events: beat.events || [], relations: beat.relations || [],
+        startFrame: beat.startFrame || null, endFrame: beat.endFrame || null,
+      } : null,
+      directingConstraints: shotSpec ? {
+        preserve: Array.isArray(shotSpec.preserve) ? shotSpec.preserve.slice(0, 24) : [],
+        change: Array.isArray(shotSpec.change) ? shotSpec.change.slice(0, 24) : [],
+        startFrame: shotSpec.startFrame || null, endFrame: shotSpec.endFrame || null,
+      } : null,
       artRevisionId: state.shot ? (state.persistence.revisionByShot[state.shot.id] || null) : null,
       visibleLayers: core ? core.layers.map((layer) => ({
         id: layer.id,
@@ -314,6 +329,7 @@
       }
     }
     state.shot = shot;
+    state.activeBeatId = null;
     try { localStorage.setItem('raindesk.lastShot', id); } catch (_e) { /* ignore */ }
     await loadShotIntoCore(shot);
     await hydrateDirectionMarks(shot);
@@ -366,6 +382,11 @@
       onPartnerMessage: (message, moves) => {
         if (state.drawer && state.drawer.addPartnerNote) state.drawer.addPartnerNote(message, moves);
       },
+      onActiveBeatChange: (beat) => {
+        state.activeBeatId = beat && beat.id || null;
+        markDirty();
+      },
+      onCaptureFrame: (slot, context) => captureDirectionFrame(slot, context),
     });
     state.drawer.on('turn', () => {
       if (state.beatTrail && state.beatTrail.isOpen()) state.beatTrail.refresh();
@@ -504,7 +525,7 @@
 
   function openDirectionCaption(points) {
     if (!points || points.length < 2) return;
-    state.pendingDirection = { points: points.slice() };
+    state.pendingDirection = { points: points.slice(), beatId: state.activeBeatId || null };
     const end = points[points.length - 1];
     const dpr = window.devicePixelRatio || 1;
     const px = (state.fit.ox + end.x * state.fit.scale) / dpr;
@@ -540,6 +561,40 @@
     return 'saved the direction exactly as drawn';
   }
 
+  async function captureDirectionFrame(slot, { beatId = null } = {}) {
+    if (state.offline || !state.shot || !API.uploadBlob) {
+      toast('frame references need the local Raindesk server');
+      return null;
+    }
+    const safeSlot = slot === 'start' ? 'start' : slot === 'end' ? 'end' : null;
+    if (!safeSlot) return null;
+    try {
+      // Capture only the visible artwork/current take. Semantic arrows are drawn
+      // later onto the display canvas, so they never contaminate the reference.
+      const png = RC.encodePNG(CANVAS_W, CANVAS_H, new Uint8ClampedArray(frameBuffer()));
+      const stored = await API.uploadBlob(png);
+      const scope = state.directionScope || await DIR.ensureLegacyScope(API, state.shot);
+      state.directionScope = scope;
+      const frameRef = {
+        kind: beatId ? 'beat_sketch_reference' : 'shot_sketch_reference',
+        referenceId: stored.sha,
+        imageUrl: API.blobUrl(stored.sha),
+        sourceRevisionId: state.persistence.revisionByShot[state.shot.id] || null,
+        capturedAt: new Date().toISOString(),
+        description: beatId
+          ? `${safeSlot} pose captured from ${state.shot.id}`
+          : `${safeSlot} framing captured from ${state.shot.id}`,
+      };
+      if (beatId && API.setDirectionBeatFrameRef) await API.setDirectionBeatFrameRef(beatId, safeSlot, frameRef);
+      else if (API.setDirectionShotFrameRef) await API.setDirectionShotFrameRef(scope.shotId, safeSlot, frameRef);
+      toast(beatId ? `${safeSlot} pose pinned to the beat` : `${safeSlot} frame pinned to the shot`);
+      return frameRef;
+    } catch (e) {
+      toast('could not pin that frame yet — the artwork is unchanged');
+      throw e;
+    }
+  }
+
   async function savePendingDirection() {
     if (state.directionBusy || !state.pendingDirection || !state.shot) return;
     const pending = state.pendingDirection;
@@ -552,6 +607,10 @@
       kind: 'unknown',
       rawText: caption,
       geometry: DIR.pathGeometry(pending.points, CANVAS_W, CANVAS_H),
+      scopeType: pending.beatId ? 'beat' : 'shot',
+      scopeId: pending.beatId || (state.directionScope && state.directionScope.shotId) || null,
+      shotId: (state.directionScope && state.directionScope.shotId) || null,
+      source: { beatId: pending.beatId || null, legacyShotId: state.shot.id },
       status: 'provisional',
       local: true,
     };
@@ -565,7 +624,8 @@
         caption,
         width: CANVAS_W,
         height: CANVAS_H,
-        extraContext: { canvas: { width: CANVAS_W, height: CANVAS_H } },
+        extraContext: { ...partnerCanvasContext(), canvas: { width: CANVAS_W, height: CANVAS_H } },
+        beatId: pending.beatId || null,
       });
       const i = state.directionMarks.indexOf(provisional);
       if (i !== -1 && result.annotation) state.directionMarks[i] = result.annotation;
@@ -576,7 +636,7 @@
       }
     } catch (_e) {
       provisional.local = false;
-      toast('kept the arrow - partner can read it when the connection is back');
+      toast('the arrow is still on this screen, but it has not synced yet');
     } finally {
       state.directionBusy = false;
       markDirty();
@@ -1200,6 +1260,13 @@
     return out;
   }
 
+  function directionCaptionForMark(mark) {
+    const raw = mark && mark.rawText || '';
+    if (!mark || mark.scopeType !== 'beat' || !state.beatTrail || !state.beatTrail.beatOrderFor) return raw;
+    const order = state.beatTrail.beatOrderFor(mark.scopeId);
+    return order == null ? raw : `B${order}${raw ? ' · ' + raw : ''}`;
+  }
+
   function render() {
     const dpr = window.devicePixelRatio || 1;
     const W = disp.width;
@@ -1280,7 +1347,7 @@
       drawArrowPath(mark.geometry.points, {
         color,
         alpha: mark.local ? 0.72 : 0.95,
-        caption: mark.rawText || '',
+        caption: directionCaptionForMark(mark),
       });
     }
     if (state.gesture && state.gesture.kind === 'direction') {

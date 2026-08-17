@@ -370,12 +370,12 @@ test('gen errors surface as status error with a message', async (t) => {
   });
 });
 
-test('direction v2 routes persist scene -> shot -> beat -> annotation', async (t) => {
+test('direction v3 routes persist scene -> shot -> beat -> annotation', async (t) => {
   await withServer(t, { comfyImpl: fakeComfy(), agentImpl: agentEcho }, async (base) => {
     let res = await fetch(`${base}/api/direction`);
     assert.equal(res.status, 200);
     let graph = await res.json();
-    assert.equal(graph.schemaVersion, 2);
+    assert.equal(graph.schemaVersion, 3);
 
     res = await fetch(`${base}/api/direction/scene`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -654,5 +654,55 @@ test('generation API exposes persistent phases and only cancels work that is sti
     res = await fetch(`${base}/api/gen/${first.jobId}/cancel`, { method: 'POST' });
     assert.equal(res.status, 409);
     assert.match((await res.json()).error, /cannot be safely cancelled/i);
+  });
+});
+
+test('Director Loop routes update/reorder beats, keep/change constraints, and beat frame refs', async (t) => {
+  await withServer(t, { comfyImpl: fakeComfy(), agentImpl: agentEcho }, async (base) => {
+    for (const [path, body] of [
+      ['/api/direction/scene', { id: 'dl_scene', title: 'Director loop' }],
+      ['/api/direction/shot', { id: 'dl_shot', sceneId: 'dl_scene', title: 'Detailed shot' }],
+      ['/api/direction/beat', { id: 'dl_a', shotId: 'dl_shot', rawDirection: 'first beat' }],
+      ['/api/direction/beat', { id: 'dl_b', shotId: 'dl_shot', rawDirection: 'second beat' }],
+    ]) {
+      const res = await fetch(`${base}${path}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      assert.ok(res.ok, `${path} creates fixture`);
+    }
+
+    let res = await fetch(`${base}/api/direction/beat/update`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ beatId: 'dl_a', patch: { rawDirection: 'first beat refined', description: 'first beat refined' } }),
+    });
+    assert.equal(res.status, 200);
+
+    res = await fetch(`${base}/api/direction/beat/reorder`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shotId: 'dl_shot', orderedBeatIds: ['dl_b', 'dl_a'] }),
+    });
+    assert.equal(res.status, 200);
+
+    res = await fetch(`${base}/api/direction/shot-constraints`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shotId: 'dl_shot', preserve: ['face', 'camera'], change: ['right hand'] }),
+    });
+    assert.equal(res.status, 200);
+
+    res = await fetch(`${base}/api/direction/beat-frame-ref`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        beatId: 'dl_b', slot: 'start',
+        frameRef: { kind: 'beat_sketch_reference', referenceId: 'd'.repeat(64), imageUrl: '/api/blob/' + 'd'.repeat(64), sourceRevisionId: 'rev_dl' },
+      }),
+    });
+    assert.equal(res.status, 200);
+
+    const spec = await (await fetch(`${base}/api/direction/shot/dl_shot/spec`)).json();
+    assert.deepEqual(spec.beats.map((b) => b.id), ['dl_b', 'dl_a']);
+    assert.equal(spec.beats[1].rawDirection, 'first beat refined');
+    assert.equal(spec.beats[0].startFrame.referenceId, 'd'.repeat(64));
+    assert.deepEqual(spec.shot.preserve, ['face', 'camera']);
+    assert.deepEqual(spec.shot.change, ['right hand']);
   });
 });

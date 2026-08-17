@@ -116,3 +116,40 @@ test('camera path endpoints are represented as lightweight frame anchors', () =>
   assert.equal(anchors.end.framing, 'face close-up');
   assert.equal(anchors.start.sourceAnnotationId, 'ann_cam');
 });
+
+test('visual direction can attach directly to an active beat without inventing shot scope', async () => {
+  const graph = {
+    scenes: [{ id: 'legacy_board' }],
+    shots: [{ id: 'S05', sceneId: 'legacy_board', source: { kind: 'legacy_board_bridge', legacyShotId: 'S05' } }],
+    beats: [{ id: 'beat_contact', shotId: 'S05', rawDirection: 'she catches his wrist' }],
+    annotations: [],
+  };
+  const calls = [];
+  const api = {
+    async getDirection() { return graph; },
+    async partnerTurn(message, opts) {
+      calls.push({ message, opts });
+      return {
+        intentId: 'intent_contact',
+        interpretation: { kind: 'movement', annotationKind: 'contact', movement: { action: 'hand catches wrist' }, confidence: 0.9 },
+      };
+    },
+    async addDirectionAnnotation(annotation) {
+      const saved = { id: 'ann_contact', ...annotation };
+      graph.annotations.push(saved);
+      return { annotation: saved };
+    },
+  };
+  const result = await DIR.interpretAndSavePath(api, {
+    legacyShot: { id: 'S05', beat: 'fight' },
+    beatId: 'beat_contact',
+    points: [{ x: 200, y: 300 }, { x: 320, y: 360 }],
+    caption: 'her hand lands here',
+  });
+  assert.equal(calls[0].opts.context.activeBeatId, 'beat_contact');
+  assert.equal(calls[0].opts.context.selection.beatId, 'beat_contact');
+  assert.equal(result.annotation.scopeType, 'beat');
+  assert.equal(result.annotation.scopeId, 'beat_contact');
+  assert.equal(result.annotation.source.shotId, 'S05');
+  assert.equal(result.annotation.kind, 'contact');
+});

@@ -83,6 +83,7 @@
       case 'camera': return 'camera_path';
       case 'movement': return 'actor_motion';
       case 'performance': return 'actor_motion';
+      case 'contact': return 'contact';
       case 'edit': return 'note';
       case 'review': return 'attention';
       default: return 'unknown';
@@ -141,8 +142,10 @@
     const graph = await api.getDirection();
     const scope = findLegacyScope(graph, legacyShotId);
     if (!scope) return { scope: null, marks: [] };
+    const beatIds = new Set((graph.beats || []).filter((b) => b && b.shotId === scope.shotId).map((b) => b.id));
     const marks = (graph.annotations || []).filter((ann) => ann &&
-      ann.scopeType === 'shot' && ann.scopeId === scope.shotId &&
+      ((ann.scopeType === 'shot' && ann.scopeId === scope.shotId) ||
+       (ann.scopeType === 'beat' && beatIds.has(ann.scopeId))) &&
       ann.geometry && ann.geometry.type === 'path');
     return { scope, marks };
   }
@@ -154,6 +157,7 @@
     width = 1024,
     height = 1024,
     extraContext = {},
+    beatId = null,
   }) {
     const scope = await ensureLegacyScope(api, legacyShot);
     const geometry = pathGeometry(points, width, height);
@@ -172,11 +176,13 @@
             sceneId: scope.sceneId,
             shotId: scope.shotId,
             surface: 'direction_annotation',
+            activeBeatId: beatId || null,
             selection: {
               type: 'direction_annotation',
               rawText,
               geometry,
               legacyShotId: legacyShot.id,
+              beatId: beatId || null,
             },
           },
         },
@@ -191,8 +197,8 @@
     const confidence = interpretation && Number.isFinite(Number(interpretation.confidence))
       ? clamp(Number(interpretation.confidence), 0, 1) : null;
     const saved = await api.addDirectionAnnotation({
-      scopeType: 'shot',
-      scopeId: scope.shotId,
+      scopeType: beatId ? 'beat' : 'shot',
+      scopeId: beatId || scope.shotId,
       kind,
       rawText,
       geometry,
@@ -202,6 +208,8 @@
       source: {
         kind: 'direction_pen',
         legacyShotId: legacyShot.id,
+        shotId: scope.shotId,
+        beatId: beatId || null,
         intentId: turn && turn.intentId || null,
         partnerAvailable: !partnerError,
       },

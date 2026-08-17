@@ -51,3 +51,18 @@ test('Partner receives current shot beat + nearby visual directions without a se
 test('app publishes a real browser boot marker for acceptance screenshots', () => {
   assert.match(app, /dataset\.raindeskBoot\s*=\s*['"]ready['"]/);
 });
+
+test('DIRECT freezes the selected beat on the pending mark and labels beat-scoped arrows', () => {
+  assert.match(app, /pendingDirection = \{ points: points\.slice\(\), beatId: state\.activeBeatId \|\| null \}/);
+  assert.match(app, /beatId: pending\.beatId \|\| null/);
+  assert.match(app, /directionCaptionForMark/);
+  assert.match(app, /`B\$\{order\}/);
+});
+
+test('canvas captures clean artwork as real shot or beat frame references', () => {
+  assert.match(app, /async function captureDirectionFrame/);
+  assert.match(app, /RC\.encodePNG\(CANVAS_W, CANVAS_H, new Uint8ClampedArray\(frameBuffer\(\)\)\)/);
+  assert.match(app, /API\.setDirectionBeatFrameRef/);
+  assert.match(app, /API\.setDirectionShotFrameRef/);
+  assert.match(app, /sourceRevisionId:/);
+});
