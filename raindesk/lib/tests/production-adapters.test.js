@@ -53,7 +53,8 @@ test('public registry projections never carry the internal implementationRef', (
   });
   const fromResolve = registry.resolve('local_image_take');
   const fromList = registry.list().find((item) => item.id === 'ref_carrying_v1');
-  const projections = [fromRegister, fromResolve, fromList];
+  const fromGet = registry.get('ref_carrying_v1');
+  const projections = [fromRegister, fromResolve, fromList, fromGet];
   for (const projection of projections) {
     assert.ok(projection);
     assert.equal(Object.prototype.hasOwnProperty.call(projection, 'implementationRef'), false);
