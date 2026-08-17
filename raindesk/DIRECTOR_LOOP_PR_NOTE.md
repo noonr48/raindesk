@@ -1,0 +1,1 @@
+Director Loop v1 acceptance is validated by the permanent read-only GitHub workflow. The canonical implementation/validation details live in DIRECTOR_LOOP_V1.md and the workflow artifact `raindesk-director-loop-v1` for the corresponding green run.
