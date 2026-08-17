@@ -76,3 +76,11 @@ test('auto server request can become server-ready only for a stage the planner m
   assert.equal(request.status, 'ready_server');
   assert.equal(request.reviewRequired, false);
 });
+
+test('no actionable request is emitted without a stable persisted turn id', () => {
+  const plan = readyLocalPlan('suggest');
+  assert.deepEqual(invocations.requestsForPlan(plan, { turnId: null }), []);
+  const stage = plan.stages.find((item) => item.capabilityId === 'local_image_take');
+  assert.equal(invocations.stageRequest(stage, { turnId: '' }), null);
+  assert.notEqual(invocations.requestId('turn_a', 'stage'), invocations.requestId('turn_b', 'stage'));
+});
