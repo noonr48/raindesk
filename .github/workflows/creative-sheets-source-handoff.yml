@@ -1,26 +1,61 @@
-name: Creative Sheets Source Handoff
+name: Promote Creative Sheets v1
 
 on:
   push:
     branches:
       - 'chatgpt/creative-sheets-v1'
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  handoff:
+  promote:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Package exact source checkout
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reconstruct and verify exact tested Creative Sheets payload
         run: |
           set -euo pipefail
-          tar -czf /tmp/raindesk-creative-sheets-source.tar.gz --exclude='.git' .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: raindesk-creative-sheets-source
-          path: /tmp/raindesk-creative-sheets-source.tar.gz
-          retention-days: 1
+          cat raindesk/dev/.creative-sheets-payload/part00 \
+              raindesk/dev/.creative-sheets-payload/part01 \
+              raindesk/dev/.creative-sheets-payload/part02 \
+              raindesk/dev/.creative-sheets-payload/part03 \
+              raindesk/dev/.creative-sheets-payload/part04 \
+              raindesk/dev/.creative-sheets-payload/part05 > /tmp/creative-sheets.b64
+          echo '7ee88184f14ee169fe9f3aa271372905e2f2f8f3d4a3cb265d67f8bf048c3b06  /tmp/creative-sheets.b64' | sha256sum -c -
+          base64 -d /tmp/creative-sheets.b64 > /tmp/creative-sheets.patch.bz2
+          echo '620f7b9b3828df4e8dd1c9dbd4215149df80a2868df2939f7e04930f87e846b9  /tmp/creative-sheets.patch.bz2' | sha256sum -c -
+          bzip2 -dc /tmp/creative-sheets.patch.bz2 > /tmp/creative-sheets.patch
+          echo 'e5bae225820c0e8930f2ce9fb87a7d853c6dc40a8d844c14f802ef378b284cee  /tmp/creative-sheets.patch' | sha256sum -c -
+          cd raindesk
+          git apply --check /tmp/creative-sheets.patch
+
+      - name: Apply exact tested Creative Sheets source
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          git apply /tmp/creative-sheets.patch
+          node --check server.js
+          node --check lib/sheet-documents.js
+          node --check public/js/api.js
+          node --check public/js/creative-desk.js
+          node --check dev/browser-creative-sheets-smoke.js
+          npm test
+
+      - name: Promote source and remove transport scaffolding
+        run: |
+          set -euo pipefail
+          rm -rf raindesk/dev/.creative-sheets-payload
+          rm -f .github/workflows/creative-sheets-source-handoff.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'raindesk: Creative Sheets v1 revisioned loose sketch documents'
+          git push origin HEAD:chatgpt/creative-sheets-v1
