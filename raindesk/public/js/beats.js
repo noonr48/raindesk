@@ -357,6 +357,18 @@
       }
       beats.forEach((beat, i) => list.appendChild(renderBeatRow(beat, i, beats)));
       notifyActive(activeBeat());
+      if (activeBeatId) {
+        requestAnimationFrame(() => {
+          const row = list.querySelector(`.beat-row[data-beat-id="${activeBeatId}"]`);
+          if (!row) return;
+          const top = row.offsetTop;
+          const bottom = top + row.offsetHeight;
+          if (top < list.scrollTop) list.scrollTop = top;
+          else if (bottom > list.scrollTop + list.clientHeight) {
+            list.scrollTop = Math.max(0, bottom - list.clientHeight);
+          }
+        });
+      }
     }
 
     async function refresh() {
