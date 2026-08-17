@@ -1,0 +1,1 @@
+Reference Board concurrency hardening is applied in the subsequent atomic source commit. This marker intentionally contains no product state and may be removed after the source commit is visible.
