@@ -82,8 +82,9 @@ test('Partner enrichment stays in the background instead of freezing Beat edits'
 
 test('selected Beat reveal uses visible geometry rather than mixed offset coordinates', () => {
   assert.match(beatsSource, /function revealBeatRow\(beatId\)/);
-  assert.match(beatsSource, /body\.getBoundingClientRect\(\)/);
+  assert.match(beatsSource, /list\.getBoundingClientRect\(\)/);
   assert.match(beatsSource, /row\.getBoundingClientRect\(\)/);
+  assert.match(beatsSource, /list\.scrollTop/);
   assert.match(beatsSource, /if \(activeBeatId\) revealBeatRow\(activeBeatId\)/);
   assert.doesNotMatch(beatsSource, /const top = list\.offsetTop \+ row\.offsetTop/);
 });

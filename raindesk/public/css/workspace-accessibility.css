@@ -3,4 +3,9 @@
 @media (min-width: 900px) {
   body.workspace-desktop .toolbar { z-index: 1000; }
   body.workspace-desktop .direction-caption { z-index: 1001; }
+
+  /* Shot context, a compact Beat viewport, and selected pose detail all need
+   * a small guaranteed vertical budget. The panel remains resizable above
+   * this floor, but cannot be collapsed into an unusable strip. */
+  body.workspace-desktop .beat-trail.workspace-floating-panel { min-height: 410px; }
 }
