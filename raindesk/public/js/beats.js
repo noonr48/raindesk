@@ -381,12 +381,12 @@
       renderActiveBeatDetail(selected);
       notifyActive(selected);
       if (activeBeatId) {
-        requestAnimationFrame(() => {
-          const row = list.querySelector(`.beat-row[data-beat-id="${activeBeatId}"]`);
-          if (!row) return;
-          // Row + selected-detail are contiguous creative material. If they fit
-          // together, keep both visible. If not, prioritise the compact Beat
-          // row and its edit/reorder controls; the pose detail scrolls below.
+        const row = list.querySelector(`.beat-row[data-beat-id="${activeBeatId}"]`);
+        if (row) {
+          // Establish selected-Beat visibility as part of the same render that
+          // publishes the row.  Do not defer this to requestAnimationFrame:
+          // callers should never observe a Beat in the DOM while its controls
+          // are still clipped waiting for a later paint.
           const top = list.offsetTop + row.offsetTop;
           const bottom = detail.classList.contains('open')
             ? detail.offsetTop + detail.offsetHeight
@@ -399,7 +399,7 @@
           } else {
             body.scrollTop = Math.max(0, top);
           }
-        });
+        }
       }
     }
 
