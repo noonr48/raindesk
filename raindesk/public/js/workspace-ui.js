@@ -22,7 +22,7 @@
   const DEFAULTS = {
     layers:  { id: 'panel_layers',  type: 'layers_panel',  x: 22,   y: 96,  width: 286, height: 430, zIndex: 120, visible: false, collapsed: true },
     scenes:  { id: 'panel_scenes',  type: 'sequence_strip', x: 28,   y: 535, width: 360, height: 285, zIndex: 121, visible: false, collapsed: true },
-    beats:   { id: 'panel_beats',   type: 'beat_trail',     x: 372,  y: 520, width: 350, height: 330, zIndex: 122, visible: false, collapsed: true },
+    beats:   { id: 'panel_beats',   type: 'beat_trail',     x: 372,  y: 420, width: 350, height: 430, zIndex: 122, visible: false, collapsed: true },
     partner: { id: 'panel_partner', type: 'partner_panel',  x: 1074, y: 92,  width: 330, height: 590, zIndex: 123, visible: true,  collapsed: false, dock: 'right' },
   };
 

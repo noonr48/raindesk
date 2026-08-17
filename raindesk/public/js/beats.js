@@ -373,16 +373,16 @@
       // offsetTop values from different offset-parent chains.  The compact
       // Beat row and its reorder/edit controls are the visibility contract;
       // selected pose detail is allowed to continue below in a small panel.
-      const viewport = body.getBoundingClientRect();
+      const viewport = list.getBoundingClientRect();
       const rect = row.getBoundingClientRect();
       if (!(viewport.height > 0) || !(rect.height > 0)) return false;
       const pad = 6;
       const topEdge = viewport.top + pad;
       const bottomEdge = viewport.bottom - pad;
       if (rect.top < topEdge) {
-        body.scrollTop = Math.max(0, body.scrollTop - (topEdge - rect.top));
+        list.scrollTop = Math.max(0, list.scrollTop - (topEdge - rect.top));
       } else if (rect.bottom > bottomEdge) {
-        body.scrollTop = Math.max(0, body.scrollTop + (rect.bottom - bottomEdge));
+        list.scrollTop = Math.max(0, list.scrollTop + (rect.bottom - bottomEdge));
       }
       return true;
     }
