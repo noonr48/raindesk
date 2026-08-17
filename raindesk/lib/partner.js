@@ -5,11 +5,13 @@
  *
  * partner-core.js remains the proven orchestration engine. This layer adds a
  * bounded, explicit character-identity authority block to the prompt while
- * preserving the core engine's public API and concurrency behaviour.
+ * preserving the core engine's public API and concurrency behaviour. It also
+ * attaches an honest capability plan to each completed Partner turn.
  */
 
 const { AsyncLocalStorage } = require('node:async_hooks');
 const core = require('./partner-core');
+const capabilityPlanner = require('./capability-planner');
 
 const MAX_CONTEXT_CHARS = 7000;
 const MAX_CHARACTERS = 16;
@@ -189,8 +191,18 @@ function createPartner(options = {}) {
   return {
     ...base,
     turn(input = {}) {
-      const anchors = input && input.context && input.context.characterAnchors;
-      return turnContext.run(anchors || null, () => base.turn(input));
+      const context = isObject(input.context) ? input.context : {};
+      const anchors = context.characterAnchors;
+      return turnContext.run(anchors || null, async () => {
+        const result = await base.turn(input);
+        return {
+          ...result,
+          executionPlan: capabilityPlanner.plan(result.workflow || [], {
+            context,
+            permissionMode: result.permissionMode || result.partnerMode || 'suggest',
+          }),
+        };
+      });
     },
   };
 }
