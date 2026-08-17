@@ -57,10 +57,45 @@ jobs:
           export CHROME_BIN="$BROWSER"
           mkdir -p artifacts/director-loop
 
-          node dev/browser-integrity-smoke.js http://127.0.0.1:17600/ | tee artifacts/director-loop/browser-editability.json
-          node dev/browser-workspace-smoke.js http://127.0.0.1:17600/ | tee artifacts/director-loop/browser-workspace.json
-          DIRECTOR_LOOP_SCREENSHOT="$(pwd)/artifacts/director-loop/director-loop-1440x900.png" \
-            node dev/browser-director-loop-smoke.js http://127.0.0.1:17600/ | tee artifacts/director-loop/browser-director-loop.json
+          # GitHub-hosted Chromium occasionally needs longer than the smoke's
+          # 10-second CDP startup budget. Retry only that exact infrastructure
+          # failure. Any real Raindesk/browser assertion fails immediately and
+          # is never retried or hidden.
+          run_smoke() {
+            local label="$1"; shift
+            local out="/tmp/${label}.stdout"
+            local err="/tmp/${label}.stderr"
+            local attempt rc
+            for attempt in 1 2 3; do
+              : >"$out"; : >"$err"
+              set +e
+              "$@" >"$out" 2>"$err"
+              rc=$?
+              set -e
+              if [ "$rc" -eq 0 ]; then
+                cat "$err" >&2
+                cat "$out"
+                return 0
+              fi
+              cat "$err" >&2
+              if grep -q 'Chromium DevTools did not start' "$err" && [ "$attempt" -lt 3 ]; then
+                echo "Chromium startup failed for ${label}; retrying (${attempt}/3)" >&2
+                sleep $((attempt * 2))
+                continue
+              fi
+              cat "$out"
+              return "$rc"
+            done
+          }
+
+          run_smoke editability node dev/browser-integrity-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/director-loop/browser-editability.json
+          run_smoke workspace node dev/browser-workspace-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/director-loop/browser-workspace.json
+          export DIRECTOR_LOOP_SCREENSHOT="$(pwd)/artifacts/director-loop/director-loop-1440x900.png"
+          run_smoke director-loop node dev/browser-director-loop-smoke.js http://127.0.0.1:17600/ \
+            | tee artifacts/director-loop/browser-director-loop.json
+          unset DIRECTOR_LOOP_SCREENSHOT
 
           "$BROWSER" --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
             --run-all-compositor-stages-before-draw --virtual-time-budget=2600 \
