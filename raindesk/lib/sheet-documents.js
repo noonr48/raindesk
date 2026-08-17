@@ -23,6 +23,8 @@ const KINDS = new Set(['sketch', 'character', 'references', 'notes']);
 const MAX_STROKES = 5000;
 const MAX_POINTS_PER_STROKE = 20000;
 const MAX_TOTAL_POINTS = 300000;
+const MAX_MEDIA = 256;
+const SHA_RE = /^[a-f0-9]{64}$/;
 
 function assertId(id, what = 'sheet id') {
   if (typeof id !== 'string' || !ID_RE.test(id)) throw new HttpError(400, `bad ${what}`);
@@ -80,6 +82,26 @@ function cleanStroke(raw, index = 0) {
     width: Math.max(0.1, Math.min(256, Number(raw.width) || 2.2)),
   };
 }
+function cleanMedia(raw, index = 0) {
+  if (!raw || typeof raw !== 'object') throw new HttpError(400, 'sheet media is malformed');
+  const kind = String(raw.kind || 'image');
+  if (kind !== 'image') throw new HttpError(400, `unsupported sheet media kind "${kind}"`);
+  const sha = String(raw.sha || raw.referenceId || '');
+  if (!SHA_RE.test(sha)) throw new HttpError(400, 'sheet media has bad blob sha');
+  const number = (value, fallback = 0) => { const n = Number(value); return Number.isFinite(n) ? n : fallback; };
+  const width = Math.max(8, Math.min(4096, number(raw.width, 320)));
+  const height = Math.max(8, Math.min(4096, number(raw.height, 240)));
+  return {
+    id: String(raw.id || `media_${index}`).slice(0, 128),
+    kind: 'image', sha,
+    x: number(raw.x), y: number(raw.y), width, height,
+    rotation: Math.max(-3600, Math.min(3600, number(raw.rotation))),
+    opacity: Math.max(0.05, Math.min(1, number(raw.opacity, 1))),
+    zIndex: Math.max(-10000, Math.min(10000, Math.round(number(raw.zIndex, index)))),
+    caption: String(raw.caption || '').slice(0, 500),
+  };
+}
+
 function validateDocument(sheetId, input) {
   assertId(sheetId);
   if (!input || typeof input !== 'object' || input.schemaVersion !== 1) {
@@ -102,12 +124,22 @@ function validateDocument(sheetId, input) {
     const clean = cleanStroke(st, index); total += clean.points.length; return clean;
   });
   if (total > MAX_TOTAL_POINTS) throw new HttpError(413, 'sheet contains too many vector points');
+  if (input.media !== undefined && !Array.isArray(input.media)) throw new HttpError(400, 'sheet media must be an array');
+  const mediaInput = Array.isArray(input.media) ? input.media : [];
+  if (mediaInput.length > MAX_MEDIA) throw new HttpError(413, `sheet media must be <=${MAX_MEDIA}`);
+  const media = mediaInput.map((item, index) => cleanMedia(item, index));
+  const mediaIds = new Set();
+  for (const item of media) {
+    if (!item.id || mediaIds.has(item.id)) throw new HttpError(400, 'sheet media ids must be unique');
+    mediaIds.add(item.id);
+  }
   return {
     schemaVersion: 1,
     sheetId,
     title,
     kind,
     canvas: { width, height },
+    media,
     strokes,
     meta: input.meta && typeof input.meta === 'object' ? input.meta : {},
   };
@@ -171,6 +203,7 @@ function create({ sheetId = null, title = 'Loose sketch', kind = 'sketch', canva
     title,
     kind,
     canvas: canvas || defaultCanvas,
+    media: [],
     strokes: [],
     meta,
   }, { reason: 'create sheet' });
@@ -200,6 +233,7 @@ function list() {
             kind: current.document.kind,
             canvas: current.document.canvas,
             strokeCount: current.document.strokes.length,
+            mediaCount: Array.isArray(current.document.media) ? current.document.media.length : 0,
             updatedAt: current.createdAt,
           };
         } catch (_e) { return null; }
@@ -213,6 +247,6 @@ function list() {
 }
 
 module.exports = {
-  DATA_DIR, SHEETS_DIR, ID_RE, KINDS, MAX_STROKES, MAX_POINTS_PER_STROKE, MAX_TOTAL_POINTS,
-  assertId, validateDocument, readManifest, readRevision, readCurrent, save, create, restore, history, list,
+  DATA_DIR, SHEETS_DIR, ID_RE, KINDS, MAX_STROKES, MAX_POINTS_PER_STROKE, MAX_TOTAL_POINTS, MAX_MEDIA, SHA_RE,
+  assertId, cleanMedia, validateDocument, readManifest, readRevision, readCurrent, save, create, restore, history, list,
 };
