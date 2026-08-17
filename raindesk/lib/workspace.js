@@ -22,11 +22,13 @@ const OBJECT_TYPES = new Set([
   'sequence_strip', 'layers_panel', 'beat_trail', 'partner_panel', 'generic_panel',
 ]);
 const DOCKS = new Set(['top', 'right', 'bottom', 'left']);
+const SPACES = new Set(['screen', 'world']);
+const SCREEN_TYPES = new Set(['layers_panel', 'beat_trail', 'partner_panel', 'generic_panel', 'sequence_strip']);
 
 function now() { return new Date().toISOString(); }
 function emptyWorkspace() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     viewport: { x: 0, y: 0, zoom: 1 },
     activeObjectId: null,
     objects: [],
@@ -48,12 +50,29 @@ function read() {
   }
   let ws;
   try { ws = JSON.parse(raw); } catch (_e) { throw new HttpError(500, 'workspace state is corrupt'); }
-  if (!ws || ws.schemaVersion !== 1 || !Array.isArray(ws.objects) || !ws.viewport) {
+  if (!ws || !Array.isArray(ws.objects) || !ws.viewport) {
+    throw new HttpError(500, 'workspace state is malformed');
+  }
+  if (ws.schemaVersion === 1) {
+    // v1 mixed utility-panel screen coordinates and future creative-world
+    // coordinates implicitly. Existing v1 objects are all from the utility
+    // shell except creative object types that were only used by tests/prototypes.
+    ws.schemaVersion = 2;
+    ws.objects = ws.objects.map((obj) => ({
+      ...obj,
+      space: obj && obj.space === 'world' ? 'world' : defaultSpaceForType(obj && obj.type),
+    }));
+    write(ws);
+  }
+  if (ws.schemaVersion !== 2 || ws.objects.some((obj) => !obj || !SPACES.has(obj.space || defaultSpaceForType(obj.type)))) {
     throw new HttpError(500, 'workspace state is malformed');
   }
   return ws;
 }
 function write(ws) { ws.updatedAt = now(); atomicWrite(ws); return ws; }
+function defaultSpaceForType(type) {
+  return SCREEN_TYPES.has(type) ? 'screen' : 'world';
+}
 function assertId(id) {
   if (typeof id !== 'string' || !ID_RE.test(id)) throw new HttpError(400, 'bad workspace object id');
   return id;
@@ -65,9 +84,12 @@ function finite(value, fallback, min = -10000000, max = 10000000) {
 function sanitizeObject(input = {}, existing = null) {
   const id = assertId(input.id || (existing && existing.id));
   const type = OBJECT_TYPES.has(input.type) ? input.type : (existing && existing.type) || 'generic_panel';
+  const inheritedSpace = existing && SPACES.has(existing.space) ? existing.space : defaultSpaceForType(type);
+  const space = SPACES.has(input.space) ? input.space : inheritedSpace;
   return {
     id,
     type,
+    space,
     entityRef: input.entityRef !== undefined ? (input.entityRef == null ? null : String(input.entityRef).slice(0, 256)) : (existing && existing.entityRef) || null,
     x: finite(input.x, existing ? existing.x : 0),
     y: finite(input.y, existing ? existing.y : 0),
@@ -79,7 +101,7 @@ function sanitizeObject(input = {}, existing = null) {
     collapsed: input.collapsed !== undefined ? Boolean(input.collapsed) : Boolean(existing && existing.collapsed),
     visible: input.visible !== undefined ? Boolean(input.visible) : (existing ? existing.visible !== false : true),
     locked: input.locked !== undefined ? Boolean(input.locked) : Boolean(existing && existing.locked),
-    dock: input.dock === null ? null : (DOCKS.has(input.dock) ? input.dock : (existing && existing.dock) || null),
+    dock: space === 'world' ? null : (input.dock === null ? null : (DOCKS.has(input.dock) ? input.dock : (existing && existing.dock) || null)),
     groupId: input.groupId !== undefined ? (input.groupId == null ? null : String(input.groupId).slice(0, 96)) : (existing && existing.groupId) || null,
     updatedAt: now(),
   };
@@ -126,6 +148,7 @@ function applyAction(action = {}) {
     else if (payload.dock === null || DOCKS.has(payload.dock)) obj.dock = payload.dock;
     else throw new HttpError(400, 'invalid dock position');
   } else if (type === 'dock_panel') {
+    if (obj.space === 'world') throw new HttpError(400, 'world objects do not use screen-edge docking');
     inverse = { type, targetId, payload: { dock: obj.dock } };
     const dock = payload.dock == null ? null : payload.dock;
     if (dock !== null && !DOCKS.has(dock)) throw new HttpError(400, 'invalid dock position');
@@ -150,6 +173,6 @@ function applyAction(action = {}) {
 }
 
 module.exports = {
-  DATA_DIR, WORKSPACE_PATH, OBJECT_TYPES, DOCKS, emptyWorkspace, read, write,
+  DATA_DIR, WORKSPACE_PATH, OBJECT_TYPES, DOCKS, SPACES, SCREEN_TYPES, defaultSpaceForType, emptyWorkspace, read, write,
   upsertObject, setViewport, applyAction,
 };

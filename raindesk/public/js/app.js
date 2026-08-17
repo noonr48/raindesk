@@ -19,8 +19,9 @@
   const DIR = window.RaindeskDirection;
   const BEATS = window.RaindeskBeats;
   const WSPACE = window.RaindeskWorkspaceUI;
+  const CDESK = window.RaindeskCreativeDesk;
 
-  if (!RC || !API || !CHAT || !DIR || !BEATS || !WSPACE) {
+  if (!RC || !API || !CHAT || !DIR || !BEATS || !WSPACE || !CDESK) {
     document.addEventListener('DOMContentLoaded', () => {
       const el = document.createElement('div');
       el.className = 'boot-error';
@@ -56,13 +57,15 @@
     beatTrail: null,
     activeBeatId: null,
     workspaceUI: null,
+    creativeDesk: null,
+    spaceDown: false,
     dirty: true,
     gesture: null, // { kind:'lasso'|'pen'|'direction', points:[], ... }
     directionMarks: [],
     directionScope: null,
     pendingDirection: null,
     directionBusy: false,
-    fit: { scale: 1, ox: 0, oy: 0 },
+    fit: { scale: 1, ox: 0, oy: 0, cssScale: 1, cssOx: 0, cssOy: 0 },
     persistence: {
       timer: null,
       queue: Promise.resolve(),
@@ -151,6 +154,7 @@
         .slice(-8)
         .map((m) => m.rawText),
       workspace: state.workspaceUI && state.workspaceUI.context ? state.workspaceUI.context() : null,
+      creativeDesk: state.creativeDesk && state.creativeDesk.context ? state.creativeDesk.context() : null,
     };
   }
 
@@ -336,6 +340,7 @@
     if (state.beatTrail) state.beatTrail.setShot(shot);
     renderScenesPanel();
     if (state.workspaceUI) state.workspaceUI.refresh().catch(() => {});
+    if (state.creativeDesk) await state.creativeDesk.setShot(shot);
     updateTitle();
     updateHint();
     syncGenBar();
@@ -431,6 +436,17 @@
       close: () => state.drawer && state.drawer.close(),
     });
     await state.workspaceUI.init();
+
+    state.creativeDesk = CDESK.CreativeDesk({
+      api: API,
+      stage: $('stage'),
+      world: $('creativeWorld'),
+      tabs: $('creativeTabs'),
+      getMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
+      onViewportChange: () => markDirty(),
+      onContextChange: () => {},
+    });
+    await state.creativeDesk.init(state.shot);
 
     $('drawerHandle').addEventListener('click', () => {
       if (state.drawer.isOpen()) state.drawer.close();
@@ -739,6 +755,13 @@
     disp.addEventListener('pointermove', onMove);
     disp.addEventListener('pointerup', onUp);
     disp.addEventListener('pointercancel', onUp);
+    $('stage').addEventListener('wheel', (e) => {
+      if (!state.creativeDesk || e.target.closest('.workspace-floating-panel,input,textarea')) return;
+      e.preventDefault();
+      const r = $('stage').getBoundingClientRect();
+      const factor = Math.exp(-Number(e.deltaY || 0) * 0.0012);
+      state.creativeDesk.zoomAt({ x: e.clientX - r.left, y: e.clientY - r.top }, factor);
+    }, { passive: false });
 
     document.addEventListener('keydown', (e) => {
       const inText = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
@@ -752,7 +775,13 @@
         if (state.drawer) state.drawer.close();
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); onUndo(); }
+      if (!inText && e.code === 'Space') {
+        state.spaceDown = true; document.body.classList.add('desk-panning'); e.preventDefault();
+      }
       if (!inText && (e.key === '[' || e.key === ']')) cycleShot(e.key === ']' ? 1 : -1);
+    });
+    document.addEventListener('keyup', (e) => {
+      if (e.code === 'Space') { state.spaceDown = false; document.body.classList.remove('desk-panning'); }
     });
   }
 
@@ -783,14 +812,19 @@
 
   function toCanvas(e) {
     const r = disp.getBoundingClientRect();
-    const x = (e.clientX - r.left - state.fit.ox) / state.fit.scale;
-    const y = (e.clientY - r.top - state.fit.oy) / state.fit.scale;
+    const x = (e.clientX - r.left - state.fit.cssOx) / state.fit.cssScale;
+    const y = (e.clientY - r.top - state.fit.cssOy) / state.fit.cssScale;
     return { x, y };
   }
 
   function onDown(e) {
     if (state.gesture) return;
     disp.setPointerCapture(e.pointerId);
+    if (state.creativeDesk && (e.button === 1 || (e.button === 0 && state.spaceDown))) {
+      state.gesture = { kind: 'pan', clientX: e.clientX, clientY: e.clientY, viewport: state.creativeDesk.viewport() };
+      document.body.classList.add('desk-dragging');
+      return;
+    }
     const p = toCanvas(e);
     if (state.tool === 'select') {
       state.gesture = { kind: 'lasso', points: [p] };
@@ -812,6 +846,15 @@
 
   function onMove(e) {
     if (!state.gesture) return;
+    if (state.gesture.kind === 'pan') {
+      const g = state.gesture;
+      state.creativeDesk.setViewport({
+        x: g.viewport.x + e.clientX - g.clientX,
+        y: g.viewport.y + e.clientY - g.clientY,
+        zoom: g.viewport.zoom,
+      }, { persist: false });
+      return;
+    }
     const p = toCanvas(e);
     const pts = state.gesture.points;
     const last = pts[pts.length - 1];
@@ -823,6 +866,11 @@
     const g = state.gesture;
     state.gesture = null;
     if (!g) { markDirty(); return; }
+    if (g.kind === 'pan') {
+      document.body.classList.remove('desk-dragging');
+      if (state.creativeDesk) state.creativeDesk.setViewport(state.creativeDesk.viewport());
+      markDirty(); return;
+    }
     if (g.kind === 'lasso') {
       core.beginLasso();
       for (const p of g.points) core.extendLasso(p);
@@ -1216,6 +1264,7 @@
     disp.height = Math.max(1, Math.round(h * dpr));
     disp.style.width = w + 'px';
     disp.style.height = h + 'px';
+    if (state.creativeDesk) state.creativeDesk.refreshLayout();
     markDirty();
   }
 
@@ -1274,22 +1323,30 @@
     dctx.setTransform(1, 0, 0, 1, 0, 0);
     dctx.clearRect(0, 0, W, H);
 
-    // contain-fit the square art board
-    const scale = Math.min(W / CANVAS_W, H / CANVAS_H);
-    const cw = CANVAS_W * scale;
-    const ch = CANVAS_H * scale;
-    const ox = (W - cw) / 2;
-    const oy = (H - ch) / 2;
-    state.fit = { scale, ox, oy };
+    // Creative Desk fit is calculated in CSS pixels first so pointer input
+    // and persistent viewport pan use the same coordinate space regardless of
+    // devicePixelRatio. Device pixels are only used for the raster draw.
+    const cssW = Math.max(1, disp.clientWidth || W / dpr);
+    const cssH = Math.max(1, disp.clientHeight || H / dpr);
+    const viewport = state.creativeDesk ? state.creativeDesk.viewport() : { x: 0, y: 0, zoom: 1 };
+    const baseCssScale = Math.min(cssW / CANVAS_W, cssH / CANVAS_H);
+    const cssScale = baseCssScale * viewport.zoom;
+    const cssCw = CANVAS_W * cssScale;
+    const cssCh = CANVAS_H * cssScale;
+    const cssOx = (cssW - cssCw) / 2 + viewport.x;
+    const cssOy = (cssH - cssCh) / 2 + viewport.y;
+    const scale = cssScale * dpr;
+    const cw = cssCw * dpr;
+    const ch = cssCh * dpr;
+    const ox = cssOx * dpr;
+    const oy = cssOy * dpr;
+    state.fit = { scale, ox, oy, cssScale, cssOx, cssOy };
 
-    // publish the artboard rect so overlays can anchor to the ART, not the
-    // viewport (desktop fit: no UI floating in dead side pillars). --art-x
-    // already shrinks with the docked drawer, since it is computed from the
-    // reduced stage rect.
+    // publish the visible shot-sheet rect for screen-space helpers.
     const app = $('app');
-    app.style.setProperty('--art-x', (ox / dpr) + 'px');
-    app.style.setProperty('--art-w', (cw / dpr) + 'px');
-    app.style.setProperty('--art-b', ((oy + ch) / dpr) + 'px');
+    app.style.setProperty('--art-x', cssOx + 'px');
+    app.style.setProperty('--art-w', cssCw + 'px');
+    app.style.setProperty('--art-b', (cssOy + cssCh) + 'px');
 
     // scene-matched backdrop gradient (reads as studio wall, not dead void)
     const bg = dctx.createLinearGradient(0, 0, 0, H);

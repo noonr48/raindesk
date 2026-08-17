@@ -1,0 +1,36 @@
+/* Creative Desk v1: world-space artistic sheets stay separate from screen UI. */
+.creative-world {
+  position:absolute; inset:0; z-index:6; overflow:hidden; pointer-events:none;
+  transform-origin:0 0;
+}
+.creative-sheet {
+  position:absolute; pointer-events:auto; transform-origin:center center;
+  border:1px solid rgba(216,205,182,.42); border-radius:14px;
+  background:rgba(243,234,216,.96); color:#28343a;
+  box-shadow:0 14px 36px rgba(4,11,14,.26), 0 1px 0 rgba(255,255,255,.65) inset;
+  overflow:hidden; min-width:100px; min-height:80px;
+}
+.creative-sheet-head {
+  height:36px; display:flex; align-items:center; justify-content:space-between;
+  padding:0 10px 0 12px; cursor:grab; border-bottom:1px solid rgba(51,80,92,.16);
+  background:rgba(250,246,236,.92); font-size:12px; letter-spacing:.2px;
+}
+.creative-sheet-head:active { cursor:grabbing; }
+.creative-sheet-hide { border:0; background:transparent; color:#6c777b; font-size:17px; padding:3px 6px; }
+.creative-sheet-body { height:calc(100% - 36px); padding:14px; background:linear-gradient(160deg, rgba(255,253,247,.82), rgba(238,230,212,.86)); }
+.creative-sheet-placeholder { height:100%; border:1px dashed rgba(51,80,92,.24); border-radius:10px; display:flex; align-items:center; justify-content:center; text-align:center; color:#7b817e; font-size:11px; padding:18px; }
+.creative-sheet-resize { position:absolute; right:0; bottom:0; width:22px; height:22px; cursor:nwse-resize; }
+.creative-sheet-resize::after { content:''; position:absolute; right:5px; bottom:5px; width:8px; height:8px; border-right:1px solid rgba(51,80,92,.45); border-bottom:1px solid rgba(51,80,92,.45); }
+.creative-tabs {
+  position:absolute; z-index:54; left:50%; top:64px; transform:translateX(-50%);
+  display:flex; gap:5px; max-width:min(76vw, 760px); padding:5px;
+  border:1px solid rgba(51,80,92,.62); border-radius:12px;
+  background:rgba(14,33,41,.82); backdrop-filter:blur(10px); overflow-x:auto;
+}
+.creative-tab { border:1px solid transparent; border-radius:8px; background:transparent; color:#9db6bd; padding:6px 10px; font-size:10px; white-space:nowrap; }
+.creative-tab:hover, .creative-tab.present { color:var(--cream); border-color:rgba(232,176,75,.32); }
+.creative-tab.present::before { content:'· '; color:var(--gold); }
+body.desk-panning #canvas, body.desk-dragging #canvas { cursor:grab !important; }
+body.desk-dragging #canvas { cursor:grabbing !important; }
+@media (min-width:900px) { body.workspace-desktop .hint { top:104px; } }
+@media (max-width:899px) { .creative-tabs { display:none; } .creative-sheet { display:none !important; } }
