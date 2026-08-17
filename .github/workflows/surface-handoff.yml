@@ -1,0 +1,37 @@
+name: Surface Hand-off v1
+
+on:
+  push:
+    branches:
+      - 'chatgpt/surface-handoff-v1'
+  pull_request:
+    branches:
+      - 'chatgpt/adapter-invocations-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  surface-handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check surface hand-off
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check lib/adapter-invocations.js
+          node --check public/js/chat.js
+          node --check public/js/surface-handoff.js
+          node --check public/js/app.js
+          node --check lib/tests/surface-handoff.test.js
+
+      - name: Run complete Raindesk deterministic suite
+        working-directory: raindesk
+        run: npm test
