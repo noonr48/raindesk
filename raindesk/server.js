@@ -52,6 +52,7 @@ const { GenQueue } = require('./lib/queue');
 const assets = require('./lib/assets');
 const blobs = require('./lib/blobs');
 const shotDocuments = require('./lib/shot-documents');
+const sheetDocuments = require('./lib/sheet-documents');
 const workspace = require('./lib/workspace');
 const partnerActions = require('./lib/partner-actions');
 const jobStore = require('./lib/job-store');
@@ -328,6 +329,54 @@ async function handleApi(req, res, url, deps) {
   if (method === 'POST' && route === '/api/workspace/viewport') {
     const body = await readJson(req, 64 * 1024);
     return sendJson(res, 200, { ok: true, viewport: workspace.setViewport(body) });
+  }
+
+  /* Creative sheets: content is revisioned separately from world placement. */
+  if (method === 'GET' && route === '/api/sheets') {
+    return sendJson(res, 200, { sheets: sheetDocuments.list() });
+  }
+  if (method === 'POST' && route === '/api/sheet') {
+    const body = await readJson(req, 256 * 1024);
+    return sendJson(res, 201, { ok: true, revision: sheetDocuments.create(body || {}) });
+  }
+  const sheetCurrentMatch = route.match(/^\/api\/sheet\/([^/]+)$/);
+  if (sheetCurrentMatch) {
+    const sheetId = decodeSeg(sheetCurrentMatch[1]);
+    if (sheetId === null) throw new HttpError(404, 'not found');
+    if (method === 'GET') {
+      const revision = sheetDocuments.readCurrent(sheetId);
+      if (!revision) throw new HttpError(404, 'no such sheet');
+      return sendJson(res, 200, revision);
+    }
+    if (method === 'POST') {
+      const body = await readJson(req, 8 * 1024 * 1024);
+      if (!body || !body.document) throw new HttpError(400, 'sheet document is required');
+      const revision = sheetDocuments.save(sheetId, body.document, {
+        baseRevisionId: body.baseRevisionId || null, reason: body.reason || 'edit sheet',
+      });
+      return sendJson(res, 200, { ok: true, revision });
+    }
+  }
+  const sheetHistoryMatch = route.match(/^\/api\/sheet\/([^/]+)\/revisions$/);
+  if (method === 'GET' && sheetHistoryMatch) {
+    const sheetId = decodeSeg(sheetHistoryMatch[1]);
+    if (sheetId === null) throw new HttpError(404, 'not found');
+    return sendJson(res, 200, sheetDocuments.history(sheetId));
+  }
+  const sheetRevisionMatch = route.match(/^\/api\/sheet\/([^/]+)\/revision\/([^/]+)$/);
+  if (method === 'GET' && sheetRevisionMatch) {
+    const sheetId = decodeSeg(sheetRevisionMatch[1]); const revisionId = decodeSeg(sheetRevisionMatch[2]);
+    if (sheetId === null || revisionId === null) throw new HttpError(404, 'not found');
+    return sendJson(res, 200, sheetDocuments.readRevision(sheetId, revisionId));
+  }
+  const sheetRestoreMatch = route.match(/^\/api\/sheet\/([^/]+)\/revision\/([^/]+)\/restore$/);
+  if (method === 'POST' && sheetRestoreMatch) {
+    const sheetId = decodeSeg(sheetRestoreMatch[1]); const revisionId = decodeSeg(sheetRestoreMatch[2]);
+    if (sheetId === null || revisionId === null) throw new HttpError(404, 'not found');
+    const body = await readJson(req, 128 * 1024);
+    return sendJson(res, 200, { ok: true, revision: sheetDocuments.restore(sheetId, revisionId, {
+      baseRevisionId: body.baseRevisionId || null, reason: body.reason || 'restore sheet revision',
+    }) });
   }
 
   if (method === 'GET' && route === '/api/partner/actions') {
