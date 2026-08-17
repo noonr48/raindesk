@@ -93,6 +93,15 @@
   function createDirectionScene(scene) { return POST('/api/direction/scene', scene || {}); }
   function createDirectionShot(shot) { return POST('/api/direction/shot', shot || {}); }
   function createDirectionBeat(beat) { return POST('/api/direction/beat', beat || {}); }
+  function updateDirectionBeat(beatId, patch) { return POST('/api/direction/beat/update', { beatId, patch: patch || {} }); }
+  function reorderDirectionBeats(shotId, orderedBeatIds) { return POST('/api/direction/beat/reorder', { shotId, orderedBeatIds }); }
+  function deleteDirectionBeat(beatId) { return POST('/api/direction/beat/delete', { beatId }); }
+  function setDirectionShotConstraints(shotId, { preserve = [], change = [] } = {}) {
+    return POST('/api/direction/shot-constraints', { shotId, preserve, change });
+  }
+  function setDirectionBeatFrameRef(beatId, slot, frameRef) {
+    return POST('/api/direction/beat-frame-ref', { beatId, slot, frameRef });
+  }
   function addDirectionAnnotation(annotation) { return POST('/api/direction/annotation', annotation || {}); }
   function setDirectionShotAnchor(shotId, slot, anchor) {
     return POST('/api/direction/shot-anchor', { shotId, slot, anchor });
@@ -340,7 +349,7 @@
     ApiError, GET, POST, base64FromBytes,
     getBoard, getBoardOrDemo, moveShot,
     getDirection, updateDirectionProject, createDirectionScene, createDirectionShot,
-    createDirectionBeat, addDirectionAnnotation, setDirectionShotAnchor, setDirectionShotFrameRef,
+    createDirectionBeat, updateDirectionBeat, reorderDirectionBeats, deleteDirectionBeat, setDirectionShotConstraints, setDirectionBeatFrameRef, addDirectionAnnotation, setDirectionShotAnchor, setDirectionShotFrameRef,
     getDirectionShotSpec, partnerTurn,
     submitGen, pollGen, cancelGen, listJobs, listTakes, acceptTake, rejectTake, reopenTake, fetchImageRGBA,
     getShot, uploadLayer, shotImageUrl,

@@ -9,20 +9,37 @@ const BEATS = require('../../public/js/beats');
 const html = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
 const app = fs.readFileSync(path.join(__dirname, '../../public/js/app.js'), 'utf8');
 const chat = fs.readFileSync(path.join(__dirname, '../../public/js/chat.js'), 'utf8');
+const beatsSource = fs.readFileSync(path.join(__dirname, '../../public/js/beats.js'), 'utf8');
 
- test('beat helpers prefer the artist raw wording and keep metadata lightweight', () => {
+test('beat helpers prefer artist wording, hide rejected beats, and reorder without mutating input', () => {
   const beat = { rawDirection: 'clicks tongue while shaking his fist', movement: { actor: 'Tom', timing: 'before the lunge' } };
   assert.equal(BEATS.beatLine(beat), 'clicks tongue while shaking his fist');
   assert.match(BEATS.beatMeta(beat), /Tom/);
   assert.match(BEATS.beatMeta(beat), /before the lunge/);
+  const beats = [{ id: 'a', order: 1 }, { id: 'b', order: 2, status: 'rejected' }, { id: 'c', order: 3 }];
+  assert.deepEqual(BEATS.visibleBeats({ beats }).map((b) => b.id), ['a', 'c']);
+  const visible = BEATS.visibleBeats({ beats });
+  assert.deepEqual(BEATS.reorderedIds(visible, 'c', -1), ['c', 'a']);
+  assert.deepEqual(visible.map((b) => b.id), ['a', 'c'], 'helper does not mutate the visible beat array');
 });
 
-test('Beat Trail is loaded as a minimizable creative panel, not a fixed inspector', () => {
+test('frame helper accepts immutable blob-backed visual references', () => {
+  const sha = 'a'.repeat(64);
+  assert.equal(BEATS.frameImage({ referenceId: sha }), `/api/blob/${sha}`);
+  assert.equal(BEATS.frameImage({ imageUrl: '/api/blob/custom' }), '/api/blob/custom');
+  assert.equal(BEATS.frameImage({ referenceId: 'not-a-blob-id' }), '');
+});
+
+test('Beat Trail is loaded as a minimizable creative panel with start/end and keep/change surfaces', () => {
   assert.match(html, /data-tool="beats"/);
   assert.match(html, /id="beatTrail"/);
   assert.match(html, /js\/beats\.js/);
   assert.match(app, /RaindeskBeats/);
   assert.match(app, /state\.beatTrail\.toggle/);
+  assert.match(beatsSource, /shot-frame-strip/);
+  assert.match(beatsSource, /constraint-row/);
+  assert.match(beatsSource, /onCaptureFrame/);
+  assert.match(beatsSource, /setDirectionShotConstraints/);
 });
 
 test('ordinary Partner turns can refresh a visible Beat Trail', () => {
@@ -31,11 +48,21 @@ test('ordinary Partner turns can refresh a visible Beat Trail', () => {
   assert.match(app, /state\.drawer\.on\(['"]turn['"]/);
 });
 
-test('Beat Trail pins raw artist wording before asking Partner to enrich it', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../../public/js/beats.js'), 'utf8');
-  const pinAt = source.indexOf('api.createDirectionBeat');
-  const partnerAt = source.indexOf('await askPartner(v');
+test('Beat Trail pins raw artist wording before Partner enrichment and reuses that beat id', () => {
+  const submitAt = beatsSource.indexOf('async function submit()');
+  const submitEnd = beatsSource.indexOf('closeBtn.addEventListener', submitAt);
+  const submit = beatsSource.slice(submitAt, submitEnd);
+  const pinAt = submit.indexOf('await api.createDirectionBeat');
+  const partnerAt = submit.indexOf('await askPartner(v');
   assert.ok(pinAt !== -1 && partnerAt !== -1 && pinAt < partnerAt, 'raw beat save happens before Partner call');
-  assert.match(source, /precreatedBeatId/);
-  assert.match(source, /source: \{ kind: 'user_beat_trail' \}/);
+  assert.match(submit, /precreatedBeatId: pinned\.id/);
+  assert.match(submit, /source: \{ kind: 'user_beat_trail' \}/);
+});
+
+test('Beat Trail editing is non-destructive by default and exposes active beat context', () => {
+  assert.match(beatsSource, /updateDirectionBeat\(beat\.id, \{ status: 'rejected' \}\)/);
+  assert.doesNotMatch(beatsSource, /deleteDirectionBeat\(beat\.id/);
+  assert.match(beatsSource, /activeBeatId:/);
+  assert.match(beatsSource, /selectBeat/);
+  assert.match(beatsSource, /reorderDirectionBeats/);
 });

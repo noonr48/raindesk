@@ -21,7 +21,7 @@ const DATA_DIR = process.env.RAINDESK_DATA_DIR
   ? path.resolve(process.env.RAINDESK_DATA_DIR)
   : path.join(__dirname, '..', 'data');
 const DIRECTION_PATH = path.join(DATA_DIR, 'direction.json');
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const PARTNER_MODES = ['watch', 'suggest', 'act'];
 const ANNOTATION_KINDS = [
   'camera_path', 'actor_motion', 'framing', 'attention', 'timing',
@@ -137,8 +137,12 @@ function migrateV1(input) {
     if (!isObject(shot.cameraCues)) shot.cameraCues = { start: null, end: null };
     if (shot.startFrame === undefined) shot.startFrame = null;
     if (shot.endFrame === undefined) shot.endFrame = null;
+    shot.preserve = normalizeTextList(shot.preserve);
+    shot.change = normalizeTextList(shot.change);
   }
   for (const beat of graph.beats) {
+    if (beat.startFrame === undefined) beat.startFrame = null;
+    if (beat.endFrame === undefined) beat.endFrame = null;
     beat.events = Array.isArray(beat.events) ? beat.events : synthesizeEvents({
       movement: beat.movement || {}, camera: beat.camera || {}, dialogue: beat.dialogue || '', rawDirection: beat.rawDirection || beat.description || '',
     });
@@ -165,7 +169,7 @@ function readGraph() {
   try { graph = JSON.parse(raw); } catch (_e) {
     throw new HttpError(500, 'data/direction.json is not valid JSON');
   }
-  if (graph && graph.schemaVersion === 1) {
+  if (graph && (graph.schemaVersion === 1 || graph.schemaVersion === 2)) {
     graph = migrateV1(graph);
     writeGraph(graph);
   }
@@ -182,6 +186,26 @@ function assertId(id, what = 'id') {
 
 function normalizeStatus(value, fallback = 'provisional') {
   return STATUS.includes(value) ? value : fallback;
+}
+
+function normalizeTextList(value, maxItems = 64, maxText = 1000) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.slice(0, maxItems).map((x) => cleanText(x, maxText)).filter(Boolean)));
+}
+
+function normalizeVisualFrameRef(frameRef) {
+  if (!isObject(frameRef)) return null;
+  const out = {
+    kind: cleanText(frameRef.kind, 64) || 'visual_reference',
+    description: cleanText(frameRef.description, 2000),
+    framing: cleanText(frameRef.framing, 1000),
+    referenceId: cleanText(frameRef.referenceId, 256) || null,
+    imageUrl: cleanText(frameRef.imageUrl, 2000) || null,
+    sourceRevisionId: cleanText(frameRef.sourceRevisionId, 160) || null,
+    capturedAt: cleanText(frameRef.capturedAt, 128) || now(),
+  };
+  if (!out.referenceId && !out.imageUrl) throw new HttpError(400, 'frame reference needs referenceId or imageUrl');
+  return out;
 }
 
 function setProject(patch = {}) {
@@ -279,7 +303,7 @@ function ensureLegacyShot(legacyShotId, { beat = '', title = '' } = {}) {
       title: cleanText(title, 512) || rawLegacyId,
       description: cleanText(beat),
       purpose: '', startFrame: null, endFrame: null, cameraCues: { start: null, end: null }, camera: {}, dialogue: [],
-      preserve: [], takes: [], status: 'provisional',
+      preserve: [], change: [], takes: [], status: 'provisional',
       source: { kind: 'legacy_board_bridge', legacyShotId: rawLegacyId },
       createdAt: now(), updatedAt: now(),
     };
@@ -317,7 +341,8 @@ function createShot(input = {}) {
       : { start: null, end: null },
     camera: isObject(input.camera) ? input.camera : {},
     dialogue: Array.isArray(input.dialogue) ? input.dialogue : [],
-    preserve: Array.isArray(input.preserve) ? input.preserve.map((x) => cleanText(x, 1000)).filter(Boolean) : [],
+    preserve: normalizeTextList(input.preserve),
+    change: normalizeTextList(input.change),
     takes: Array.isArray(input.takes) ? input.takes : [],
     status: normalizeStatus(input.status),
     source: isObject(input.source) ? input.source : { kind: 'user' },
@@ -499,13 +524,7 @@ function setShotFrameRef(shotId, slot, frameRef) {
     throw new HttpError(400, 'frameRef needs referenceId or imageUrl');
   }
   const key = slot === 'start' ? 'startFrame' : 'endFrame';
-  shot[key] = frameRef == null ? null : {
-    kind: cleanText(frameRef.kind, 64) || 'visual_reference',
-    description: cleanText(frameRef.description, 2000),
-    framing: cleanText(frameRef.framing, 1000),
-    referenceId: cleanText(frameRef.referenceId, 256) || null,
-    imageUrl: cleanText(frameRef.imageUrl, 2000) || null,
-  };
+  shot[key] = frameRef == null ? null : normalizeVisualFrameRef(frameRef);
   shot.updatedAt = now();
   writeGraph(graph);
   return shot[key];
@@ -523,7 +542,12 @@ function shotSpec(shotId) {
     scene: getScene(graph, shot.sceneId),
     shot,
     beats: graph.beats.filter((b) => b.shotId === shotId).sort((a, b) => a.order - b.order),
-    annotations: graph.annotations.filter((a) => a.scopeType === 'shot' && a.scopeId === shotId),
+    annotations: (() => {
+      const beatIds = new Set(graph.beats.filter((b) => b.shotId === shotId).map((b) => b.id));
+      return graph.annotations.filter((a) =>
+        (a.scopeType === 'shot' && a.scopeId === shotId) ||
+        (a.scopeType === 'beat' && beatIds.has(a.scopeId)));
+    })(),
     intents: graph.intents.filter((i) => i.shotId === shotId).slice(-24),
     updatedAt: graph.updatedAt,
   };
@@ -541,6 +565,8 @@ function createBeat(input = {}) {
     id,
     shotId,
     order: Number.isFinite(input.order) ? Number(input.order) : siblings.length + 1,
+    startFrame: input.startFrame ? normalizeVisualFrameRef(input.startFrame) : null,
+    endFrame: input.endFrame ? normalizeVisualFrameRef(input.endFrame) : null,
     description: cleanText(input.description),
     rawDirection: cleanText(input.rawDirection || input.description),
     movement: normalizeMovement(input.movement),
@@ -549,7 +575,7 @@ function createBeat(input = {}) {
     camera: isObject(input.camera) ? input.camera : {},
     timing: isObject(input.timing) ? input.timing : {},
     dialogue: cleanText(input.dialogue),
-    preserve: Array.isArray(input.preserve) ? input.preserve.map((x) => cleanText(x, 1000)).filter(Boolean) : [],
+    preserve: normalizeTextList(input.preserve),
     status: normalizeStatus(input.status),
     source: isObject(input.source) ? input.source : { kind: 'user' },
     createdAt: now(),
@@ -573,6 +599,13 @@ function updateBeat(beatId, patch = {}) {
 
   // Raw artist wording is authoritative and is only replaced when an explicit
   // rawDirection is supplied. Partner enrichment fills structure around it.
+  if (patch.order !== undefined) {
+    const order = Number(patch.order);
+    if (!Number.isFinite(order)) throw new HttpError(400, 'beat order must be a number');
+    beat.order = order;
+  }
+  if (patch.startFrame !== undefined) beat.startFrame = patch.startFrame == null ? null : normalizeVisualFrameRef(patch.startFrame);
+  if (patch.endFrame !== undefined) beat.endFrame = patch.endFrame == null ? null : normalizeVisualFrameRef(patch.endFrame);
   if (patch.rawDirection !== undefined) beat.rawDirection = cleanText(patch.rawDirection);
   if (patch.description !== undefined) beat.description = cleanText(patch.description);
   if (patch.movement !== undefined) beat.movement = {
@@ -621,6 +654,74 @@ function updateBeat(beatId, patch = {}) {
   return beat;
 }
 
+
+function reorderBeats(shotId, orderedBeatIds) {
+  assertId(shotId, 'shotId');
+  if (!Array.isArray(orderedBeatIds)) throw new HttpError(400, 'orderedBeatIds must be an array');
+  const graph = readGraph();
+  if (!getShot(graph, shotId)) throw new HttpError(404, `unknown shot "${shotId}"`);
+  const siblings = graph.beats.filter((b) => b.shotId === shotId).sort((a, b) => a.order - b.order);
+  const currentIds = siblings.map((b) => b.id);
+  const requested = orderedBeatIds.map((id) => assertId(id, 'beat id'));
+  if (requested.length !== currentIds.length || new Set(requested).size !== currentIds.length ||
+      currentIds.some((id) => !requested.includes(id))) {
+    throw new HttpError(400, 'reorder must include every beat in the shot exactly once');
+  }
+  const byId = new Map(siblings.map((b) => [b.id, b]));
+  requested.forEach((id, index) => {
+    const beat = byId.get(id);
+    beat.order = index + 1;
+    beat.updatedAt = now();
+  });
+  writeGraph(graph);
+  return requested.map((id) => byId.get(id));
+}
+
+function deleteBeat(beatId) {
+  assertId(beatId, 'beat id');
+  const graph = readGraph();
+  const index = graph.beats.findIndex((b) => b.id === beatId);
+  if (index === -1) throw new HttpError(404, `unknown beat "${beatId}"`);
+  const [beat] = graph.beats.splice(index, 1);
+  const removedAnnotations = graph.annotations.filter((a) => a.scopeType === 'beat' && a.scopeId === beatId);
+  graph.annotations = graph.annotations.filter((a) => !(a.scopeType === 'beat' && a.scopeId === beatId));
+  graph.beats.filter((b) => b.shotId === beat.shotId).sort((a, b) => a.order - b.order)
+    .forEach((b, i) => { b.order = i + 1; b.updatedAt = now(); });
+  writeGraph(graph);
+  return { beat, removedAnnotations };
+}
+
+function setShotConstraints(shotId, patch = {}) {
+  assertId(shotId, 'shotId');
+  const graph = readGraph();
+  const shot = getShot(graph, shotId);
+  if (!shot) throw new HttpError(404, `unknown shot "${shotId}"`);
+  if (patch.preserve !== undefined) {
+    if (!Array.isArray(patch.preserve)) throw new HttpError(400, 'preserve must be an array');
+    shot.preserve = normalizeTextList(patch.preserve);
+  }
+  if (patch.change !== undefined) {
+    if (!Array.isArray(patch.change)) throw new HttpError(400, 'change must be an array');
+    shot.change = normalizeTextList(patch.change);
+  }
+  shot.updatedAt = now();
+  writeGraph(graph);
+  return { preserve: shot.preserve, change: shot.change };
+}
+
+function setBeatFrameRef(beatId, slot, frameRef) {
+  assertId(beatId, 'beat id');
+  if (!['start', 'end'].includes(slot)) throw new HttpError(400, 'beat frame slot must be start or end');
+  const graph = readGraph();
+  const beat = graph.beats.find((b) => b.id === beatId);
+  if (!beat) throw new HttpError(404, `unknown beat "${beatId}"`);
+  const key = slot === 'start' ? 'startFrame' : 'endFrame';
+  beat[key] = frameRef == null ? null : normalizeVisualFrameRef(frameRef);
+  beat.updatedAt = now();
+  writeGraph(graph);
+  return beat[key];
+}
+
 function addAnnotation(input = {}) {
   const graph = readGraph();
   const scopeType = ['project', 'scene', 'shot', 'beat', 'canvas_object'].includes(input.scopeType)
@@ -631,10 +732,12 @@ function addAnnotation(input = {}) {
   if (scopeType === 'beat' && !graph.beats.some((b) => b.id === scopeId)) throw new HttpError(404, `unknown beat "${scopeId}"`);
   const kind = ANNOTATION_KINDS.includes(input.kind) ? input.kind : 'unknown';
   const id = input.id ? assertId(input.id, 'annotation id') : makeId('ann', graph.annotations);
+  const scopedBeat = scopeType === 'beat' ? graph.beats.find((b) => b.id === scopeId) : null;
   const annotation = {
     id,
     scopeType,
     scopeId,
+    shotId: scopeType === 'shot' ? scopeId : (scopedBeat ? scopedBeat.shotId : null),
     kind,
     rawText: cleanText(input.rawText),
     geometry: isObject(input.geometry) ? input.geometry : null,
@@ -679,7 +782,12 @@ function summary(graph = readGraph()) {
     ? graph.beats.filter((b) => b.shotId === activeShot.id).sort((a, b) => a.order - b.order)
     : [];
   const shotAnnotations = activeShot
-    ? graph.annotations.filter((a) => a.scopeType === 'shot' && a.scopeId === activeShot.id)
+    ? (() => {
+      const beatIds = new Set(graph.beats.filter((b) => b.shotId === activeShot.id).map((b) => b.id));
+      return graph.annotations.filter((a) =>
+        (a.scopeType === 'shot' && a.scopeId === activeShot.id) ||
+        (a.scopeType === 'beat' && beatIds.has(a.scopeId)));
+    })()
     : [];
   return {
     schemaVersion: graph.schemaVersion,
@@ -702,8 +810,8 @@ function summary(graph = readGraph()) {
 module.exports = {
   DATA_DIR, DIRECTION_PATH, SCHEMA_VERSION, PARTNER_MODES, ANNOTATION_KINDS,
   STATUS, EVENT_KINDS, RELATION_KINDS, emptyGraph, migrateV1, isValidGraph, readGraph, writeGraph, setProject,
-  createScene, createShot, createBeat, updateBeat, addAnnotation, recordIntent, summary,
+  createScene, createShot, createBeat, updateBeat, reorderBeats, deleteBeat, setShotConstraints, setBeatFrameRef, addAnnotation, recordIntent, summary,
   normalizeMovement, normalizeBeatEvent, normalizeBeatEvents, normalizeBeatRelations, synthesizeEvents,
-  normalizeFrameAnchor, setShotAnchor, setShotFrameRef, shotSpec,
+  normalizeFrameAnchor, normalizeVisualFrameRef, setShotAnchor, setShotFrameRef, shotSpec,
   ensureLegacyShot, safeLegacyPart,
 };

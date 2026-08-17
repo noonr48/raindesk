@@ -339,3 +339,71 @@ test('Partner receives bounded persistent workspace objects so spatial language 
   assert.equal(seen[0].workspace.objects[1].id, 'panel_beats');
   assert.equal(seen[0].workspace.objects[0].dock, 'right');
 });
+
+test('Partner receives keep/change boundaries and active beat context as directing constraints', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'constraint_partner_scene', title: 'Close fight' });
+  direction.createShot({
+    id: 'constraint_partner_shot', sceneId: scene.id, title: 'Hand catch',
+    preserve: ['face identity', 'camera framing'], change: ['right hand pose'],
+  });
+  const beat = direction.createBeat({ id: 'constraint_partner_beat', shotId: 'constraint_partner_shot', rawDirection: 'she catches his wrist' });
+  let seen;
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat(prompt) {
+      assert.match(prompt, /keep\/preserve constraints/i);
+      const m = prompt.match(/Current context \(may be partial\):\n([\s\S]*?)\n\n/);
+      seen = JSON.parse(m[1]);
+      return JSON.stringify({ message: 'I will keep the face and framing fixed.', interpretation: { kind: 'review', confidence: 0.8 }, nextMoves: [] });
+    } },
+    directionImpl: direction,
+  });
+  await partner.turn({
+    message: 'only change the hand',
+    context: {
+      sceneId: scene.id, shotId: 'constraint_partner_shot', activeBeatId: beat.id,
+      activeBeat: { id: beat.id, order: 1, rawDirection: beat.rawDirection },
+      directingConstraints: { preserve: ['face identity', 'camera framing'], change: ['right hand pose'] },
+    },
+  });
+  assert.equal(seen.activeBeatId, beat.id);
+  assert.equal(seen.activeBeat.rawDirection, 'she catches his wrist');
+  assert.deepEqual(seen.direction.activeShot.preserve, ['face identity', 'camera framing']);
+  assert.deepEqual(seen.direction.activeShot.change, ['right hand pose']);
+  assert.deepEqual(seen.directingConstraints.change, ['right hand pose']);
+});
+
+test('beat-scoped DIRECT annotation enriches the selected beat instead of creating a duplicate', async () => {
+  direction.writeGraph(direction.emptyGraph());
+  const scene = direction.createScene({ id: 'direct_mark_scene', title: 'Fight' });
+  direction.createShot({ id: 'direct_mark_shot', sceneId: scene.id, title: 'Contact' });
+  const rawBeat = direction.createBeat({
+    id: 'direct_mark_beat', shotId: 'direct_mark_shot', rawDirection: 'she catches his wrist',
+    description: 'she catches his wrist', source: { kind: 'user_beat_trail' },
+  });
+  const partner = partnerModule.createPartner({
+    agentImpl: { async chat() { return JSON.stringify({
+      message: 'Yep — this arrow is the catch path for this beat.',
+      interpretation: {
+        kind: 'movement', movement: { actor: 'She', action: 'left hand catches wrist', bodyPart: 'left hand' },
+        events: [{ id: 'catch', kind: 'contact', description: 'hand catches wrist', actor: 'She', contact: { initiatorActor: 'She', initiatorBodyPart: 'left hand', receiverBodyPart: 'wrist' } }],
+        confidence: 0.9,
+      },
+      nextMoves: [], workflowHints: ['contact_action'], boardActions: [],
+    }); } },
+    directionImpl: direction,
+  });
+  const turn = await partner.turn({
+    message: 'I drew this direction: her hand lands here',
+    context: {
+      sceneId: scene.id, shotId: 'direct_mark_shot', activeBeatId: rawBeat.id,
+      surface: 'direction_annotation', selection: { type: 'direction_annotation', rawText: 'her hand lands here' },
+    },
+  });
+  assert.equal(turn.captured.beatId, rawBeat.id);
+  assert.equal(turn.captured.fromDirectionAnnotation, true);
+  const spec = direction.shotSpec('direct_mark_shot');
+  assert.equal(spec.beats.length, 1, 'DIRECT detail must not create a second beat');
+  assert.equal(spec.beats[0].rawDirection, 'she catches his wrist', 'raw Beat Trail wording stays authoritative');
+  assert.equal(spec.beats[0].events[0].kind, 'contact');
+});

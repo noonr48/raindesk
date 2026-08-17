@@ -370,6 +370,38 @@ async function handleApi(req, res, url, deps) {
     return sendJson(res, 201, { ok: true, beat: direction.createBeat(body) });
   }
 
+  if (method === 'POST' && route === '/api/direction/beat/update') {
+    const body = await readJson(req, 512 * 1024);
+    if (typeof body.beatId !== 'string' || !body.beatId) throw new HttpError(400, 'beatId is required');
+    return sendJson(res, 200, { ok: true, beat: direction.updateBeat(body.beatId, body.patch || {}) });
+  }
+
+  if (method === 'POST' && route === '/api/direction/beat/reorder') {
+    const body = await readJson(req, 512 * 1024);
+    if (typeof body.shotId !== 'string' || !body.shotId) throw new HttpError(400, 'shotId is required');
+    return sendJson(res, 200, { ok: true, beats: direction.reorderBeats(body.shotId, body.orderedBeatIds) });
+  }
+
+  if (method === 'POST' && route === '/api/direction/beat/delete') {
+    const body = await readJson(req, 128 * 1024);
+    if (typeof body.beatId !== 'string' || !body.beatId) throw new HttpError(400, 'beatId is required');
+    return sendJson(res, 200, { ok: true, ...direction.deleteBeat(body.beatId) });
+  }
+
+  if (method === 'POST' && route === '/api/direction/shot-constraints') {
+    const body = await readJson(req, 512 * 1024);
+    if (typeof body.shotId !== 'string' || !body.shotId) throw new HttpError(400, 'shotId is required');
+    return sendJson(res, 200, { ok: true, shotId: body.shotId, constraints: direction.setShotConstraints(body.shotId, body) });
+  }
+
+  if (method === 'POST' && route === '/api/direction/beat-frame-ref') {
+    const body = await readJson(req, 1024 * 1024);
+    if (typeof body.beatId !== 'string' || !body.beatId) throw new HttpError(400, 'beatId is required');
+    if (typeof body.slot !== 'string' || !body.slot) throw new HttpError(400, 'slot is required');
+    const frameRef = direction.setBeatFrameRef(body.beatId, body.slot, body.frameRef == null ? null : body.frameRef);
+    return sendJson(res, 200, { ok: true, beatId: body.beatId, slot: body.slot, frameRef });
+  }
+
   if (method === 'POST' && route === '/api/direction/annotation') {
     const body = await readJson(req, 1024 * 1024);
     return sendJson(res, 201, { ok: true, annotation: direction.addAnnotation(body) });

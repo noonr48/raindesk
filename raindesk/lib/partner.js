@@ -143,6 +143,7 @@ function compactContext(summary, extra) {
     startFrame: shot.startFrame || null, endFrame: shot.endFrame || null,
     cameraCues: shot.cameraCues || { start: null, end: null },
     camera: shot.camera || {}, preserve: Array.isArray(shot.preserve) ? shot.preserve.slice(0, 12) : [],
+    change: Array.isArray(shot.change) ? shot.change.slice(0, 12) : [],
     status: shot.status,
   } : null;
   const context = {
@@ -171,6 +172,20 @@ function compactContext(summary, extra) {
       openQuestions: Array.isArray(summary.openQuestions) ? summary.openQuestions.slice(-6) : [],
     },
     activeSelection: isObject(extra && extra.selection) ? extra.selection : null,
+    activeBeatId: text(extra && extra.activeBeatId, 128) || null,
+    activeBeat: isObject(extra && extra.activeBeat) ? {
+      id: text(extra.activeBeat.id, 128), order: Number(extra.activeBeat.order) || 0,
+      rawDirection: text(extra.activeBeat.rawDirection, 1200),
+      events: Array.isArray(extra.activeBeat.events) ? extra.activeBeat.events.slice(-12) : [],
+      relations: Array.isArray(extra.activeBeat.relations) ? extra.activeBeat.relations.slice(-16) : [],
+      startFrame: extra.activeBeat.startFrame || null, endFrame: extra.activeBeat.endFrame || null,
+    } : null,
+    directingConstraints: isObject(extra && extra.directingConstraints) ? {
+      preserve: Array.isArray(extra.directingConstraints.preserve) ? extra.directingConstraints.preserve.slice(0, 24) : [],
+      change: Array.isArray(extra.directingConstraints.change) ? extra.directingConstraints.change.slice(0, 24) : [],
+      startFrame: extra.directingConstraints.startFrame || null,
+      endFrame: extra.directingConstraints.endFrame || null,
+    } : null,
     activeCanvas: isObject(extra && extra.canvas) ? extra.canvas : null,
     artRevisionId: text(extra && extra.artRevisionId, 128) || null,
     visibleLayers: Array.isArray(extra && extra.visibleLayers) ? extra.visibleLayers.slice(0, 48) : [],
@@ -228,7 +243,7 @@ function compactContext(summary, extra) {
 
 function buildPrompt({ message, summary, extraContext, kickstart }) {
   const seed = kickstart ? kickstartSeed(summary) : null;
-  return `RAINDESK PARTNER TURN\n\nYou are the single creative partner visible to the artist. The artist stays in the art space: sketches, arrows, captions, movement descriptions, camera ideas and casual conversation. You quietly translate that into scene -> shot -> beat intent and production workflows. Never make them choose technical tools or pipeline nodes.\n\nImportant behaviour:\n- Talk like a concise creative partner, not a production dashboard.\n- When the artist is stuck, reduce scope and offer 2-3 low-commitment ways to start. Do not ask them to define the whole project.\n- Preserve the artist's raw wording. Interpret movement in terms of actor, preparation, action, body part, target/contact, path, quality, timing, emotion, follow-through and camera relationship when useful.\n- When one sentence contains multiple meaningful actions, performance moments, dialogue, camera moves, sounds or contacts, split them into lightweight events and express only useful timing relationships such as before/after/during/overlaps/follows. Do not over-segment simple direction.\n- Interpret camera notes in terms of start framing, path, target, landing framing and timing when useful.\n- Prefer reversible takes and preserve boundaries over destructive regeneration.\n- Ask at most ONE clarifying question, only when ambiguity materially changes the creative meaning.\n- Board actions are suggestions unless permission mode allows harmless organisation.\n\nCurrent context (may be partial):\n${compactContext(summary, extraContext)}\n\n${seed ? `If useful, use this anti-freeze seed rather than making the user invent structure:\n${JSON.stringify(seed)}\n\n` : ''}Artist message:\n${text(message, 6000) || '(no message; they asked for a starting nudge)'}\n\nReturn JSON ONLY with this shape:\n{\n  "message": "1-4 short conversational sentences",\n  "interpretation": {\n    "kind": "creative_direction|movement|camera|performance|edit|setup|review",\n    "scene": "optional",\n    "shot": "optional",\n    "movement": {"actor":"","preparation":"","action":"","bodyPart":"","target":"","path":"","quality":"","timing":"","emotion":"","followThrough":"","cameraRelation":""},\n    "camera": {"start":"","framingStart":"","path":"","target":"","end":"","framingEnd":"","timing":"","quality":""},\n    "events": [{"id":"e1","kind":"action|performance|dialogue|camera|contact|sound","description":"","actor":"","bodyPart":"","target":"","path":"","quality":"","emotion":"","timing":"","dialogue":"","sound":"","contact":{"initiatorActor":"","initiatorBodyPart":"","receiverActor":"","receiverBodyPart":"","target":"","quality":""}}],\n    "relations": [{"type":"before|after|during|overlaps|follows|causes|simultaneous","from":"e1","to":"e2","description":"optional"}],\n    "editScope": "optional",\n    "preserve": ["optional constraints"],\n    "confidence": 0.0\n  },\n  "nextMoves": [{"label":"short button label","prompt":"what selecting it tells you","kind":"continue"}],\n  "workflowHints": ["optional stable recipe ids such as camera_reveal or contact_action"],\n  "boardActions": [{"type":"focus|open_panel|move_panel|dock_panel|pin_reference|create_variant|compare_takes|arrange|link|create_scene|create_shot|create_beat|add_annotation", "targetId":"optional", "payload":{}}],\n  "question": "optional single clarifying question"\n}`;
+  return `RAINDESK PARTNER TURN\n\nYou are the single creative partner visible to the artist. The artist stays in the art space: sketches, arrows, captions, movement descriptions, camera ideas and casual conversation. You quietly translate that into scene -> shot -> beat intent and production workflows. Never make them choose technical tools or pipeline nodes.\n\nImportant behaviour:\n- Talk like a concise creative partner, not a production dashboard.\n- When the artist is stuck, reduce scope and offer 2-3 low-commitment ways to start. Do not ask them to define the whole project.\n- Preserve the artist's raw wording. Interpret movement in terms of actor, preparation, action, body part, target/contact, path, quality, timing, emotion, follow-through and camera relationship when useful.\n- When one sentence contains multiple meaningful actions, performance moments, dialogue, camera moves, sounds or contacts, split them into lightweight events and express only useful timing relationships such as before/after/during/overlaps/follows. Do not over-segment simple direction.\n- Interpret camera notes in terms of start framing, path, target, landing framing and timing when useful.\n- Prefer reversible takes and preserve boundaries over destructive regeneration.\n- Treat keep/preserve constraints in context as hard creative boundaries unless the artist explicitly changes them. Treat change constraints as the intended edit scope. Never silently broaden the change beyond those boundaries.\n- If a direction mark is attached to an active beat, interpret it as detail for that beat rather than inventing a duplicate beat.\n- Ask at most ONE clarifying question, only when ambiguity materially changes the creative meaning.\n- Board actions are suggestions unless permission mode allows harmless organisation.\n\nCurrent context (may be partial):\n${compactContext(summary, extraContext)}\n\n${seed ? `If useful, use this anti-freeze seed rather than making the user invent structure:\n${JSON.stringify(seed)}\n\n` : ''}Artist message:\n${text(message, 6000) || '(no message; they asked for a starting nudge)'}\n\nReturn JSON ONLY with this shape:\n{\n  "message": "1-4 short conversational sentences",\n  "interpretation": {\n    "kind": "creative_direction|movement|camera|performance|edit|setup|review",\n    "scene": "optional",\n    "shot": "optional",\n    "movement": {"actor":"","preparation":"","action":"","bodyPart":"","target":"","path":"","quality":"","timing":"","emotion":"","followThrough":"","cameraRelation":""},\n    "camera": {"start":"","framingStart":"","path":"","target":"","end":"","framingEnd":"","timing":"","quality":""},\n    "events": [{"id":"e1","kind":"action|performance|dialogue|camera|contact|sound","description":"","actor":"","bodyPart":"","target":"","path":"","quality":"","emotion":"","timing":"","dialogue":"","sound":"","contact":{"initiatorActor":"","initiatorBodyPart":"","receiverActor":"","receiverBodyPart":"","target":"","quality":""}}],\n    "relations": [{"type":"before|after|during|overlaps|follows|causes|simultaneous","from":"e1","to":"e2","description":"optional"}],\n    "editScope": "optional",\n    "preserve": ["optional constraints"],\n    "confidence": 0.0\n  },\n  "nextMoves": [{"label":"short button label","prompt":"what selecting it tells you","kind":"continue"}],\n  "workflowHints": ["optional stable recipe ids such as camera_reveal or contact_action"],\n  "boardActions": [{"type":"focus|open_panel|move_panel|dock_panel|pin_reference|create_variant|compare_takes|arrange|link|create_scene|create_shot|create_beat|add_annotation", "targetId":"optional", "payload":{}}],\n  "question": "optional single clarifying question"\n}`;
 }
 
 function mergeWorkflows(parsed, message, kickstart) {
@@ -348,6 +363,26 @@ function captureInterpretedBeat(directionImpl, envelope, message, context, inten
         enrichment: { kind: 'partner_capture', intentId: intent.id, interpretationKind: kind },
       });
       return { beatId: beat.id, shotId: beat.shotId, existing: true, enriched: true };
+    }
+  }
+
+
+  if (context.surface === 'direction_annotation' && context.activeBeatId && typeof directionImpl.updateBeat === 'function') {
+    const active = (graph.beats || []).find((beat) => beat && beat.id === context.activeBeatId && beat.shotId === context.shotId);
+    if (active) {
+      const beat = directionImpl.updateBeat(active.id, {
+        description: text(active.description || interpretation.description || interpretation.action || rawDirection, 4000),
+        movement: Object.keys(movement).length ? movement : active.movement,
+        events: events.length ? events : active.events,
+        relations: relations.length ? relations : active.relations,
+        camera: Object.keys(camera).length ? camera : active.camera,
+        timing: Object.keys(timing).length ? timing : active.timing,
+        dialogue: text(interpretation.dialogue, 4000) || active.dialogue,
+        preserve: preserve.length ? preserve : active.preserve,
+        status: active.status || 'provisional',
+        enrichment: { kind: 'partner_direction_annotation', intentId: intent.id, interpretationKind: kind },
+      });
+      return { beatId: beat.id, shotId: beat.shotId, existing: true, enriched: true, fromDirectionAnnotation: true };
     }
   }
 
