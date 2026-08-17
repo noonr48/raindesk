@@ -167,15 +167,21 @@ async function main() {
     const firstBeatId = beats[0].id;
     if (!/catches his wrist/.test(beats[0].rawDirection)) throw new Error('raw Beat Trail wording was not preserved');
 
-    // Draw DIRECT on the selected beat through native pointer input.
+    // Draw DIRECT on the selected beat through native pointer input. Global
+    // drawing tools stay above floating utility panels; the stroke itself is
+    // deliberately placed on exposed art rather than underneath Beat Trail.
     await clickSelector(cdp, '[data-tool="direction"]');
+    await waitFor(cdp, `document.querySelector('[data-tool="direction"]').classList.contains('active') && document.getElementById('canvas').classList.contains('direction-cursor')`, 'DIRECT tool active');
     const canvas = await box(cdp, '#canvas');
     if (!canvas) throw new Error('canvas missing');
-    await dragPath(cdp, [
-      { x: canvas.x + canvas.width * 0.40, y: canvas.y + canvas.height * 0.56 },
-      { x: canvas.x + canvas.width * 0.46, y: canvas.y + canvas.height * 0.51 },
-      { x: canvas.x + canvas.width * 0.53, y: canvas.y + canvas.height * 0.48 },
-    ]);
+    const directPoints = [
+      { x: canvas.x + canvas.width * 0.57, y: canvas.y + canvas.height * 0.47 },
+      { x: canvas.x + canvas.width * 0.63, y: canvas.y + canvas.height * 0.43 },
+      { x: canvas.x + canvas.width * 0.69, y: canvas.y + canvas.height * 0.40 },
+    ];
+    const hit = await value(cdp, `(()=>{const e=document.elementFromPoint(${directPoints[0].x},${directPoints[0].y});return e&&e.id})()`);
+    if (hit !== 'canvas') throw new Error(`DIRECT start point is obscured by ${hit || 'unknown element'}`);
+    await dragPath(cdp, directPoints);
     await waitFor(cdp, `document.getElementById('directionCaption').classList.contains('open')`, 'direction caption');
     await inputText(cdp, '#directionCaptionInput', 'her hand curves in and lands on his wrist');
     await clickSelector(cdp, '#directionCaptionSave');
