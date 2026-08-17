@@ -1,0 +1,18 @@
+/* Surface Hand-off v1: approval prepares the existing GEN surface; it never triggers generation. */
+.surface-handoff-proposal {
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  margin:6px 12px 10px; padding:8px 9px; border-radius:10px;
+  border:1px solid rgba(232,176,75,.32); background:rgba(232,176,75,.07);
+}
+.surface-handoff-copy { flex:1 1 180px; font-size:12px; line-height:1.35; color:rgba(243,234,216,.84); }
+.surface-handoff-btn {
+  border:0; border-radius:8px; padding:6px 9px; cursor:pointer;
+  background:rgba(232,176,75,.92); color:#152229; font:600 11px system-ui,sans-serif;
+}
+.surface-handoff-btn.quiet { background:rgba(243,234,216,.08); color:rgba(243,234,216,.72); }
+.surface-handoff-proposal.prepared { border-color:rgba(111,151,163,.42); background:rgba(111,151,163,.08); }
+.surface-handoff-proposal.stale { border-color:rgba(224,120,86,.35); background:rgba(224,120,86,.07); }
+.genbar-wrap.surface-handoff-ready .genbar {
+  outline:2px solid rgba(232,176,75,.58); outline-offset:3px;
+  box-shadow:0 0 0 6px rgba(232,176,75,.08);
+}
