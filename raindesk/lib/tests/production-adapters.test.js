@@ -40,6 +40,26 @@ test('registry rejects duplicate adapter ids and resolves deterministically by p
   }), /already registered/);
 });
 
+test('public registry projections never carry the internal implementationRef', () => {
+  const registry = adapters.createRegistry([{
+    id: 'ref_carrying_v1', capabilityId: 'local_image_take', availability: 'available',
+    invocationBoundary: 'surface', creativeMutation: true, reviewRequired: true,
+    implementationRef: 'internal://executor/secret-adapter',
+  }]);
+  const fromRegister = registry.register({
+    id: 'ref_carrying_v2', capabilityId: 'pose_blocking', availability: 'available',
+    invocationBoundary: 'server', creativeMutation: true, reviewRequired: true,
+    implementationRef: 'internal://executor/secret-adapter-2',
+  });
+  const fromResolve = registry.resolve('local_image_take');
+  const fromList = registry.list().find((item) => item.id === 'ref_carrying_v1');
+  const projections = [fromRegister, fromResolve, fromList];
+  for (const projection of projections) {
+    assert.ok(projection);
+    assert.equal(Object.prototype.hasOwnProperty.call(projection, 'implementationRef'), false);
+  }
+});
+
 test('disabled adapters are retained for diagnostics but never resolve as available', () => {
   const registry = adapters.createRegistry([{
     id: 'camera_disabled_v1', capabilityId: 'camera_previs', availability: 'disabled', invocationBoundary: 'external',
