@@ -41,6 +41,7 @@ async function value(cdp, expression, awaitPromise = true) { const out = await c
 async function waitFor(cdp, expression, label, ms = 15000) { const deadline = Date.now() + ms; while (Date.now() < deadline) { if (await value(cdp, expression)) return true; await delay(100); } throw new Error(`timed out waiting for ${label}`); }
 async function waitBoot(cdp) { return waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot === 'ready'`, 'Raindesk boot'); }
 async function jsonFrom(cdp, route) { const raw = await value(cdp, `(async()=>JSON.stringify(await (await fetch(${JSON.stringify(route)})).json()))()`); return JSON.parse(raw); }
+async function characterFrom(cdp, id) { const list = await jsonFrom(cdp, '/api/characters'); return (list.characters || []).find((c) => c.id === id) || null; }
 async function exposedPoint(cdp, selector) { const raw = await value(cdp, `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;const r=e.getBoundingClientRect();for(const [fx,fy] of [[.5,.5],[.3,.5],[.7,.5],[.5,.3],[.5,.7]]){const x=r.left+r.width*fx,y=r.top+r.height*fy,h=document.elementFromPoint(x,y);if(h&&(h===e||e.contains(h)))return JSON.stringify({x,y});}return null})()`); return raw ? JSON.parse(raw) : null; }
 async function nativeClick(cdp, selector) { const p = await exposedPoint(cdp, selector); if (!p) throw new Error(`click target missing, clipped or obscured: ${selector}`); await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y }); await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 }); await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 }); await delay(320); }
 async function setFileInput(cdp, filePath) { const doc = await cdp.send('DOM.getDocument', { depth: 0, pierce: true }); const found = await cdp.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: '[data-reference-import="1"]' }); if (!found.nodeId) throw new Error('shared media file input missing'); await cdp.send('DOM.setFileInputFiles', { nodeId: found.nodeId, files: [filePath] }); }
@@ -60,36 +61,36 @@ async function main() {
     await waitFor(cdp, `!!document.querySelector(${JSON.stringify(importSel)})&&!!document.querySelector(${JSON.stringify(lockSel)})`, 'Character identity controls');
     await waitFor(cdp, `document.querySelector(${JSON.stringify(bindSel)})?.disabled===false`, 'rough shot binding enabled');
     await nativeClick(cdp, bindSel);
-    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/shot/${shotId}')).json();return r.characterIds&&r.characterIds.includes('${characterId}')&&r.characters[0].locked===false})()`, 'unlocked Character bound to active shot');
+    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/shot-binding?shotId=${shotId}')).json();return r.characterIds&&r.characterIds.includes('${characterId}')&&r.characters[0].locked===false})()`, 'unlocked Character bound to active shot');
     await nativeClick(cdp, importSel); await setFileInput(cdp, firstFile);
     await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/sheet/${sheetId}')).json();return r.document&&r.document.media&&r.document.media.length===1})()`, 'first Character image');
     await waitFor(cdp, `document.querySelector(${JSON.stringify(lockSel)})?.disabled===false`, 'identity lock enabled');
     await nativeClick(cdp, lockSel);
-    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/${characterId}')).json();return r.locked===true&&r.anchors&&r.anchors.length===1})()`, 'locked Character identity');
-    let character = await jsonFrom(cdp, `/api/character/${characterId}`); const firstSha = character.anchors[0].sha;
+    await waitFor(cdp, `(async()=>{const r=((await (await fetch('/api/characters')).json()).characters||[]).find(x=>x.id==='${characterId}');if(!r)return false;return r.locked===true&&r.anchors&&r.anchors.length===1})()`, 'locked Character identity');
+    let character = await characterFrom(cdp, characterId); const firstSha = character.anchors[0].sha;
     if (!/^[a-f0-9]{64}$/.test(firstSha)) throw new Error('identity lock is not backed by immutable image sha');
 
-    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/shot/${shotId}')).json();return r.characterIds&&r.characterIds.includes('${characterId}')&&r.characters[0].locked===true})()`, 'bound Character now carries pinned identity authority');
+    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/shot-binding?shotId=${shotId}')).json();return r.characterIds&&r.characterIds.includes('${characterId}')&&r.characters[0].locked===true})()`, 'bound Character now carries pinned identity authority');
     await nativeClick(cdp, lockSel);
-    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/${characterId}')).json();return r.locked===false})()`, 'explicit identity unpin');
+    await waitFor(cdp, `(async()=>{const r=((await (await fetch('/api/characters')).json()).characters||[]).find(x=>x.id==='${characterId}');if(!r)return false;return r.locked===false})()`, 'explicit identity unpin');
     await nativeClick(cdp, lockSel);
-    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/${characterId}')).json();return r.locked===true&&r.anchors&&r.anchors.length===1})()`, 'identity re-pin');
+    await waitFor(cdp, `(async()=>{const r=((await (await fetch('/api/characters')).json()).characters||[]).find(x=>x.id==='${characterId}');if(!r)return false;return r.locked===true&&r.anchors&&r.anchors.length===1})()`, 'identity re-pin');
 
     await nativeClick(cdp, importSel); await setFileInput(cdp, secondFile);
     await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/sheet/${sheetId}')).json();return r.document&&r.document.media&&r.document.media.length===2})()`, 'second Character image');
     await waitFor(cdp, `document.querySelector(${JSON.stringify(lockSel)})?.classList.contains('stale')===true&&document.querySelector(${JSON.stringify(lockSel)})?.textContent==='◆*'`, 'stale identity lock warning');
-    character = await jsonFrom(cdp, `/api/character/${characterId}`); if (character.anchors.length !== 1) throw new Error('identity authority silently changed when Character sheet changed');
+    character = await characterFrom(cdp, characterId); if (character.anchors.length !== 1) throw new Error('identity authority silently changed when Character sheet changed');
 
     await nativeClick(cdp, lockSel);
-    await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/character/${characterId}')).json();return r.locked===true&&r.anchors&&r.anchors.length===2})()`, 'explicit identity lock refresh');
+    await waitFor(cdp, `(async()=>{const r=((await (await fetch('/api/characters')).json()).characters||[]).find(x=>x.id==='${characterId}');if(!r)return false;return r.locked===true&&r.anchors&&r.anchors.length===2})()`, 'explicit identity lock refresh');
     await waitFor(cdp, `document.querySelector(${JSON.stringify(lockSel)})?.classList.contains('stale')===false`, 'fresh identity lock');
-    character = await jsonFrom(cdp, `/api/character/${characterId}`);
-    const binding = await jsonFrom(cdp, `/api/character/shot/${shotId}`);
+    character = await characterFrom(cdp, characterId);
+    const binding = await jsonFrom(cdp, `/api/character/shot-binding?shotId=${shotId}`);
     if (!binding.characterIds.includes(characterId) || binding.characters[0].anchors.length !== 2) throw new Error('shot binding did not expose refreshed anchors');
 
     if (SCREENSHOT) { const shot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true }); fs.writeFileSync(SCREENSHOT, Buffer.from(shot.data, 'base64')); }
     await cdp.send('Page.reload', { ignoreCache: true }); await waitBoot(cdp); await delay(1200); await nativeClick(cdp, tabSel);
-    const after = await jsonFrom(cdp, `/api/character/${characterId}`); const afterBinding = await jsonFrom(cdp, `/api/character/shot/${shotId}`);
+    const after = await characterFrom(cdp, characterId); const afterBinding = await jsonFrom(cdp, `/api/character/shot-binding?shotId=${shotId}`);
     if (!after.locked || after.anchors.length !== 2 || !afterBinding.characterIds.includes(characterId)) throw new Error('Character identity/binding did not survive reload');
     await waitFor(cdp, `document.querySelector(${JSON.stringify(lockSel)})?.classList.contains('locked')===true&&document.querySelector(${JSON.stringify(bindSel)})?.classList.contains('bound')===true`, 'rehydrated lock and shot binding UI');
     console.log(JSON.stringify({ ok: true, characterId, shotId, locked: after.locked, anchors: after.anchors.map((a) => a.sha), bound: afterBinding.characterIds }));
