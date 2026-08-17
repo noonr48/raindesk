@@ -1,0 +1,6 @@
+/* Floating creative panels may overlap the desk, but primary drawing tools and
+ * the transient DIRECT caption must always remain reachable. */
+@media (min-width: 900px) {
+  body.workspace-desktop .toolbar { z-index: 1000; }
+  body.workspace-desktop .direction-caption { z-index: 1001; }
+}
