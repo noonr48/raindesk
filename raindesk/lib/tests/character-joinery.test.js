@@ -27,7 +27,10 @@ test('server and Partner entrypoints compose character authority explicitly', ()
   assert.match(server, /server-core/);
   assert.match(server, /characters\.contextForShot/);
   assert.match(server, /\/api\/character\/shot-binding/);
-  assert.match(partner, /partner-core/);
-  assert.match(partner, /characterAnchors/);
-  assert.match(partner, /never pretend you visually inspected it/);
+  const planCore = fs.readFileSync(path.join(ROOT, 'lib/partner-plan-core.js'), 'utf8');
+  assert.match(partner, /partner-plan-core/);
+  assert.match(partner, /adapter-invocations/);
+  assert.match(planCore, /require\('\.\/partner-core'\)/);
+  assert.match(planCore, /characterAnchors/);
+  assert.match(planCore, /never pretend you visually inspected it/);
 });
