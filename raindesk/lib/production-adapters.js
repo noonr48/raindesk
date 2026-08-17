@@ -87,7 +87,9 @@ function publicDescriptor(adapter) {
     outputContract: [...adapter.outputContract],
     preserves: [...adapter.preserves],
     sideEffects: [...adapter.sideEffects],
-    implementationRef: adapter.implementationRef,
+    // implementationRef intentionally NOT projected: it is a private internal
+    // implementation pointer (server-side executor resolution only). Public
+    // descriptors (register/list/get/resolve projections) never carry it.
   };
 }
 
