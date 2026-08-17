@@ -10,6 +10,16 @@ The Partner remains the single artist-facing collaborator. Internally, after a P
 
 The artist is never asked to choose model names, node graphs, or technical adapters.
 
+## Three independent questions
+
+Every planned stage keeps three questions separate:
+
+1. **Capability:** can Raindesk perform this class of work at all?
+2. **Evidence:** are the required shot/region/frame/character inputs actually present?
+3. **Permission:** even if available and ready, may the Partner act automatically, only propose it, or only discuss it?
+
+None of these dimensions can upgrade another.
+
 ## Capability states
 
 Every capability is classified as one of four states:
@@ -19,7 +29,21 @@ Every capability is classified as one of four states:
 - `planning_only` — Raindesk can structure/prepare the work, but the specialist production adapter does not exist yet;
 - `unavailable` — the capability is absent and must not be implied.
 
-Permission mode (`watch` / `suggest` / `act`) does not upgrade capability state. In particular, Act mode cannot turn `review_take` into an automatic destructive content edit or turn `planning_only` into an executor.
+## Permission dispositions
+
+The planner derives a separate disposition for each stage:
+
+- `auto` — only explicitly safe preparation/organization in Act mode;
+- `proposal` — available work that still requires review/approval;
+- `advisory` — Watch mode; capability truth is visible but nothing proceeds;
+- `blocked` — missing evidence or missing production capability.
+
+Permission mode (`watch` / `suggest` / `act`) never upgrades capability state. In particular:
+
+- Watch mode cannot execute an otherwise available capability;
+- Suggest mode produces proposals;
+- Act mode cannot turn `review_take` into an automatic content edit;
+- Act mode cannot turn `planning_only` into a real executor.
 
 ## Evidence gates
 
@@ -68,12 +92,15 @@ Every completed structured Partner turn now includes an internal `executionPlan`
 - capability stages;
 - capability and effective stage state;
 - required/missing evidence;
+- permission disposition;
 - executor identity when one actually exists;
 - review requirement;
-- next executable stages;
+- available stages;
+- auto-executable safe stages;
+- reviewable stages;
 - blockers.
 
-The model does not author this plan. It may suggest workflow recipe IDs, but the deterministic planner owns capability truth.
+The model does not author this plan. It may suggest workflow recipe IDs, but the deterministic planner owns capability and permission truth.
 
 ## Scope
 
