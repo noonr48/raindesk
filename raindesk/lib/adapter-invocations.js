@@ -73,6 +73,10 @@ function scopeSnapshot(context = {}) {
 
 function stageRequest(stage, { turnId = null, registry = adapters.defaultRegistry, scope = null } = {}) {
   if (!stage || typeof stage !== 'object') return null;
+  // Fail closed: no actionable request may exist without a stable persisted
+  // turn id (prevents the global-constant requestId collision when turn
+  // persistence fails).
+  if (!text(turnId, 128)) return null;
   if (!ACTIONABLE_STATES.has(stage.state)) return null;
   if (!ACTIONABLE_DISPOSITIONS.has(stage.disposition)) return null;
   const adapterId = stage.adapter && text(stage.adapter.id, 96);
