@@ -1,0 +1,38 @@
+name: Production Adapters v1
+
+on:
+  push:
+    branches:
+      - 'chatgpt/production-adapters-v1'
+  pull_request:
+    branches:
+      - 'chatgpt/capability-planner-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-adapters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check adapter-planning surface
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check lib/production-adapters.js
+          node --check lib/capability-planner-core.js
+          node --check lib/capability-planner.js
+          node --check lib/partner.js
+          node --check lib/tests/production-adapters.test.js
+          node --check lib/tests/capability-planner-adapters.test.js
+
+      - name: Run complete Raindesk deterministic suite
+        working-directory: raindesk
+        run: npm test
