@@ -3,4 +3,12 @@
 @media (min-width: 900px) {
   body.workspace-desktop .toolbar { z-index: 1000; }
   body.workspace-desktop .direction-caption { z-index: 1001; }
+
+  /* The floating Beat window has a fixed/resizable height. Keep its beat rows
+   * in a real scroll viewport so active pose controls cannot exist only in a
+   * clipped part of the panel. */
+  body.workspace-desktop .beat-trail.workspace-floating-panel .beat-trail-list {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
 }
