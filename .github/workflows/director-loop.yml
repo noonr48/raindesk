@@ -1,0 +1,78 @@
+name: Director Loop v1
+
+on:
+  push:
+    branches:
+      - 'chatgpt/director-loop-v1'
+  pull_request:
+    branches:
+      - 'chatgpt/endless-workspace-shell-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  director-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check Director Loop surface
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check server.js
+          node --check lib/direction.js
+          node --check lib/partner.js
+          node --check public/js/api.js
+          node --check public/js/app.js
+          node --check public/js/beats.js
+          node --check public/js/direction.js
+          node --check dev/browser-director-loop-smoke.js
+
+      - name: Run complete Raindesk suite
+        working-directory: raindesk
+        run: npm test
+
+      - name: Exercise artwork, workspace, and Director Loop in real Chromium
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          DATA_DIR="$(mktemp -d)"
+          RAINDESK_DATA_DIR="$DATA_DIR" RAINDESK_HOST=127.0.0.1 node server.js >/tmp/raindesk-director-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$DATA_DIR"' EXIT
+          for i in $(seq 1 100); do
+            if curl -fsS http://127.0.0.1:17600/ >/dev/null; then break; fi
+            sleep 0.1
+          done
+          curl -fsS http://127.0.0.1:17600/ >/dev/null
+          BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
+          test -n "$BROWSER"
+          export CHROME_BIN="$BROWSER"
+          mkdir -p artifacts/director-loop
+
+          node dev/browser-integrity-smoke.js http://127.0.0.1:17600/ | tee artifacts/director-loop/browser-editability.json
+          node dev/browser-workspace-smoke.js http://127.0.0.1:17600/ | tee artifacts/director-loop/browser-workspace.json
+          DIRECTOR_LOOP_SCREENSHOT="$(pwd)/artifacts/director-loop/director-loop-1440x900.png" \
+            node dev/browser-director-loop-smoke.js http://127.0.0.1:17600/ | tee artifacts/director-loop/browser-director-loop.json
+
+          "$BROWSER" --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
+            --run-all-compositor-stages-before-draw --virtual-time-budget=2600 \
+            --window-size=390,844 \
+            --screenshot="$(pwd)/artifacts/director-loop/mobile-390x844.png" \
+            http://127.0.0.1:17600/
+
+      - name: Upload Director Loop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-director-loop-v1
+          path: raindesk/artifacts/director-loop/*
+          if-no-files-found: warn
+          retention-days: 7
