@@ -503,7 +503,8 @@ body.drawer-open .drawer-handle { display: none; }
 .beat-trail-head strong { font-size:12px; font-weight:650; letter-spacing:.04em; }
 .beat-trail-close, .beat-trail-add, .beat-trail-stuck { border:0; color:var(--cream); background:transparent; cursor:pointer; }
 .beat-trail-close { font-size:18px; opacity:.72; }
-.beat-trail-list { overflow:auto; padding:0 8px; }
+.beat-trail-body { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; }
+.beat-trail-list { overflow:visible; padding:0 8px; }
 .beat-row { display:flex; gap:9px; padding:9px 6px; border-top:1px solid rgba(243,234,216,.09); }
 .beat-order { flex:0 0 20px; color:var(--gold); font-size:11px; padding-top:2px; text-align:center; }
 .beat-copy { min-width:0; }
@@ -516,6 +517,13 @@ body.drawer-open .drawer-handle { display: none; }
 .beat-trail-add { width:34px; border-radius:10px; background:rgba(232,176,75,.16); color:var(--gold); font-size:18px; }
 .beat-trail-stuck { margin:0 8px 9px; text-align:left; font-size:10px; color:rgba(243,234,216,.56); padding:5px 3px; }
 .beat-trail.busy { opacity:.72; }
+.beat-trail.partner-busy .beat-active-label::after { content:' · partner thinking'; color:rgba(243,234,216,.38); }
+.active-beat-detail { display:none; padding:7px 8px 9px; border-top:1px solid rgba(243,234,216,.09); background:rgba(8,18,23,.20); }
+.active-beat-detail.open { display:block; }
+.active-beat-detail-head { display:flex; gap:7px; align-items:baseline; min-width:0; padding:0 3px 6px; }
+.active-beat-kicker { flex:0 0 auto; color:var(--gold); font-size:9px; text-transform:uppercase; letter-spacing:.07em; }
+.active-beat-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:rgba(243,234,216,.64); font-size:9.5px; }
+.active-beat-detail .beat-pose-strip { margin:0; padding:5px; border:0; border-radius:10px; background:rgba(8,18,23,.32); }
 
 .beat-title-wrap { display:flex; align-items:baseline; gap:8px; min-width:0; }
 .beat-active-label { color:var(--gold); font-size:9px; letter-spacing:.07em; text-transform:uppercase; }
