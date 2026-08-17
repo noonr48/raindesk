@@ -82,10 +82,10 @@ const RECIPES = {
 };
 
 const HINTS = [
-  ['camera_reveal', /\b(camera|cam|orbit|spiral|push in|push-in|pull back|dolly|pan|tilt|crane|zoom|framing|frame lands|start frame|end frame)\b/i],
+  ['camera_reveal', /\b(camera|cam|orbit|spiral|push in|push-in|pull back|dolly|pan|tilt|crane|zoom|frame lands|start frame|end frame)\b/i],
   ['character_motion', /\b(move|moves|moving|step|steps|turn|turns|raise|raises|lower|lowers|shake|shakes|fist|stand|stands|sit|sits|lean|leans|reach|reaches|walk|walks|run|runs|recoil|crouch|jump|gesture|point|points|swing|swings|twist|twists|shift|shifts|lunge|lunges)\b/i],
   ['contact_action', /\b(punch|kick|hit|impact|grab|grabs|catch|catches|wrist|contact|collide|slam|strike|block)\b/i],
-  ['performance_closeup', /\b(expression|face|eyes|gaze|mouth|tongue|breath|speaks|says|dialogue|smile|frown|anger|hesitat|reaction)\b/i],
+  ['performance_closeup', /\b(expression|facial|eyes|gaze|mouth|tongue|breath|speaks|says|dialogue|smile|frown|anger|hesitat|reaction)\b/i],
   ['choreography', /\b(fight|choreograph|two people|both characters|crowd|dance|crossing|multi-character|multiple characters)\b/i],
   ['comic_pacing', /\b(comic|page|panel|gutter|reading order|page turn|manga)\b/i],
   ['animatic_pass', /\b(animatic|timing|duration|hold|frames|seconds|cut|sound|sfx|music)\b/i],
@@ -98,7 +98,14 @@ function asText(intent) {
   if (!intent || typeof intent !== 'object') return '';
   const parts = [intent.raw, intent.message, intent.description, intent.kind];
   if (intent.interpretation && typeof intent.interpretation === 'object') {
-    parts.push(JSON.stringify(intent.interpretation));
+    // Curated fields only: preserve words describe what must NOT change, so
+    // feeding the whole interpretation JSON pulls noise recipes.
+    const curated = intent.interpretation;
+    for (const key of ['kind', 'editScope', 'movement', 'dialogue', 'camera']) {
+      const value = curated[key];
+      if (typeof value === 'string' && value.trim()) parts.push(value);
+      else if (value && typeof value === 'object') parts.push(JSON.stringify(value));
+    }
   }
   return parts.filter(Boolean).join(' ');
 }
