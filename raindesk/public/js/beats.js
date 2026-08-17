@@ -363,6 +363,30 @@
       return row;
     }
 
+    function revealBeatRow(beatId) {
+      if (!beatId) return false;
+      const row = list.querySelector(`.beat-row[data-beat-id="${beatId}"]`);
+      if (!row || typeof row.getBoundingClientRect !== 'function' ||
+          typeof body.getBoundingClientRect !== 'function') return false;
+
+      // Measure the geometry the artist actually sees instead of composing
+      // offsetTop values from different offset-parent chains.  The compact
+      // Beat row and its reorder/edit controls are the visibility contract;
+      // selected pose detail is allowed to continue below in a small panel.
+      const viewport = body.getBoundingClientRect();
+      const rect = row.getBoundingClientRect();
+      if (!(viewport.height > 0) || !(rect.height > 0)) return false;
+      const pad = 6;
+      const topEdge = viewport.top + pad;
+      const bottomEdge = viewport.bottom - pad;
+      if (rect.top < topEdge) {
+        body.scrollTop = Math.max(0, body.scrollTop - (topEdge - rect.top));
+      } else if (rect.bottom > bottomEdge) {
+        body.scrollTop = Math.max(0, body.scrollTop + (rect.bottom - bottomEdge));
+      }
+      return true;
+    }
+
     function render(spec) {
       lastSpec = spec || null;
       renderFrames(spec);
@@ -380,27 +404,7 @@
       const selected = activeBeat();
       renderActiveBeatDetail(selected);
       notifyActive(selected);
-      if (activeBeatId) {
-        const row = list.querySelector(`.beat-row[data-beat-id="${activeBeatId}"]`);
-        if (row) {
-          // Establish selected-Beat visibility as part of the same render that
-          // publishes the row.  Do not defer this to requestAnimationFrame:
-          // callers should never observe a Beat in the DOM while its controls
-          // are still clipped waiting for a later paint.
-          const top = list.offsetTop + row.offsetTop;
-          const bottom = detail.classList.contains('open')
-            ? detail.offsetTop + detail.offsetHeight
-            : top + row.offsetHeight;
-          if (bottom - top <= body.clientHeight) {
-            if (top < body.scrollTop) body.scrollTop = top;
-            else if (bottom > body.scrollTop + body.clientHeight) {
-              body.scrollTop = Math.max(0, bottom - body.clientHeight);
-            }
-          } else {
-            body.scrollTop = Math.max(0, top);
-          }
-        }
-      }
+      if (activeBeatId) revealBeatRow(activeBeatId);
     }
 
     async function refresh() {
