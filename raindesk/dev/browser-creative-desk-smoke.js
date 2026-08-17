@@ -118,7 +118,7 @@ async function main() {
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 });
     await drag(cdp, { x: px, y: py }, { x: px + 120, y: py + 70 });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 });
-    await waitFor(cdp, `(async()=>{const w=await (await fetch('/api/workspace')).json();return Math.abs(w.viewport.x-${zoomed.x})>80&&Math.abs(w.viewport.y-${zoomed.y})>40})()`, 'persisted world pan');
+    await waitFor(cdp, `(async()=>{const w=await (await fetch('/api/workspace')).json();return Math.abs(w.viewport.x-(${zoomed.x}))>80&&Math.abs(w.viewport.y-(${zoomed.y}))>40})()`, 'persisted world pan');
 
     // Tear the Character tab onto an open portion of the desk.
     const charTab = await box(cdp, '[data-creative-target="world_character_primary"]');
@@ -132,7 +132,7 @@ async function main() {
     const head = await box(cdp, '[data-world-id="world_character_primary"] .creative-sheet-head');
     if (!head) throw new Error('Character sheet did not render');
     await drag(cdp, { x: head.x + head.width*0.45, y: head.y + head.height/2 }, { x: head.x + head.width*0.45 - 90, y: head.y + head.height/2 + 65 });
-    await waitFor(cdp, `(async()=>{const w=await (await fetch('/api/workspace')).json();const o=w.objects.find(x=>x.id==='world_character_primary');return o&&Math.abs(o.x-${char1.x})>25&&Math.abs(o.y-${char1.y})>20})()`, 'world sheet drag persistence');
+    await waitFor(cdp, `(async()=>{const w=await (await fetch('/api/workspace')).json();const o=w.objects.find(x=>x.id==='world_character_primary');return o&&Math.abs(o.x-(${char1.x}))>25&&Math.abs(o.y-(${char1.y}))>20})()`, 'world sheet drag persistence');
     ws = await workspace(cdp); const char2 = object(ws, 'world_character_primary');
 
     // A normal References tab click reveals and focuses the sheet.
