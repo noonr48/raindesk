@@ -27,6 +27,8 @@ This gives the artist two simultaneous scales without losing either:
 
 Shot-level context is deliberately stable while micro-beats are explored: shot start/landing references and `keep` / `change` boundaries remain fixed above the Beat viewport. Only the Beat list and selected-Beat detail scroll. Focusing a micro-action therefore cannot push the shot's framing or preservation contract out of reach.
 
+Selected-Beat visibility is established synchronously in the same render that publishes a newly added or selected Beat. There is no one-frame state where a Beat exists but its reorder/edit controls are still clipped waiting for a later paint.
+
 ## Non-blocking Partner enrichment
 
 Saving a Beat is raw-first and returns immediately. The Partner does not own a global Beat Trail busy state while it interprets that direction.
