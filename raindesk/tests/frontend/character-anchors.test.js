@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const anchors = require('../../public/js/character-anchors');
 const apiSource = fs.readFileSync(path.join(__dirname, '../../public/js/api.js'), 'utf8');
+const characterApiSource = fs.readFileSync(path.join(__dirname, '../../public/js/character-api.js'), 'utf8');
 const refSource = fs.readFileSync(path.join(__dirname, '../../public/js/reference-board.js'), 'utf8');
 const index = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
 const shotContextSource = fs.readFileSync(path.join(__dirname, '../../public/js/shot-context.js'), 'utf8');
@@ -26,8 +27,8 @@ test('locked identity becomes stale when the Character sheet image set changes',
 });
 
 test('character anchors wire registry REST, character media import, lock and shot binding before app boot', () => {
-  assert.match(apiSource, /listCharacters/);
-  assert.match(apiSource, /setShotCharacters/);
+  assert.match(characterApiSource, /listCharacters/);
+  assert.match(characterApiSource, /setShotCharacters/);
   assert.match(refSource, /\['references', 'character'\]\.includes/);
   assert.match(index, /reference-board\.js[\s\S]*character-anchors\.js[\s\S]*app\.js/);
   assert.match(index, /character-anchors\.css/);

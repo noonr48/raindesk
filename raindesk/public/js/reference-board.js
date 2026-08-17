@@ -69,7 +69,7 @@
     function stateFor(sheetId) { return states.get(sheetId) || null; }
     function mounted(sheetId) { return mounts.get(sheetId) || null; }
     function setRevision(revision) {
-      if (!revision || !revision.sheetId || !revision.document || revision.document.kind !== 'references') return null;
+      if (!revision || !revision.sheetId || !revision.document || !['references', 'character'].includes(revision.document.kind)) return null;
       if (!Array.isArray(revision.document.media)) revision.document.media = [];
       states.set(revision.sheetId, revision); render(revision.sheetId); return revision;
     }
@@ -199,7 +199,7 @@
 
     async function inspectElement(el) {
       const sheetId = sheetIdForElement(el); if (!sheetId || mounts.has(sheetId)) return;
-      const revision = await load(sheetId); if (!revision || revision.document.kind !== 'references') return;
+      const revision = await load(sheetId); if (!revision || !['references', 'character'].includes(revision.document.kind)) return;
       mount(sheetId, el);
     }
     function scan() {
