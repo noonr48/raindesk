@@ -21,6 +21,7 @@ function createPartner(options = {}) {
         ...result,
         invocationRequests: invocations.requestsForPlan(result.executionPlan, {
           turnId: result.turnId || null,
+          context: input && input.context && typeof input.context === 'object' ? input.context : {},
         }),
       };
     },
