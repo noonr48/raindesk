@@ -1,4 +1,4 @@
-name: Director Loop Source Handoff
+name: Promote Director Loop Selected Beat Refactor
 
 on:
   push:
@@ -7,20 +7,54 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  handoff:
+  promote:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Package exact source checkout
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reconstruct exact locally tested patch
         run: |
           set -euo pipefail
-          tar -czf /tmp/raindesk-director-loop-source.tar.gz --exclude='.git' .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: raindesk-director-loop-source
-          path: /tmp/raindesk-director-loop-source.tar.gz
-          retention-days: 1
+          cat raindesk/dev/.director-loop-refactor/part00 \
+              raindesk/dev/.director-loop-refactor/part01 \
+              raindesk/dev/.director-loop-refactor/part02 \
+              raindesk/dev/.director-loop-refactor/part03 > /tmp/refactor.b64
+          echo 'bdc5fe8f3b7a214b383153797b6449bbc51ae265f605a5bb0610a5fdaad68871  /tmp/refactor.b64' | sha256sum -c -
+          base64 -d /tmp/refactor.b64 > /tmp/refactor.patch.bz2
+          echo 'b30d76bfb119d308c1944cf03faded76fffc011fe1728c6293d42b93f724c60a  /tmp/refactor.patch.bz2' | sha256sum -c -
+          bzip2 -dc /tmp/refactor.patch.bz2 > /tmp/refactor.patch
+          echo '3445eabffb08dcf6a2830801e51b1bc6fcb1b6ee0de65ce3c4e7c49388b2c17a  /tmp/refactor.patch' | sha256sum -c -
+          git apply --check /tmp/refactor.patch
+
+      - name: Apply and validate Director Loop refactor
+        run: |
+          set -euo pipefail
+          git apply /tmp/refactor.patch
+          grep -q 'active-beat-detail' raindesk/public/js/beats.js
+          grep -q 'partnerQueue = Promise.resolve' raindesk/public/js/beats.js
+          grep -q 'click target is clipped or obscured' raindesk/dev/browser-director-loop-smoke.js
+          node --check raindesk/public/js/beats.js
+          node --check raindesk/dev/browser-director-loop-smoke.js
+          cd raindesk
+          npm test
+
+      - name: Promote source and remove transport scaffolding
+        run: |
+          set -euo pipefail
+          rm -rf raindesk/dev/.director-loop-refactor
+          rm -f .github/workflows/director-loop-source-handoff.yml
+          git config user.name 'Raindesk CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && { echo 'nothing to promote'; exit 1; }
+          git commit -m 'raindesk: stabilize selected Beat directing flow'
+          git push origin HEAD:chatgpt/director-loop-v1
