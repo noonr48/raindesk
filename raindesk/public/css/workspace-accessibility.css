@@ -11,4 +11,19 @@
     flex: 1 1 auto;
     min-height: 0;
   }
+
+  /* An active Beat can become taller than the list once its start/end pose
+   * cards are expanded. Its tiny directing controls are the part the artist
+   * needs most often, so keep them pinned at the top of the Beat viewport
+   * while the pose material scrolls underneath. */
+  body.workspace-desktop .beat-trail .beat-row.active .beat-row-controls {
+    position: sticky;
+    top: 2px;
+    z-index: 8;
+    align-self: flex-start;
+    padding: 2px;
+    border-radius: 8px;
+    background: rgba(14,33,41,.94);
+    box-shadow: 0 1px 0 rgba(243,234,216,.08);
+  }
 }
