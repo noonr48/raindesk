@@ -1,0 +1,1 @@
+Reference Board v1 deterministic validation: 160/160 scoped tests pass locally. GitHub-hosted native six-smoke acceptance remains pending because the repository currently cannot allocate Actions runners due to the account billing/spending-limit state. The permanent reference-board workflow is read-only and must be rerun unchanged when runner allocation is restored.
