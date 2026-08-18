@@ -758,3 +758,63 @@ test('creative sheet API creates, revisions, lists and restores vector documents
     assert.equal(res.status, 409, 'stale sheet writes are rejected');
   });
 });
+
+test('invocation ledger routes: record, supersede, patch, and list', async (t) => {
+  await withServer(t, {}, async (base) => {
+    const post = (body) => fetch(`${base}/api/invocations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    let res = await post({ id: 'invoke_r1', turnId: 'turn_r1', shotId: 'S01', adapterId: 'bounded_image_region_v1', capabilityId: 'local_image_take', status: 'proposed' });
+    assert.equal(res.status, 201);
+    let body = await res.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.created, true);
+
+    // Idempotent re-record
+    res = await post({ id: 'invoke_r1', status: 'approved' });
+    body = await res.json();
+    assert.equal(body.created, false);
+    assert.equal(body.invocation.status, 'proposed');
+
+    // PATCH to approved
+    res = await fetch(`${base}/api/invocations`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'invoke_r1', status: 'approved' }),
+    });
+    assert.equal(res.status, 200);
+    body = await res.json();
+    assert.equal(body.invocation.status, 'approved');
+    assert.ok(body.invocation.approvedAt);
+
+    // Supersede: newer proposed for same shot marks prior stale
+    res = await post({ id: 'invoke_r2', turnId: 'turn_r2', shotId: 'S01', supersede: true });
+    assert.equal(res.status, 201);
+    res = await fetch(`${base}/api/invocations?shotId=S01&status=stale`);
+    body = await res.json();
+    assert.equal(body.invocations.length, 1);
+    assert.equal(body.invocations[0].id, 'invoke_r1');
+    res = await fetch(`${base}/api/invocations?shotId=S01&status=proposed`);
+    body = await res.json();
+    assert.equal(body.invocations.length, 1);
+    assert.equal(body.invocations[0].id, 'invoke_r2');
+
+    // Negative paths
+    res = await fetch(`${base}/api/invocations`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: '', status: 'approved' }),
+    });
+    assert.equal(res.status, 400);
+    res = await fetch(`${base}/api/invocations`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'invoke_r2', status: 'bogus' }),
+    });
+    assert.equal(res.status, 400);
+    res = await fetch(`${base}/api/invocations`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'invoke_missing', status: 'cancelled' }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
