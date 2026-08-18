@@ -479,6 +479,11 @@
           });
           pinned = created && created.beat ? created.beat : null;
           activeBeatId = pinned && pinned.id || activeBeatId;
+          // Propagate the new beat as the ACTIVE beat: app-level
+          // state.activeBeatId (and the DIRECT stroke's beat scoping) follows
+          // only via onActiveBeatChange — without this, a direction arrow drawn
+          // right after adding a beat silently scopes to the whole shot.
+          if (pinned) notifyActive(pinned);
           await refresh();
         }
       } catch (_e) {
