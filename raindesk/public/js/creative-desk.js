@@ -397,17 +397,32 @@
       head.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || e.target.closest('button,input,textarea,[contenteditable="true"]')) return;
         const obj = objects.get(id); if (!obj || obj.locked) return;
-        e.preventDefault(); head.setPointerCapture(e.pointerId);
+        e.preventDefault();
         const start = { x: e.clientX, y: e.clientY, ox: obj.x, oy: obj.y };
+        // Defer pointer capture until real movement: capturing at pointerdown
+        // retargets click/dblclick to the header, which would break rename's
+        // dblclick on the title. A stationary press never captures; a real drag
+        // captures on its first >3px move and keeps the drag robust.
+        let captured = false;
+        const moved = (ev) => Math.abs(ev.clientX - start.x) > 3 || Math.abs(ev.clientY - start.y) > 3;
         const move = (ev) => {
+          if (!captured) {
+            if (!moved(ev)) return;
+            captured = true;
+            try { head.setPointerCapture(ev.pointerId); } catch (_e) {}
+          }
           const scale = worldScale(vp, metrics()) || 1;
           obj.x = start.ox + (ev.clientX - start.x) / scale;
           obj.y = start.oy + (ev.clientY - start.y) / scale;
           renderObject(obj);
         };
         const up = async (ev) => {
-          try { head.releasePointerCapture(ev.pointerId); } catch (_e) {}
+          try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
           head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up);
+          // A click is not a drag: without movement there is nothing to persist,
+          // and the re-render would replace the title between the clicks of a
+          // rename dblclick (bc77b18's reservation narrowed to mid-rename only).
+          if (!moved(ev)) return;
           if (overTabs(ev.clientX, ev.clientY)) { obj.visible = false; obj.collapsed = true; }
           await persistObject(obj); render(); renderTabs(); onContextChange();
         };
