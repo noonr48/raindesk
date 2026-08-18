@@ -122,38 +122,78 @@
       controls.append(left, right, remove); return controls;
     }
     function installCardDrag(sheetId, card, media, canvas) {
-      card.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0 || e.target.closest('button,.reference-card-resize')) return;
-        const mountState = mounted(sheetId); if (!mountState || !mountState.el.classList.contains('reference-arrange')) return;
-        e.preventDefault(); e.stopPropagation(); card.setPointerCapture(e.pointerId);
-        const rect = mountState.layer.getBoundingClientRect(); const sx = e.clientX, sy = e.clientY; const ox = media.x, oy = media.y;
+      // Drag via document-capture geometric hit-test: pointer events target the
+      // sheet canvas / constraint overlays (live-probe proven), never the card,
+      // so a card-level pointerdown never fires. Capture + rect hit-test is the
+      // only reliable press path in arrange mode.
+      document.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        const mountState = mounted(sheetId);
+        if (!mountState || !mountState.el.classList.contains('reference-arrange')) return;
+        const rect = card.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+        e.preventDefault(); e.stopPropagation();
+        const layerRect = mountState.layer.getBoundingClientRect();
+        const sx = e.clientX, sy = e.clientY; const ox = media.x, oy = media.y;
         const move = (ev) => {
-          media.x = ox + (ev.clientX - sx) * canvas.width / Math.max(1, rect.width);
-          media.y = oy + (ev.clientY - sy) * canvas.height / Math.max(1, rect.height);
+          media.x = ox + (ev.clientX - sx) * canvas.width / Math.max(1, layerRect.width);
+          media.y = oy + (ev.clientY - sy) * canvas.height / Math.max(1, layerRect.height);
           applyStyle(card, media, canvas);
         };
         const up = (ev) => {
-          try { card.releasePointerCapture(ev.pointerId); } catch (_e) {}
-          card.removeEventListener('pointermove', move); card.removeEventListener('pointerup', up);
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          document.removeEventListener('pointercancel', up, true);
+          // Swallow only the click the browser synthesizes AT the release point
+          // (±3px): position-gating avoids eating a deliberate later click on
+          // the card's own controls (e.g. rotate right after a resize).
+          const upX = ev.clientX, upY = ev.clientY;
+          const swallow = (click) => {
+            if (card.contains(click.target) && Math.abs(click.clientX - upX) < 3 && Math.abs(click.clientY - upY) < 3) {
+              click.preventDefault(); click.stopPropagation();
+            }
+            document.removeEventListener('click', swallow, true);
+          };
+          document.addEventListener('click', swallow, true);
           mutateMedia(sheetId, media.id, (m) => { m.x = media.x; m.y = media.y; }, 'move reference').catch(() => {});
         };
-        card.addEventListener('pointermove', move); card.addEventListener('pointerup', up);
-      });
+        document.addEventListener('pointermove', move, true);
+        document.addEventListener('pointerup', up, true);
+        document.addEventListener('pointercancel', up, true);
+      }, true);
       const resize = card.querySelector('.reference-card-resize');
-      resize.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); resize.setPointerCapture(e.pointerId);
-        const mountState = mounted(sheetId); const rect = mountState.layer.getBoundingClientRect(); const sx = e.clientX; const ow = media.width; const oh = media.height; const ratio = oh / Math.max(1, ow);
+      // Resize via document-capture hit-test (same live-proven rationale as the
+      // drag: pointer events never target card-level elements).
+      document.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        const mountState = mounted(sheetId);
+        if (!mountState || !mountState.el.classList.contains('reference-arrange')) return;
+        const rect = resize.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+        e.preventDefault(); e.stopPropagation();
+        const layerRect = mountState.layer.getBoundingClientRect(); const sx = e.clientX; const ow = media.width; const oh = media.height; const ratio = oh / Math.max(1, ow);
         const move = (ev) => {
-          media.width = clamp(ow + (ev.clientX - sx) * canvas.width / Math.max(1, rect.width), 40, canvas.width * 1.5);
+          media.width = clamp(ow + (ev.clientX - sx) * canvas.width / Math.max(1, layerRect.width), 40, canvas.width * 1.5);
           media.height = Math.max(40, media.width * ratio); applyStyle(card, media, canvas);
         };
-        const up = (ev) => {
-          try { resize.releasePointerCapture(ev.pointerId); } catch (_e) {}
-          resize.removeEventListener('pointermove', move); resize.removeEventListener('pointerup', up);
+        const up = (rev) => {
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          document.removeEventListener('pointercancel', up, true);
+          const upX = rev.clientX, upY = rev.clientY;
+          const swallow = (click) => {
+            if (card.contains(click.target) && Math.abs(click.clientX - upX) < 3 && Math.abs(click.clientY - upY) < 3) {
+              click.preventDefault(); click.stopPropagation();
+            }
+            document.removeEventListener('click', swallow, true);
+          };
+          document.addEventListener('click', swallow, true);
           mutateMedia(sheetId, media.id, (m) => { m.width = media.width; m.height = media.height; }, 'resize reference').catch(() => {});
         };
-        resize.addEventListener('pointermove', move); resize.addEventListener('pointerup', up);
-      });
+        document.addEventListener('pointermove', move, true);
+        document.addEventListener('pointerup', up, true);
+        document.addEventListener('pointercancel', up, true);
+      }, true);
     }
     function render(sheetId) {
       const mountState = mounted(sheetId); const revision = stateFor(sheetId); if (!mountState || !revision) return;
