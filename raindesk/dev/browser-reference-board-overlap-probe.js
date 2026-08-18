@@ -78,7 +78,7 @@ async function media(cdp) {
   return JSON.parse(raw);
 }
 async function rects(cdp) {
-  const raw = await value(cdp, `(()=>JSON.stringify([...document.querySelectorAll('[data-world-id="world_references_main"] .reference-card')].map(c=>{const r=c.getBoundingClientRect();return {x:r.left,y:r.top,w:r.width,h:r.height}})))()`, false);
+  const raw = await value(cdp, `(()=>JSON.stringify([...document.querySelectorAll('[data-world-id="world_references_main"] .reference-card')].map(c=>{const r=c.getBoundingClientRect();return {x:r.left,y:r.top,w:r.width,h:r.height,ow:c.offsetWidth,oh:c.offsetHeight}})))()`, false);
   return JSON.parse(raw);
 }
 
@@ -134,11 +134,53 @@ async function main() {
     if (ov.w < 24 || ov.h < 24) { console.log(JSON.stringify({ ok: false, error: 'no usable intersection', rects: rs })); return; }
     const mid = { x: Math.max(rs[0].x, rs[1].x) + ov.w / 2, y: Math.max(rs[0].y, rs[1].y) + ov.h / 2 };
 
+    // Case 1 (unrotated): exactly the topmost card moves.
     const before = await media(cdp);
     await drag(cdp, mid, { x: mid.x + 40, y: mid.y + 30 });
     const after = await media(cdp);
     const moved = after.map((m, i) => Math.abs(m.x - before[i].x) > 20 || Math.abs(m.y - before[i].y) > 12);
-    console.log(JSON.stringify({ ok: true, intersection: { w: ov.w, h: ov.h }, moved, before, after, doubleClaim: moved.filter(Boolean).length > 1 }));
+    const case1 = { moved, doubleClaim: moved.filter(Boolean).length > 1, topOnly: moved.length === 2 && moved[1] === true && moved[0] === false };
+
+    // Case 2 (rotated wedge): re-establish overlap first (case 1 displaced the
+    // top card), then rotate the TOP card +45deg (9 x rotate-right), then press
+    // a wedge point — inside the rotated card's AABB but outside its visible
+    // quad, and inside the lower card. Correct claim: the LOWER card moves.
+    let rsA = await rects(cdp);
+    const aFree = { x: rsA[0].x + rsA[0].ow * 0.25, y: rsA[0].y + rsA[0].oh * 0.25 };
+    const bAim = { x: rsA[1].x + rsA[1].w / 2, y: rsA[1].y + rsA[1].h / 2 };
+    await drag(cdp, aFree, bAim);
+    await delay(400);
+
+    const topSel = `${cards}:nth-of-type(2) .reference-card-controls button[title="rotate right"]`;
+    for (let i = 0; i < 9; i++) {
+      await nativeClick(cdp, topSel);
+      await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/sheet/${SHEET}')).json();return (r.document.media[1].rotation||0)===${(i + 1) * 5}})()`, `top rotation ${(i + 1) * 5}`);
+    }
+    await waitFor(cdp, `document.querySelectorAll('[data-world-id="world_references_main"] .reference-card').length===2`, 'two cards still rendered');
+    const rs2 = await rects(cdp); const m2 = await media(cdp);
+    const rot = (m2[1].rotation || 0) * Math.PI / 180;
+    const b = rs2[1]; const bcx = b.x + b.w / 2, bcy = b.y + b.h / 2;
+    const a = rs2[0];
+    let wedge = null;
+    for (let gx = a.x + 3; gx <= a.x + a.w - 3 && !wedge; gx += 4) {
+      for (let gy = a.y + 3; gy <= a.y + a.h - 3 && !wedge; gy += 4) {
+        const px = gx, py = gy;
+        if (px < b.x || px > b.x + b.w || py < b.y || py > b.y + b.h) continue; // inside B's AABB
+        const dx = px - bcx, dy = py - bcy; const cos = Math.cos(rot), sin = Math.sin(rot);
+        const u = dx * cos + dy * sin, v = -dx * sin + dy * cos;
+        if (Math.abs(u) <= b.ow / 2 && Math.abs(v) <= b.oh / 2) continue; // outside B's rotated quad
+        wedge = { x: px, y: py };
+      }
+    }
+    if (!wedge) { console.log(JSON.stringify({ ok: false, error: 'no wedge point found', rects: rs2, rotation: m2[1].rotation })); return; }
+
+    const before2 = await media(cdp);
+    await drag(cdp, wedge, { x: wedge.x + 40, y: wedge.y + 30 });
+    const after2 = await media(cdp);
+    const moved2 = after2.map((m, i) => Math.abs(m.x - before2[i].x) > 20 || Math.abs(m.y - before2[i].y) > 12);
+    const case2 = { moved: moved2, wedgeClaim: moved2.length === 2 && moved2[0] === true && moved2[1] === false, doubleClaim: moved2.filter(Boolean).length > 1 };
+
+    console.log(JSON.stringify({ ok: case1.topOnly && case2.wedgeClaim, intersection: { w: ov.w, h: ov.h }, rotation: m2[1].rotation, wedge, case1, case2 }));
   } finally { child.kill('SIGKILL'); }
 }
 main().catch((e) => { console.error(JSON.stringify({ ok: false, error: String(e.message || e) })); process.exit(1); });

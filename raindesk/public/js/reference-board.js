@@ -136,7 +136,19 @@
           const sib = mountState.layer.children[i];
           if (!sib.classList || !sib.classList.contains('reference-card')) continue;
           const r = sib.getBoundingClientRect();
-          if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return sib;
+          if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+          // Point-in-rotated-quad: getBoundingClientRect() is the AABB of the
+          // rotated card, not its visible quad — an AABB-only test would let a
+          // rotated upper card claim presses in the wedge that visually lands
+          // on a lower card. Inverse-rotate the press about the card center
+          // (CSS rotate() origin) and test the unrotated layout size.
+          const w = sib.offsetWidth, h = sib.offsetHeight;
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          const rad = (Number(sib.dataset.rotation) || 0) * Math.PI / 180;
+          const dx = x - cx, dy = y - cy;
+          const cos = Math.cos(rad), sin = Math.sin(rad);
+          const u = dx * cos + dy * sin, v = -dx * sin + dy * cos;
+          if (Math.abs(u) <= w / 2 && Math.abs(v) <= h / 2) return sib;
         }
         return null;
       };
@@ -233,7 +245,7 @@
       layer.innerHTML = '';
       const media = Array.isArray(doc.media) ? doc.media.slice().sort((a, b) => Number(a.zIndex || 0) - Number(b.zIndex || 0)) : [];
       for (const item of media) {
-        const card = document.createElement('div'); card.className = 'reference-card'; card.dataset.mediaId = item.id; applyStyle(card, item, doc.canvas);
+        const card = document.createElement('div'); card.className = 'reference-card'; card.dataset.mediaId = item.id; card.dataset.rotation = String(Number(item.rotation) || 0); applyStyle(card, item, doc.canvas);
         const img = document.createElement('img'); img.src = api && api.blobUrl ? api.blobUrl(item.sha) : `/api/blob/${encodeURIComponent(item.sha)}`; img.alt = item.caption || 'reference image'; img.draggable = false;
         const caption = document.createElement('div'); caption.className = 'reference-card-caption'; caption.textContent = item.caption || '';
         const resize = document.createElement('div'); resize.className = 'reference-card-resize';
