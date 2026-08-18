@@ -129,26 +129,16 @@
       const mountAtInstall = mounted(sheetId);
       const registry = mountAtInstall ? mountAtInstall.cardHandlers : null;
       // Topmost claim (A7-2): when cards overlap, exactly one card may claim a
-      // press — the topmost card under the pointer (DOM order equals z order:
-      // render sorts by zIndex ascending and appends in that order).
+      // press — the visually topmost card under the pointer. elementsFromPoint
+      // is the browser's own transform-exact hit-test (it composes every
+      // ancestor transform, including the sheet's own seeded rotation), so the
+      // first card of THIS layer in the returned stack is the true topmost —
+      // no client-side rotation math to drift from the rendered geometry.
       const topmostClaimant = (mountState, x, y) => {
-        for (let i = mountState.layer.children.length - 1; i >= 0; i--) {
-          const sib = mountState.layer.children[i];
-          if (!sib.classList || !sib.classList.contains('reference-card')) continue;
-          const r = sib.getBoundingClientRect();
-          if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
-          // Point-in-rotated-quad: getBoundingClientRect() is the AABB of the
-          // rotated card, not its visible quad — an AABB-only test would let a
-          // rotated upper card claim presses in the wedge that visually lands
-          // on a lower card. Inverse-rotate the press about the card center
-          // (CSS rotate() origin) and test the unrotated layout size.
-          const w = sib.offsetWidth, h = sib.offsetHeight;
-          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-          const rad = (Number(sib.dataset.rotation) || 0) * Math.PI / 180;
-          const dx = x - cx, dy = y - cy;
-          const cos = Math.cos(rad), sin = Math.sin(rad);
-          const u = dx * cos + dy * sin, v = -dx * sin + dy * cos;
-          if (Math.abs(u) <= w / 2 && Math.abs(v) <= h / 2) return sib;
+        const stack = typeof document.elementsFromPoint === 'function' ? document.elementsFromPoint(x, y) : [];
+        for (let i = 0; i < stack.length; i++) {
+          const card = stack[i] && stack[i].closest ? stack[i].closest('.reference-card') : null;
+          if (card && card.parentElement === mountState.layer) return card;
         }
         return null;
       };
@@ -245,7 +235,7 @@
       layer.innerHTML = '';
       const media = Array.isArray(doc.media) ? doc.media.slice().sort((a, b) => Number(a.zIndex || 0) - Number(b.zIndex || 0)) : [];
       for (const item of media) {
-        const card = document.createElement('div'); card.className = 'reference-card'; card.dataset.mediaId = item.id; card.dataset.rotation = String(Number(item.rotation) || 0); applyStyle(card, item, doc.canvas);
+        const card = document.createElement('div'); card.className = 'reference-card'; card.dataset.mediaId = item.id; applyStyle(card, item, doc.canvas);
         const img = document.createElement('img'); img.src = api && api.blobUrl ? api.blobUrl(item.sha) : `/api/blob/${encodeURIComponent(item.sha)}`; img.alt = item.caption || 'reference image'; img.draggable = false;
         const caption = document.createElement('div'); caption.className = 'reference-card-caption'; caption.textContent = item.caption || '';
         const resize = document.createElement('div'); resize.className = 'reference-card-resize';

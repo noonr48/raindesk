@@ -141,10 +141,11 @@ async function main() {
     const moved = after.map((m, i) => Math.abs(m.x - before[i].x) > 20 || Math.abs(m.y - before[i].y) > 12);
     const case1 = { moved, doubleClaim: moved.filter(Boolean).length > 1, topOnly: moved.length === 2 && moved[1] === true && moved[0] === false };
 
-    // Case 2 (rotated wedge): re-establish overlap first (case 1 displaced the
-    // top card), then rotate the TOP card +45deg (9 x rotate-right), then press
-    // a wedge point — inside the rotated card's AABB but outside its visible
-    // quad, and inside the lower card. Correct claim: the LOWER card moves.
+    // Case 2 (rotated wedge, browser-oracle): re-establish overlap, rotate the
+    // TOP card +45deg (9 x rotate-right), then press a WEDGE point — inside B's
+    // AABB but where the browser's own transform-exact hit-test says the
+    // topmost card is A. Expectation derives from elementsFromPoint (the
+    // browser oracle), NOT from any math cloned from the implementation.
     let rsA = await rects(cdp);
     const aFree = { x: rsA[0].x + rsA[0].ow * 0.25, y: rsA[0].y + rsA[0].oh * 0.25 };
     const bAim = { x: rsA[1].x + rsA[1].w / 2, y: rsA[1].y + rsA[1].h / 2 };
@@ -158,29 +159,44 @@ async function main() {
     }
     await waitFor(cdp, `document.querySelectorAll('[data-world-id="world_references_main"] .reference-card').length===2`, 'two cards still rendered');
     const rs2 = await rects(cdp); const m2 = await media(cdp);
-    const rot = (m2[1].rotation || 0) * Math.PI / 180;
-    const b = rs2[1]; const bcx = b.x + b.w / 2, bcy = b.y + b.h / 2;
-    const a = rs2[0];
-    let wedge = null;
-    for (let gx = a.x + 3; gx <= a.x + a.w - 3 && !wedge; gx += 4) {
-      for (let gy = a.y + 3; gy <= a.y + a.h - 3 && !wedge; gy += 4) {
-        const px = gx, py = gy;
-        if (px < b.x || px > b.x + b.w || py < b.y || py > b.y + b.h) continue; // inside B's AABB
-        const dx = px - bcx, dy = py - bcy; const cos = Math.cos(rot), sin = Math.sin(rot);
-        const u = dx * cos + dy * sin, v = -dx * sin + dy * cos;
-        if (Math.abs(u) <= b.ow / 2 && Math.abs(v) <= b.oh / 2) continue; // outside B's rotated quad
-        wedge = { x: px, y: py };
+    const oracle = async (x, y) => value(cdp, `(()=>{const s=document.elementsFromPoint(${x},${y});for(const el of s){const c=el&&el.closest?el.closest('.reference-card'):null;if(c)return c.dataset.mediaId;}return null})()`, false);
+    const a = rs2[0]; const b = rs2[1];
+
+    // WEDGE: inside B's AABB, browser oracle says the topmost card is A.
+    let wedge = null; let wedgeOracle = null;
+    for (let gx = Math.round(a.x + 3); gx <= a.x + a.w - 3 && !wedge; gx += 4) {
+      for (let gy = Math.round(a.y + 3); gy <= a.y + a.h - 3 && !wedge; gy += 4) {
+        if (gx < b.x || gx > b.x + b.w || gy < b.y || gy > b.y + b.h) continue; // inside B's AABB
+        const top = await oracle(gx, gy);
+        if (top === m2[0].id) { wedge = { x: gx, y: gy }; wedgeOracle = top; }
       }
     }
-    if (!wedge) { console.log(JSON.stringify({ ok: false, error: 'no wedge point found', rects: rs2, rotation: m2[1].rotation })); return; }
+    if (!wedge) { console.log(JSON.stringify({ ok: false, error: 'no wedge point found (oracle never says A inside B AABB)', rects: rs2, rotation: m2[1].rotation })); return; }
 
     const before2 = await media(cdp);
     await drag(cdp, wedge, { x: wedge.x + 40, y: wedge.y + 30 });
     const after2 = await media(cdp);
     const moved2 = after2.map((m, i) => Math.abs(m.x - before2[i].x) > 20 || Math.abs(m.y - before2[i].y) > 12);
-    const case2 = { moved: moved2, wedgeClaim: moved2.length === 2 && moved2[0] === true && moved2[1] === false, doubleClaim: moved2.filter(Boolean).length > 1 };
+    const case2 = { moved: moved2, wedge, wedgeOracle, wedgeClaim: moved2.length === 2 && moved2[0] === true && moved2[1] === false };
 
-    console.log(JSON.stringify({ ok: case1.topOnly && case2.wedgeClaim, intersection: { w: ov.w, h: ov.h }, rotation: m2[1].rotation, wedge, case1, case2 }));
+    // POSITIVE CONTROL (rotated card claims its own pixels): press where the
+    // browser oracle says the topmost card is the ROTATED card B, expect B moves.
+    const rs3 = await rects(cdp); const bb = rs3[1];
+    let ctrl = null; let ctrlOracle = null;
+    for (let gx = Math.round(bb.x + 6); gx <= bb.x + bb.w - 6 && !ctrl; gx += 5) {
+      for (let gy = Math.round(bb.y + 6); gy <= bb.y + bb.h - 6 && !ctrl; gy += 5) {
+        const top = await oracle(gx, gy);
+        if (top === m2[1].id) { ctrl = { x: gx, y: gy }; ctrlOracle = top; }
+      }
+    }
+    if (!ctrl) { console.log(JSON.stringify({ ok: false, error: 'no control point found (oracle never says B)', rects: rs3 })); return; }
+    const before3 = await media(cdp);
+    await drag(cdp, ctrl, { x: ctrl.x + 30, y: ctrl.y + 20 });
+    const after3 = await media(cdp);
+    const moved3 = after3.map((m, i) => Math.abs(m.x - before3[i].x) > 15 || Math.abs(m.y - before3[i].y) > 10);
+    const control = { point: ctrl, oracle: ctrlOracle, moved: moved3, controlClaim: moved3.length === 2 && moved3[1] === true && moved3[0] === false };
+
+    console.log(JSON.stringify({ ok: case1.topOnly && case2.wedgeClaim && control.controlClaim, intersection: { w: ov.w, h: ov.h }, rotation: m2[1].rotation, case1, case2, control }));
   } finally { child.kill('SIGKILL'); }
 }
 main().catch((e) => { console.error(JSON.stringify({ ok: false, error: String(e.message || e) })); process.exit(1); });
