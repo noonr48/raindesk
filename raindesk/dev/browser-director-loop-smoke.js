@@ -187,6 +187,12 @@ async function main() {
     await waitFor(cdp, `document.getElementById('directionCaption').classList.contains('open')`, 'direction caption');
     await inputText(cdp, '#directionCaptionInput', 'her hand curves in and lands on his wrist');
     await clickSelector(cdp, '#directionCaptionSave');
+    // Beat-scoped annotation wait: 90s. Mechanism (corrected after review —
+    // CHAT_CONCURRENCY is 3, turns run CONCURRENTLY, not serialized): each
+    // partner turn spawns a headless pi process (lib/agent.js CHAT_TIMEOUT_MS
+    // 120000); the beat's askPartner turn and this save's turn overlap, and a
+    // real interpret+save round-trip routinely exceeds 15s. The predicate is
+    // scope-specific so a longer window cannot mask a scoping defect.
     await waitFor(cdp, `(async()=>{const g=await (await fetch('/api/direction')).json();return (g.annotations||[]).some(a=>a.scopeType==='beat'&&a.scopeId===${JSON.stringify(firstBeatId)})})()`, 'beat-scoped DIRECT annotation', 90000);
 
     // Pin actual art references: shot start and the beat's start/end poses.
