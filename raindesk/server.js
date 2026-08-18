@@ -11,6 +11,7 @@
 
 const core = require('./server-core');
 const characters = require('./lib/characters');
+const invocationLedger = require('./lib/partner-invocation-ledger');
 const direction = require('./lib/direction');
 const partner = require('./lib/partner');
 const agent = require('./lib/agent');
@@ -102,6 +103,10 @@ function characterRoute(pathname) {
     pathname === '/api/character/shot-binding';
 }
 
+function invocationRoute(pathname) {
+  return pathname === '/api/invocations';
+}
+
 function asBadRequest(error) {
   if (error instanceof HttpError) return error;
   return new HttpError(400, error && error.message ? error.message : 'invalid character data');
@@ -142,6 +147,46 @@ async function handleCharacterApi(req, res, url) {
   throw new HttpError(404, 'not found');
 }
 
+async function handleInvocationApi(req, res, url) {
+  const route = url.pathname;
+  const method = req.method;
+
+  if (route === '/api/invocations') {
+    if (method === 'GET') {
+      const shotId = String(url.searchParams.get('shotId') || '').trim() || null;
+      const status = String(url.searchParams.get('status') || '').trim() || null;
+      return core.sendJson(res, 200, { ok: true, invocations: invocationLedger.list({ shotId, status }) });
+    }
+    if (method === 'POST') {
+      const body = await readJson(req, 256 * 1024);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new HttpError(400, 'invocation record is required');
+      }
+      // Recording a newer proposed/approved invocation for a shot supersedes
+      // prior pending ones (stale-marking) so a reload never restores two
+      // competing approvals for the same creative scope.
+      if (body.supersede && typeof body.shotId === 'string' && body.shotId.trim()) {
+        invocationLedger.markStaleSuperseded({ shotId: body.shotId, requestId: body.requestId || body.id || '' });
+      }
+      let recorded;
+      try { recorded = invocationLedger.record(body); } catch (error) { throw asBadRequest(error); }
+      return core.sendJson(res, 201, { ok: true, invocation: recorded.entry, created: recorded.created });
+    }
+    if (method === 'PATCH') {
+      const body = await readJson(req, 64 * 1024);
+      const id = body && typeof body.id === 'string' ? body.id.trim() : '';
+      if (!id) throw new HttpError(400, 'id is required');
+      const status = body && typeof body.status === 'string' ? body.status.trim() : '';
+      if (!invocationLedger.STATUSES.has(status)) throw new HttpError(400, 'unknown invocation status');
+      const entry = invocationLedger.setStatus(id, status);
+      if (!entry) throw new HttpError(404, 'no such invocation');
+      return core.sendJson(res, 200, { ok: true, invocation: entry });
+    }
+  }
+
+  throw new HttpError(404, 'not found');
+}
+
 function createServer(deps = {}) {
   const agentImpl = deps.agentImpl || deps.agent || agent;
   const basePartner = deps.partnerImpl || partner.createPartner({ agentImpl });
@@ -157,19 +202,20 @@ function createServer(deps = {}) {
     try { url = new URL(req.url, `http://${req.headers.host || `${core.HOST}:${core.PORT}`}`); }
     catch (_e) { return inherited(req, res); }
 
-    if (!characterRoute(url.pathname)) return inherited(req, res);
+    if (!characterRoute(url.pathname) && !invocationRoute(url.pathname)) return inherited(req, res);
     // Let the inherited server perform the normal remote unlock response for
-    // unauthorized requests. Authorized character routes stay in this layer.
+    // unauthorized requests. Authorized character/invocation routes stay here.
     if (authToken && !core.requestAuthorized(req, authToken)) return inherited(req, res);
 
-    return handleCharacterApi(req, res, url).catch((error) => {
+    const handler = invocationRoute(url.pathname) ? handleInvocationApi : handleCharacterApi;
+    return handler(req, res, url).catch((error) => {
       if (res.headersSent) {
         res.destroy();
         return;
       }
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof HttpError ? error.message : 'internal error';
-      if (!(error instanceof HttpError)) console.error('[raindesk] character route error:', error); // eslint-disable-line no-console
+      if (!(error instanceof HttpError)) console.error('[raindesk] composed route error:', error); // eslint-disable-line no-console
       try { core.sendJson(res, status, { error: message }); } catch (_e) { res.destroy(); }
     });
   });
