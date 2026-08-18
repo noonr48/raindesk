@@ -144,17 +144,20 @@
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
           document.removeEventListener('pointercancel', up, true);
-          // Swallow only the click the browser synthesizes AT the release point
-          // (±3px): position-gating avoids eating a deliberate later click on
-          // the card's own controls (e.g. rotate right after a resize).
-          const upX = ev.clientX, upY = ev.clientY;
-          const swallow = (click) => {
-            if (card.contains(click.target) && Math.abs(click.clientX - upX) < 3 && Math.abs(click.clientY - upY) < 3) {
-              click.preventDefault(); click.stopPropagation();
-            }
-            document.removeEventListener('click', swallow, true);
-          };
-          document.addEventListener('click', swallow, true);
+          // Swallow the drag-release synthesized click ONLY when the pointer
+          // actually moved (a real drag): a deliberate click on the card's
+          // own controls has ~no movement and must survive untouched.
+          const dragged = Math.abs(ev.clientX - sx) > 3 || Math.abs(ev.clientY - sy) > 3;
+          if (dragged) {
+            const upX = ev.clientX, upY = ev.clientY;
+            const swallow = (click) => {
+              if (card.contains(click.target) && Math.abs(click.clientX - upX) < 3 && Math.abs(click.clientY - upY) < 3) {
+                click.preventDefault(); click.stopPropagation();
+              }
+              document.removeEventListener('click', swallow, true);
+            };
+            document.addEventListener('click', swallow, true);
+          }
           mutateMedia(sheetId, media.id, (m) => { m.x = media.x; m.y = media.y; }, 'move reference').catch(() => {});
         };
         document.addEventListener('pointermove', move, true);
@@ -180,14 +183,17 @@
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
           document.removeEventListener('pointercancel', up, true);
-          const upX = rev.clientX, upY = rev.clientY;
-          const swallow = (click) => {
-            if (card.contains(click.target) && Math.abs(click.clientX - upX) < 3 && Math.abs(click.clientY - upY) < 3) {
-              click.preventDefault(); click.stopPropagation();
-            }
-            document.removeEventListener('click', swallow, true);
-          };
-          document.addEventListener('click', swallow, true);
+          const dragged = Math.abs(rev.clientX - sx) > 3 || Math.abs(rev.clientY - sy) > 3;
+          if (dragged) {
+            const upX = rev.clientX, upY = rev.clientY;
+            const swallow = (click) => {
+              if (card.contains(click.target) && Math.abs(click.clientX - upX) < 3 && Math.abs(click.clientY - upY) < 3) {
+                click.preventDefault(); click.stopPropagation();
+              }
+              document.removeEventListener('click', swallow, true);
+            };
+            document.addEventListener('click', swallow, true);
+          }
           mutateMedia(sheetId, media.id, (m) => { m.width = media.width; m.height = media.height; }, 'resize reference').catch(() => {});
         };
         document.addEventListener('pointermove', move, true);
