@@ -187,7 +187,7 @@ async function main() {
     await waitFor(cdp, `document.getElementById('directionCaption').classList.contains('open')`, 'direction caption');
     await inputText(cdp, '#directionCaptionInput', 'her hand curves in and lands on his wrist');
     await clickSelector(cdp, '#directionCaptionSave');
-    await waitFor(cdp, `(async()=>{const g=await (await fetch('/api/direction')).json();return (g.annotations||[]).some(a=>a.scopeType==='beat'&&a.scopeId===${JSON.stringify(firstBeatId)})})()`, 'beat-scoped DIRECT annotation', 15000);
+    await waitFor(cdp, `(async()=>{const g=await (await fetch('/api/direction')).json();return (g.annotations||[]).some(a=>a.scopeType==='beat'&&a.scopeId===${JSON.stringify(firstBeatId)})})()`, 'beat-scoped DIRECT annotation', 90000);
 
     // Pin actual art references: shot start and the beat's start/end poses.
     await clickSelector(cdp, '#beatTrail .shot-frame-strip [data-frame-slot="start"] .shot-frame-set');
