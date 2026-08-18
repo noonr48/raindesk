@@ -162,14 +162,14 @@ async function handleInvocationApi(req, res, url) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new HttpError(400, 'invocation record is required');
       }
-      // Recording a newer proposed/approved invocation for a shot supersedes
-      // prior pending ones (stale-marking) so a reload never restores two
-      // competing approvals for the same creative scope.
+      // Validate and record FIRST; supersede stale-marking only after the
+      // record durably lands — a malformed body must never wipe pending
+      // entries (record-before-supersede, reviewer A2/A3).
+      let recorded;
+      try { recorded = invocationLedger.record(body); } catch (error) { throw asBadRequest(error); }
       if (body.supersede && typeof body.shotId === 'string' && body.shotId.trim()) {
         invocationLedger.markStaleSuperseded({ shotId: body.shotId, requestId: body.requestId || body.id || '' });
       }
-      let recorded;
-      try { recorded = invocationLedger.record(body); } catch (error) { throw asBadRequest(error); }
       return core.sendJson(res, 201, { ok: true, invocation: recorded.entry, created: recorded.created });
     }
     if (method === 'PATCH') {
