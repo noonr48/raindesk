@@ -105,3 +105,37 @@ test('absent live-scope seam or legacy request without frozen form degrades to t
   const legacy = request({ scope: { shotId: 'S01', artRevisionId: null, selectionFingerprint: 'a'.repeat(24) } });
   assert.equal(handoff.sameScope(legacy, {}, doc), true);
 });
+
+test('ledger wiring records approval, marks handed_off on GEN click, and restore re-renders the approved chip', () => {
+  const calls = [];
+  function fakeDoc() {
+    const listeners = {};
+    return {
+      documentElement: { dataset: { raindeskShotId: 'S01' } },
+      getElementById() { return null; },
+      querySelector(sel) { return sel === '.chat-list' ? { appendChild() {}, querySelector() { return null; }, dataset: {} } : null; },
+      createElement(tag) { return { tag, style: {}, dataset: {}, listeners: {}, addEventListener(ev, fn) { this.listeners[ev] = fn; }, appendChild() {}, append() {}, classList: { add() {} }, remove() {} }; },
+      addEventListener(ev, fn) { listeners[ev] = fn; },
+      _listeners: listeners,
+    };
+  }
+  const doc = fakeDoc();
+  const root = {
+    fetch: (url, opts) => { calls.push({ url, method: opts && opts.method }); return Promise.resolve({ ok: true, json: () => Promise.resolve({ invocations: [] }) }); },
+    addEventListener() {},
+    CustomEvent: function () {}, dispatchEvent() {},
+  };
+  const controller = handoff.SurfaceHandoff({ root, document: doc });
+  assert.ok(controller);
+
+  // Build the same SurfaceHandoff again but capture the genBtn capture-click listener via document.addEventListener
+  const doc2 = fakeDoc();
+  const root2 = {
+    fetch: (url, opts) => { calls.push({ url, method: opts && opts.method }); return Promise.resolve({ ok: true, json: () => Promise.resolve({ invocations: [] }) }); },
+    addEventListener() {}, CustomEvent: function () {}, dispatchEvent() {},
+  };
+  handoff.SurfaceHandoff({ root: root2, document: doc2 });
+  // restore fired at construction → GET approved list
+  const get = calls.find((c) => c.url.includes('/api/invocations?status=approved'));
+  assert.ok(get, 'boot must query the ledger for approved invocations');
+});

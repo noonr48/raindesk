@@ -118,7 +118,71 @@
       pending = null;
     }
 
-    function prepare(request, row) {
+    // Durable approval ledger (server: /api/invocations). Approval records a
+  // proposal durably so a reload can restore it; a GEN click marks handed_off;
+  // failures never block the artist (ledger is persistence, not permission).
+  function recordApproval(root, request) {
+    if (!root || !root.fetch || !request) return;
+    const scope = request.scope || {};
+    root.fetch('/api/invocations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: request.id, requestId: request.id, turnId: request.turnId || null,
+        shotId: scope.shotId || null, adapterId: request.adapterId || null,
+        capabilityId: request.capabilityId || null, status: 'approved', supersede: true,
+        requestId_: undefined,
+      }),
+    }).catch(() => { /* approval is still valid in-page if the ledger is down */ });
+  }
+
+  function markHandedOff(root, invocationId) {
+    if (!root || !root.fetch || !invocationId) return;
+    root.fetch('/api/invocations', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: invocationId, status: 'handed_off' }),
+    }).catch(() => { /* the artist pressed GEN; the ledger catches up or the entry stays approved */ });
+  }
+
+  function restorePendingApproval(root, document) {
+    if (!root || !root.fetch || !document) return;
+    root.fetch('/api/invocations?status=approved').then((res) => res.ok ? res.json() : null)
+      .then((body) => {
+        const rows = body && Array.isArray(body.invocations) ? body.invocations : [];
+        const shotId = currentShotId(document);
+        const match = rows.find((row) => row && row.shotId && row.shotId === shotId && row.adapterId === 'bounded_image_region_v1');
+        if (!match) return;
+        // Only restore as an in-page chip; the artist re-approves by pressing set up GEN again.
+        const list = document.querySelector && document.querySelector('.chat-list');
+        if (!list || list.querySelector('.surface-handoff-proposal')) return;
+        const row = createElement(document, 'div', 'surface-handoff-proposal');
+        row.dataset.invocationId = match.id;
+        row.appendChild(createElement(document, 'span', 'surface-handoff-copy', 'you approved a local edit here before the reload — set it up again?'));
+        const approve = createElement(document, 'button', 'surface-handoff-btn', 'set up GEN');
+        approve.type = 'button';
+        const decline = createElement(document, 'button', 'surface-handoff-btn quiet', 'not now');
+        decline.type = 'button';
+        approve.addEventListener('click', () => {
+          const request = {
+            schemaVersion: 1, id: match.id, turnId: match.turnId,
+            adapterId: 'bounded_image_region_v1', capabilityId: 'local_image_take',
+            invocationBoundary: 'surface', status: 'awaiting_approval', disposition: 'proposal',
+            reviewRequired: true, creativeMutation: true, scope: { shotId: match.shotId },
+          };
+          prepare(request, row);
+        });
+        decline.addEventListener('click', () => {
+          row.remove();
+          markHandedOff(root, match.id);
+        });
+        row.append(approve, decline);
+        list.appendChild(row);
+      })
+      .catch(() => { /* offline/down ledger: no restore, no error */ });
+  }
+
+  function prepare(request, row) {
       if (!isSupportedRequest(request)) return false;
       if (!sameScope(request, root, document)) {
         row.classList.add('stale');
@@ -132,6 +196,7 @@
       if (!wrap || !prompt || !gen) return false;
       clearPrepared();
       pending = request;
+      recordApproval(root, request);
       wrap.classList.add('surface-handoff-ready');
       wrap.dataset.invocationId = request.id;
       if (!prompt.value.trim()) prompt.placeholder = 'describe this approved local change, then press GEN';
@@ -175,11 +240,17 @@
 
     if (document && document.addEventListener) {
       document.addEventListener('click', (event) => {
-        if (event.target && event.target.id === 'genBtn') clearPrepared();
+        if (event.target && event.target.id === 'genBtn') {
+          if (pending) markHandedOff(root, pending.id);
+          clearPrepared();
+        }
       }, true);
     }
     if (root && root.addEventListener) {
       root.addEventListener('raindesk:shot-change', clearPrepared);
+    }
+    if (document) {
+      try { restorePendingApproval(root, document); } catch (_e) { /* restore is best-effort */ }
     }
 
     return { handleTurn, renderRequest, prepare, clearPrepared, pending: () => pending };
