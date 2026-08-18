@@ -131,9 +131,37 @@ async function main() {
 
     const head = await box(cdp, '[data-world-id="world_character_primary"] .creative-sheet-head');
     if (!head) throw new Error('Character sheet did not render');
-    await drag(cdp, { x: head.x + head.width*0.45, y: head.y + head.height/2 }, { x: head.x + head.width*0.45 - 90, y: head.y + head.height/2 + 65 });
+    // bc77b18 reserves mid-rename title presses (document-capture
+    // stopPropagation while contenteditable); at-rest title presses start
+    // ordinary header drags. Find a draggable point via the browser's own
+    // hit-test: elementFromPoint is the header itself or its resting title.
+    const headPt = await value(cdp, `(()=>{const h=document.querySelector('[data-world-id="world_character_primary"] .creative-sheet-head');const r=h.getBoundingClientRect();for(let fx=0.06;fx<=0.94;fx+=0.03){const x=r.left+r.width*fx;const y=r.top+r.height*0.5;const el=document.elementFromPoint(x,y);if(el===h||(el&&el.closest&&el.closest('.creative-sheet-title')&&el.getAttribute('contenteditable')!=='true'))return JSON.stringify({x,y});}return null})()`, false);
+    if (!headPt) throw new Error('no draggable header point: head is fully covered by reserved controls');
+    const headPress = JSON.parse(headPt);
+    await drag(cdp, headPress, { x: headPress.x - 90, y: headPress.y + 65 });
     await waitFor(cdp, `(async()=>{const w=await (await fetch('/api/workspace')).json();const o=w.objects.find(x=>x.id==='world_character_primary');return o&&Math.abs(o.x-(${char1.x}))>25&&Math.abs(o.y-(${char1.y}))>20})()`, 'world sheet drag persistence');
     ws = await workspace(cdp); const char2 = object(ws, 'world_character_primary');
+
+    // Rename gestures still own mid-edit presses (bc77b18 narrowed, not
+    // reverted): dblclick opens the title editor; a drag-press INSIDE the open
+    // editor must not move the sheet; Escape closes without renaming.
+    const titleSel = '[data-world-id="world_character_primary"] .creative-sheet-title';
+    const titleBox = await box(cdp, titleSel);
+    if (!titleBox) throw new Error('title element missing');
+    const titleMid = { x: titleBox.x + titleBox.width / 2, y: titleBox.y + titleBox.height / 2 };
+    for (const count of [1, 2]) {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: titleMid.x, y: titleMid.y, button: 'left', buttons: 1, clickCount: count });
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: titleMid.x, y: titleMid.y, button: 'left', buttons: 0, clickCount: count });
+      await delay(90);
+    }
+    await waitFor(cdp, `document.querySelector(${JSON.stringify(titleSel)})?.getAttribute('contenteditable')==='true'`, 'title editor open');
+    await drag(cdp, titleMid, { x: titleMid.x + 60, y: titleMid.y + 40 });
+    const midEdit = await value(cdp, `(async()=>{const w=await (await fetch('/api/workspace')).json();const o=w.objects.find(x=>x.id==='world_character_primary');return JSON.stringify({x:o.x,y:o.y})})()`);
+    const me = JSON.parse(midEdit);
+    if (Math.abs(me.x - char2.x) > 1 || Math.abs(me.y - char2.y) > 1) throw new Error(`mid-edit press moved the sheet (reservation broken): ${midEdit} vs ${char2.x},${char2.y}`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await waitFor(cdp, `document.querySelector(${JSON.stringify(titleSel)})?.getAttribute('contenteditable')!=='true'`, 'title editor closed');
 
     // A normal References tab click reveals and focuses the sheet.
     await nativeClick(cdp, '[data-creative-target="world_references_main"]');
