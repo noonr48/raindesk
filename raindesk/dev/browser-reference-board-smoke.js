@@ -176,14 +176,14 @@ async function main() {
     const cardPoint = await exposedPoint(cdp, cardSel); const cardBox = await box(cdp, cardSel);
     if (!cardPoint || !cardBox) throw new Error('reference card is not genuinely draggable');
     const beforeMove = { x: imported.x, y: imported.y };
-    await drag(cdp, cardPoint, { x: cardPoint.x + 74, y: cardPoint.y + 46 });
+    await drag(cdp, cardPoint, { x: cardPoint.x + 40, y: cardPoint.y + 30 });
     await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/sheet/${sheetId}')).json();const m=r.document&&r.document.media&&r.document.media[0];return m&&Math.abs(m.x-(${beforeMove.x}))>20&&Math.abs(m.y-(${beforeMove.y}))>12})()`, 'reference card move persistence');
     revision = await jsonFrom(cdp, `/api/sheet/${sheetId}`);
     const moved = revision.document.media[0];
 
     const resizePoint = await exposedPoint(cdp, resizeSel);
     if (!resizePoint) throw new Error('reference resize handle is clipped or obscured');
-    await drag(cdp, resizePoint, { x: resizePoint.x + 70, y: resizePoint.y + 35 });
+    await drag(cdp, resizePoint, { x: resizePoint.x + 40, y: resizePoint.y + 20 });
     await waitFor(cdp, `(async()=>{const r=await (await fetch('/api/sheet/${sheetId}')).json();const m=r.document&&r.document.media&&r.document.media[0];return m&&m.width>${moved.width + 18}})()`, 'reference resize persistence');
 
     await nativeClick(cdp, rotateSel);
