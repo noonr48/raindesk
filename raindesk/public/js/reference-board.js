@@ -106,7 +106,7 @@
       body.appendChild(layer);
       toolbar(sheetId, el);
       el.addEventListener('pointerdown', () => { activeSheetId = sheetId; }, true);
-      mounts.set(sheetId, { el, layer }); render(sheetId);
+      mounts.set(sheetId, { el, layer, cardHandlers: [] }); render(sheetId);
     }
 
     function applyStyle(card, media, canvas) { Object.assign(card.style, mediaCss(media, canvas)); }
@@ -126,10 +126,25 @@
       // sheet canvas / constraint overlays (live-probe proven), never the card,
       // so a card-level pointerdown never fires. Capture + rect hit-test is the
       // only reliable press path in arrange mode.
-      document.addEventListener('pointerdown', (e) => {
+      const mountAtInstall = mounted(sheetId);
+      const registry = mountAtInstall ? mountAtInstall.cardHandlers : null;
+      // Topmost claim (A7-2): when cards overlap, exactly one card may claim a
+      // press — the topmost card under the pointer (DOM order equals z order:
+      // render sorts by zIndex ascending and appends in that order).
+      const topmostClaimant = (mountState, x, y) => {
+        for (let i = mountState.layer.children.length - 1; i >= 0; i--) {
+          const sib = mountState.layer.children[i];
+          if (!sib.classList || !sib.classList.contains('reference-card')) continue;
+          const r = sib.getBoundingClientRect();
+          if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return sib;
+        }
+        return null;
+      };
+      const onDragDown = (e) => {
         if (e.button !== 0) return;
         const mountState = mounted(sheetId);
         if (!mountState || !mountState.el.classList.contains('reference-arrange')) return;
+        if (topmostClaimant(mountState, e.clientX, e.clientY) !== card) return;
         const rect = card.getBoundingClientRect();
         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
         e.preventDefault(); e.stopPropagation();
@@ -163,14 +178,17 @@
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
         document.addEventListener('pointercancel', up, true);
-      }, true);
+      };
+      document.addEventListener('pointerdown', onDragDown, true);
+      if (registry) registry.push({ type: 'pointerdown', fn: onDragDown, capture: true });
       const resize = card.querySelector('.reference-card-resize');
       // Resize via document-capture hit-test (same live-proven rationale as the
       // drag: pointer events never target card-level elements).
-      document.addEventListener('pointerdown', (e) => {
+      const onResizeDown = (e) => {
         if (e.button !== 0) return;
         const mountState = mounted(sheetId);
         if (!mountState || !mountState.el.classList.contains('reference-arrange')) return;
+        if (topmostClaimant(mountState, e.clientX, e.clientY) !== card) return;
         const rect = resize.getBoundingClientRect();
         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
         e.preventDefault(); e.stopPropagation();
@@ -199,11 +217,20 @@
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
         document.addEventListener('pointercancel', up, true);
-      }, true);
+      };
+      document.addEventListener('pointerdown', onResizeDown, true);
+      if (registry) registry.push({ type: 'pointerdown', fn: onResizeDown, capture: true });
     }
     function render(sheetId) {
       const mountState = mounted(sheetId); const revision = stateFor(sheetId); if (!mountState || !revision) return;
-      const { layer } = mountState; const doc = revision.document; layer.innerHTML = '';
+      const { layer } = mountState; const doc = revision.document;
+      // Render-time teardown (A7-1): every prior render's document-level card
+      // handlers are removed before rebuilding — listeners never accumulate.
+      if (Array.isArray(mountState.cardHandlers)) {
+        for (const h of mountState.cardHandlers) document.removeEventListener(h.type, h.fn, h.capture);
+      }
+      mountState.cardHandlers = [];
+      layer.innerHTML = '';
       const media = Array.isArray(doc.media) ? doc.media.slice().sort((a, b) => Number(a.zIndex || 0) - Number(b.zIndex || 0)) : [];
       for (const item of media) {
         const card = document.createElement('div'); card.className = 'reference-card'; card.dataset.mediaId = item.id; applyStyle(card, item, doc.canvas);
@@ -270,6 +297,12 @@
       if (observer) observer.disconnect(); clearTimeout(scanTimer);
       if (root) { root.removeEventListener('paste', onPaste); root.removeEventListener('raindesk:sheet-revision', onRevision); }
       if (input && input.remove) input.remove();
+      for (const mountState of mounts.values()) {
+        if (Array.isArray(mountState.cardHandlers)) {
+          for (const h of mountState.cardHandlers) document.removeEventListener(h.type, h.fn, h.capture);
+          mountState.cardHandlers = [];
+        }
+      }
     }
     return { start, destroy, scan, load, addFile, saveDocument, stateFor };
   }
