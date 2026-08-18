@@ -818,3 +818,33 @@ test('invocation ledger routes: record, supersede, patch, and list', async (t) =
     assert.equal(res.status, 404);
   });
 });
+
+test('invocation ledger POST: malformed record leaves pending entries untouched', async (t) => {
+  await withServer(t, {}, async (base) => {
+    const post = (body) => fetch(`${base}/api/invocations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    let res = await post({ id: 'invoke_p1', turnId: 'turn_p1', shotId: 'S02' });
+    assert.equal(res.status, 201);
+
+    // Malformed record (no id) requesting supersede: must 400 in record()
+    // BEFORE markStaleSuperseded could stale the pending entry (A2/A3).
+    res = await post({ turnId: 'turn_bad', shotId: 'S02', supersede: true });
+    assert.equal(res.status, 400);
+
+    // Non-object body also 400s without touching the store.
+    res = await fetch(`${base}/api/invocations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: '[]',
+    });
+    assert.equal(res.status, 400);
+
+    res = await fetch(`${base}/api/invocations?shotId=S02&status=proposed`);
+    const body = await res.json();
+    assert.equal(body.invocations.length, 1);
+    assert.equal(body.invocations[0].id, 'invoke_p1');
+    assert.equal(body.invocations[0].status, 'proposed');
+  });
+});
