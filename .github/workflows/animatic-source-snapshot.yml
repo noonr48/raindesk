@@ -35,6 +35,7 @@ jobs:
           node --check server.js
           node --check lib/tests/animatic-snapshots.test.js
           node --check lib/tests/animatic-preparation.test.js
+          node --check lib/tests/animatic-preparation-routes.test.js
           node --check lib/tests/animatic-adapter-registration.test.js
           node --check lib/tests/invocation-ledger-v2.test.js
           node --check lib/tests/server-authoritative-context.test.js
