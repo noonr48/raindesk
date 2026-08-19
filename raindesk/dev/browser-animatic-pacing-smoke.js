@@ -24,6 +24,8 @@ const { createServer } = require('../server');
 const CHROME = process.env.CHROME_BIN || process.env.BROWSER || 'chromium';
 const SCREENSHOT = process.env.ANIMATIC_PACING_SCREENSHOT || '';
 const RECEIPT = process.env.ANIMATIC_PACING_RECEIPT || '';
+const WATCHDOG_MS = 90_000;
+const CDP_TIMEOUT_MS = 10_000;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const fakeExecutor = path.join(DATA_DIR, 'fake-animatic-browser-executor');
 const spawnCounter = path.join(DATA_DIR, 'executor-spawns.txt');
@@ -124,12 +126,20 @@ class CDP {
       const msg = JSON.parse(String(event.data));
       if (!msg.id || !this.pending.has(msg.id)) return;
       const pending = this.pending.get(msg.id); this.pending.delete(msg.id);
+      clearTimeout(pending.timer);
       if (msg.error) pending.reject(new Error(msg.error.message)); else pending.resolve(msg.result || {});
     });
   }
   send(method, params = {}) {
     const id = ++this.seq;
-    return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.ws.send(JSON.stringify({ id, method, params })); });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Chromium DevTools command timed out: ${method}`));
+      }, CDP_TIMEOUT_MS);
+      this.pending.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
   }
 }
 async function connectPage(browserWsUrl, url) {
@@ -164,6 +174,10 @@ async function nativeClick(cdp, selector) {
 }
 
 async function main() {
+  const watchdog = setTimeout(() => {
+    console.error('[animatic-browser] watchdog expired');
+    process.exit(124);
+  }, WATCHDOG_MS);
   const proposal = seed();
   const animaticEnv = {
     RAINDESK_ANIMATIC_EXECUTOR: fakeExecutor,
@@ -187,16 +201,20 @@ async function main() {
   const child = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--window-size=1440,900', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let cdp;
   try {
+    console.log('[animatic-browser] connect');
     cdp = await connectPage(await waitForDevtools(child), base);
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot === 'ready'`, 'Raindesk boot');
+    console.log('[animatic-browser] partner visible');
     await delay(700);
     await nativeClick(cdp, '[data-tab="agent"]');
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'restored pacing proposal');
     const shownDigest = await value(cdp, `document.querySelector('.animatic-pacing-card')?.textContent?.includes('Restrained')`);
     if (!shownDigest) throw new Error('expected Restrained pacing card not shown');
+    console.log('[animatic-browser] preview');
     await nativeClick(cdp, '.animatic-preview-btn');
     await waitFor(cdp, `!!document.querySelector('.animatic-take-card video')`, 'playable animatic Take', 20000);
     await waitFor(cdp, `document.querySelector('.animatic-take-card video')?.getAttribute('src')?.startsWith('/api/animatic/artifact/')`, 'same-origin artifact video');
+    console.log('[animatic-browser] keep');
     await nativeClick(cdp, '.animatic-take-card .animatic-review-btn.keep');
     await waitFor(cdp, `document.querySelector('.animatic-take-status')?.textContent?.includes('kept')`, 'kept review state');
 
@@ -206,6 +224,7 @@ async function main() {
     }
     if (fs.readFileSync(spawnCounter, 'utf8').trim().split('\n').length !== 1) throw new Error('preview spawned executor more than once');
 
+    console.log('[animatic-browser] reload');
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot === 'ready'`, 'Raindesk reload');
     await delay(800);
@@ -229,13 +248,15 @@ async function main() {
     if (RECEIPT) fs.writeFileSync(RECEIPT, JSON.stringify(receipt, null, 2) + '\n');
     console.log(JSON.stringify(receipt));
   } finally {
+    console.log('[animatic-browser] cleanup');
     if (cdp && cdp.ws) try { cdp.ws.close(); } catch (_e) {}
-    child.kill('SIGTERM');
+    if (child.exitCode == null) child.kill('SIGKILL');
     for (const socket of sockets) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_e) {}
     try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch (_e) {}
     try { fs.rmSync(PROJECT_ROOT, { recursive: true, force: true }); } catch (_e) {}
+    clearTimeout(watchdog);
   }
 }
 
