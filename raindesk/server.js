@@ -203,8 +203,16 @@ async function handleInvocationApi(req, res, url) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new HttpError(400, 'invocation record is required');
       }
+      // HTTP POST is a compatibility/history intake only. It may never claim
+      // the trusted origins used by Partner proposals or server-prepared work,
+      // and it cannot create a pre-approved record. Those origins are minted
+      // only by in-process server boundaries.
       let recorded;
-      try { recorded = invocationLedger.record(body); } catch (error) { throw asBadRequest(error); }
+      try {
+        recorded = invocationLedger.record({ ...body, origin: 'http_legacy', status: 'proposed' });
+      } catch (error) {
+        throw asBadRequest(error);
+      }
       if (body.supersede && recorded.entry.shotId) {
         invocationLedger.markStaleSuperseded({
           shotId: recorded.entry.shotId,
