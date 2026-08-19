@@ -4,6 +4,7 @@
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -107,18 +108,40 @@ function seed() {
   }).proposal;
 }
 
-function waitForDevtools(child, ms = 20000) {
+function freePort() {
   return new Promise((resolve, reject) => {
-    let buf = '';
-    const timer = setTimeout(() => reject(new Error('Chromium DevTools did not start')), ms);
-    child.stderr.on('data', (d) => {
-      buf += d.toString('utf8');
-      const match = /DevTools listening on (ws:\/\/[^\s]+)/.exec(buf);
-      if (match) { clearTimeout(timer); resolve(match[1]); }
+    const probe = net.createServer();
+    probe.unref();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      const port = address && typeof address === 'object' ? address.port : null;
+      probe.close((error) => error ? reject(error) : resolve(port));
     });
-    child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`Chromium exited early (${code})\n${buf}`)); });
   });
 }
+
+async function waitForDevtools(port, child, ms = 20000) {
+  let stderr = '';
+  let exited = false;
+  let exitCode = null;
+  child.stderr.on('data', (data) => { stderr += data.toString('utf8'); });
+  child.once('exit', (code) => { exited = true; exitCode = code; });
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (exited) throw new Error(`Chromium exited early (${exitCode})\n${stderr}`);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (response.ok) {
+        const version = await response.json();
+        if (version && version.webSocketDebuggerUrl) return version.webSocketDebuggerUrl;
+      }
+    } catch (_error) { /* Chromium is still starting */ }
+    await delay(100);
+  }
+  throw new Error(`Chromium DevTools did not start on port ${port}\n${stderr}`);
+}
+
 class CDP {
   constructor(ws) {
     this.ws = ws; this.seq = 0; this.pending = new Map();
@@ -198,11 +221,12 @@ async function main() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}/`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-animatic-chrome-'));
-  const child = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--window-size=1440,900', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const debugPort = await freePort();
+  const child = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${debugPort}`, '--window-size=1440,900', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let cdp;
   try {
     console.log('[animatic-browser] connect');
-    cdp = await connectPage(await waitForDevtools(child), base);
+    cdp = await connectPage(await waitForDevtools(debugPort, child), base);
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot === 'ready'`, 'Raindesk boot');
     console.log('[animatic-browser] partner visible');
     await delay(700);
