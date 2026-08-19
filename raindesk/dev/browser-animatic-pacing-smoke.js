@@ -176,6 +176,11 @@ async function main() {
     partnerImpl: { turn: async () => ({ message: 'unused', invocationRequests: [] }) },
     sourceRights: 'browser-test-rights', animaticEnv,
   });
+  const sockets = new Set();
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}/`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-animatic-chrome-'));
@@ -226,6 +231,7 @@ async function main() {
   } finally {
     if (cdp && cdp.ws) try { cdp.ws.close(); } catch (_e) {}
     child.kill('SIGTERM');
+    for (const socket of sockets) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_e) {}
     try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch (_e) {}
