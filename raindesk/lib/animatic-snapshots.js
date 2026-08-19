@@ -16,6 +16,7 @@ const { HttpError } = require('./errors');
 const blobs = require('./blobs');
 const direction = require('./direction');
 const projection = require('./shot-projection');
+const contract = require('./animatic-contract');
 
 const DATA_DIR = process.env.RAINDESK_DATA_DIR
   ? path.resolve(process.env.RAINDESK_DATA_DIR)
@@ -24,11 +25,11 @@ const SNAPSHOT_DIR = path.join(DATA_DIR, 'animatic', 'snapshots');
 const SCHEMA_VERSION = '0.2.0';
 const ADAPTER_ID = 'animatic_timing_v1';
 const ADAPTER_CONTRACT_VERSION = '0.2.0';
-const CONTRACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
+const CONTRACT_ID_RE = contract.CONTRACT_ID_RE;
 const DIGEST_RE = /^[a-f0-9]{64}$/;
-const FIDELITIES = new Set(['draft', 'preview']);
-const MAX_SHOTS = 256;
-const MAX_DURATION_FRAMES = 60 * 60 * 24; // one hour at 24fps per source panel is already generous.
+const FIDELITIES = contract.FIDELITIES;
+const MAX_SHOTS = contract.MAX_SHOTS;
+const MAX_DURATION_FRAMES = contract.MAX_DURATION_FRAMES;
 
 function canonicalValue(value) {
   if (Array.isArray(value)) return value.map(canonicalValue);
@@ -129,8 +130,8 @@ function compile(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'snapshot request is required');
   const projectId = assertContractId(input.projectId, 'projectId');
   const sequenceId = assertContractId(input.sequenceId, 'sequenceId');
-  const fpsNum = positiveInt(input.fpsNum, 'fpsNum', 1000);
-  const fpsDen = positiveInt(input.fpsDen, 'fpsDen', 1000);
+  const fpsNum = positiveInt(input.fpsNum, 'fpsNum', contract.MAX_FPS_NUM);
+  const fpsDen = positiveInt(input.fpsDen, 'fpsDen', contract.MAX_FPS_DEN);
   const fidelity = input.fidelity == null ? 'draft' : String(input.fidelity).trim();
   if (!FIDELITIES.has(fidelity)) throw new HttpError(400, 'fidelity must be draft or preview');
   const sourceRights = cleanRights(input.sourceRights);
@@ -163,8 +164,6 @@ function compile(input = {}) {
     });
   }
 
-  // All source revisions have been successfully projected before any derived
-  // panel is installed into the content-addressed store.
   const shots = pending.map((item) => {
     const stored = blobs.putPng(item.panel.png);
     if (stored.sha !== item.panel.panelSha) throw new HttpError(500, 'projected panel content hash changed during storage');
