@@ -7,8 +7,8 @@
  * creative authority is composed here: character identity comes from the
  * registry, artwork revision identity comes from ShotDocument rather than
  * browser assertions, actionable Partner requests are durably registered
- * before browser exposure, and the animatic path binds preparation/execution
- * to exact immutable snapshots and locally mirrored candidate artifacts.
+ * before browser exposure, and the animatic path binds pacing/preparation/
+ * execution to exact immutable snapshots and locally mirrored candidates.
  */
 
 const core = require('./server-core');
@@ -16,6 +16,7 @@ const characters = require('./lib/characters');
 const invocationLedger = require('./lib/partner-invocation-ledger');
 const shotDocuments = require('./lib/shot-documents');
 const animaticPreparation = require('./lib/animatic-preparation');
+const animaticPacing = require('./lib/animatic-pacing-proposals');
 const animaticExecutor = require('./lib/animatic-executor');
 const animaticExecutionStore = require('./lib/animatic-execution-store');
 const animaticCandidates = require('./lib/animatic-candidates');
@@ -28,6 +29,7 @@ const { HttpError } = require('./lib/errors');
 
 const CHARACTER_BODY_LIMIT = 512 * 1024;
 const SAFE_ID_SEGMENT = '[A-Za-z0-9._-]+';
+const DIGEST_SEGMENT = '[a-f0-9]{64}';
 
 function isObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -150,7 +152,9 @@ function invocationRoute(pathname) {
 }
 
 function animaticRoute(pathname) {
-  return pathname === '/api/animatic/prepare' ||
+  return pathname === '/api/animatic/pacing-proposal' ||
+    new RegExp(`^/api/animatic/pacing-proposal/${DIGEST_SEGMENT}$`).test(pathname) ||
+    pathname === '/api/animatic/prepare' ||
     pathname === '/api/animatic/execute' ||
     /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(pathname) ||
     new RegExp(`^/api/animatic/execution/${SAFE_ID_SEGMENT}$`).test(pathname) ||
@@ -244,21 +248,57 @@ async function handleInvocationApi(req, res, url) {
 }
 
 async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticEnv = process.env } = {}) {
+  if (req.method === 'POST' && url.pathname === '/api/animatic/pacing-proposal') {
+    const body = await readJson(req, 512 * 1024);
+    if (!isObject(body) || !isObject(body.proposal)) throw new HttpError(400, 'pacing proposal request is required');
+    let created;
+    try {
+      created = animaticPacing.create({ parentRequestId: body.parentRequestId, proposal: body.proposal });
+    } catch (error) {
+      throw asBadRequest(error);
+    }
+    return core.sendJson(res, created.created ? 201 : 200, {
+      ok: true,
+      created: created.created,
+      proposal: animaticPacing.publicProposal(created.proposal),
+    });
+  }
+
+  const pacingMatch = url.pathname.match(/^\/api\/animatic\/pacing-proposal\/([a-f0-9]{64})$/);
+  if (req.method === 'GET' && pacingMatch) {
+    const proposal = animaticPacing.readByDigest(pacingMatch[1]);
+    return core.sendJson(res, 200, { ok: true, proposal: animaticPacing.publicProposal(proposal) });
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/animatic/prepare') {
     if (!sourceRights) throw new HttpError(503, 'RAINDESK_SOURCE_RIGHTS is required before animatic preparation');
-    const body = await readJson(req, 512 * 1024);
-    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'animatic preparation request is required');
+    const body = await readJson(req, 64 * 1024);
+    if (!isObject(body)) throw new HttpError(400, 'animatic preparation request is required');
+    const keys = Object.keys(body);
+    if (keys.length !== 1 || keys[0] !== 'proposalDigest') {
+      throw new HttpError(400, 'animatic preparation accepts only one stored proposalDigest');
+    }
+    const digest = String(body.proposalDigest || '').trim();
+    let proposal;
+    try { proposal = animaticPacing.readByDigest(digest); }
+    catch (error) { throw asBadRequest(error); }
+    const fresh = animaticPacing.freshness(proposal);
+    if (fresh.stale) throw new HttpError(409, 'pacing proposal is stale because source artwork changed');
     let prepared;
     try {
       prepared = animaticPreparation.prepare({
-        parentRequestId: body.parentRequestId,
-        snapshotInput: body.snapshot,
+        parentRequestId: proposal.parentRequestId,
+        snapshotInput: animaticPacing.snapshotInput(proposal),
         sourceRights,
       });
     } catch (error) {
       throw asBadRequest(error);
     }
-    return core.sendJson(res, prepared.created ? 201 : 200, { ok: true, ...prepared });
+    return core.sendJson(res, prepared.created ? 201 : 200, {
+      ok: true,
+      proposal: animaticPacing.publicProposal(proposal),
+      ...prepared,
+    });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/animatic/execute') {
