@@ -156,6 +156,8 @@
         drawer.on('turn', (response) => controller.handleTurn(response));
         drawer.on('open', () => controller.restore());
       }
+      const partnerTab = drawerRoot && drawerRoot.querySelector ? drawerRoot.querySelector('[data-tab="agent"]') : null;
+      if (partnerTab) partnerTab.addEventListener('click', () => setTimeout(() => controller.restore(), 0));
       if (drawer) drawer.animaticPacing = controller;
       return drawer;
     };
