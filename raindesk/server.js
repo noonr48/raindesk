@@ -8,7 +8,7 @@
  * registry, artwork revision identity comes from ShotDocument rather than
  * browser assertions, actionable Partner requests are durably registered
  * before browser exposure, and the animatic path binds pacing context,
- * proposals, preparation and execution to immutable server-owned authority.
+ * proposals, preparation, execution and review to server-owned authority.
  */
 
 const core = require('./server-core');
@@ -21,6 +21,7 @@ const animaticPacing = require('./lib/animatic-pacing-proposals');
 const animaticExecutor = require('./lib/animatic-executor');
 const animaticExecutionStore = require('./lib/animatic-execution-store');
 const animaticCandidates = require('./lib/animatic-candidates');
+const animaticReview = require('./lib/animatic-review-decisions');
 const videoArtifacts = require('./lib/video-artifacts');
 const direction = require('./lib/direction');
 const partner = require('./lib/partner');
@@ -32,10 +33,7 @@ const CHARACTER_BODY_LIMIT = 512 * 1024;
 const SAFE_ID_SEGMENT = '[A-Za-z0-9._-]+';
 const DIGEST_SEGMENT = '[a-f0-9]{64}';
 
-function isObject(value) {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
+function isObject(value) { return Boolean(value && typeof value === 'object' && !Array.isArray(value)); }
 function resolveCharacterShotId(context = {}) {
   if (typeof context.shotId === 'string' && context.shotId.trim()) return context.shotId.trim();
   if (typeof context.legacyShotId === 'string' && context.legacyShotId.trim()) return context.legacyShotId.trim();
@@ -43,40 +41,31 @@ function resolveCharacterShotId(context = {}) {
     const graph = direction.readGraph();
     const id = graph && graph.project && graph.project.activeShotId;
     return typeof id === 'string' && id.trim() ? id.trim() : null;
-  } catch (_e) {
-    return null;
-  }
+  } catch (_e) { return null; }
 }
-
 function resolveArtworkShotId(context = {}, resolvedShotId = null) {
   if (typeof context.legacyShotId === 'string' && context.legacyShotId.trim()) return context.legacyShotId.trim();
   if (typeof resolvedShotId === 'string' && resolvedShotId.trim()) return resolvedShotId.trim();
   return null;
 }
-
 function authoritativeArtRevision(context = {}, resolvedShotId = null) {
   const shotId = resolveArtworkShotId(context, resolvedShotId);
   if (!shotId) return null;
   try {
     const current = shotDocuments.readCurrent(shotId);
     return current && typeof current.revisionId === 'string' ? current.revisionId : null;
-  } catch (_e) {
-    return null;
-  }
+  } catch (_e) { return null; }
 }
-
 function persistInvocationProposals(result) {
   if (!isObject(result) || !Array.isArray(result.invocationRequests) || !result.invocationRequests.length) return result;
   try {
     for (const request of result.invocationRequests) {
       const recorded = invocationLedger.recordFromRequest(request);
-      if (recorded.entry.shotId) {
-        invocationLedger.markStaleSuperseded({
-          shotId: recorded.entry.shotId,
-          requestId: recorded.entry.requestId,
-          adapterId: recorded.entry.adapterId,
-        });
-      }
+      if (recorded.entry.shotId) invocationLedger.markStaleSuperseded({
+        shotId: recorded.entry.shotId,
+        requestId: recorded.entry.requestId,
+        adapterId: recorded.entry.adapterId,
+      });
     }
     return result;
   } catch (error) {
@@ -84,7 +73,6 @@ function persistInvocationProposals(result) {
     return { ...result, invocationRequests: [], invocationPersistenceError: true };
   }
 }
-
 function withAuthoritativeContext(basePartner) {
   if (!basePartner || typeof basePartner.turn !== 'function') throw new Error('partnerImpl.turn is required');
   return {
@@ -93,82 +81,55 @@ function withAuthoritativeContext(basePartner) {
       const context = isObject(input.context) ? { ...input.context } : {};
       const shotId = resolveCharacterShotId(context);
       if (shotId) {
-        try { context.characterAnchors = characters.contextForShot(shotId); }
-        catch (_e) { /* identity context must not strand ordinary conversation */ }
+        try { context.characterAnchors = characters.contextForShot(shotId); } catch (_e) { /* keep conversation live */ }
       }
       context.artRevisionId = authoritativeArtRevision(context, shotId);
-      const result = await basePartner.turn({ ...input, context });
-      return persistInvocationProposals(result);
+      return persistInvocationProposals(await basePartner.turn({ ...input, context }));
     },
   };
 }
-
 const withCharacterContext = withAuthoritativeContext;
 
 function readBody(req, limit = CHARACTER_BODY_LIMIT) {
   return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    let settled = false;
+    const chunks = []; let size = 0; let settled = false;
     req.on('data', (chunk) => {
       if (settled) return;
       size += chunk.length;
-      if (size > limit) {
-        settled = true;
-        reject(new HttpError(413, `request body exceeds ${limit} bytes`));
-        return;
-      }
+      if (size > limit) { settled = true; reject(new HttpError(413, `request body exceeds ${limit} bytes`)); return; }
       chunks.push(chunk);
     });
-    req.on('end', () => {
-      if (settled) return;
-      settled = true;
-      resolve(Buffer.concat(chunks));
-    });
-    req.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    });
+    req.on('end', () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks)); } });
+    req.on('error', (error) => { if (!settled) { settled = true; reject(error); } });
   });
 }
-
 async function readJson(req, limit = CHARACTER_BODY_LIMIT) {
   const bytes = await readBody(req, limit);
   if (!bytes.length) throw new HttpError(400, 'empty request body');
-  try { return JSON.parse(bytes.toString('utf8')); }
-  catch (_e) { throw new HttpError(400, 'request body is not valid JSON'); }
+  try { return JSON.parse(bytes.toString('utf8')); } catch (_e) { throw new HttpError(400, 'request body is not valid JSON'); }
 }
 
-function characterRoute(pathname) {
-  return pathname === '/api/characters' || pathname === '/api/character' || pathname === '/api/character/shot-binding';
-}
+function characterRoute(pathname) { return pathname === '/api/characters' || pathname === '/api/character' || pathname === '/api/character/shot-binding'; }
 function invocationRoute(pathname) { return pathname === '/api/invocations'; }
 function animaticRoute(pathname) {
   return pathname === '/api/animatic/pacing-context' ||
     new RegExp(`^/api/animatic/pacing-context/${DIGEST_SEGMENT}$`).test(pathname) ||
     pathname === '/api/animatic/pacing-proposal' ||
     new RegExp(`^/api/animatic/pacing-proposal/${DIGEST_SEGMENT}$`).test(pathname) ||
-    pathname === '/api/animatic/prepare' ||
-    pathname === '/api/animatic/execute' ||
+    pathname === '/api/animatic/prepare' || pathname === '/api/animatic/execute' ||
+    pathname === '/api/animatic/candidates' || pathname === '/api/animatic/review' ||
     /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(pathname) ||
     new RegExp(`^/api/animatic/execution/${SAFE_ID_SEGMENT}$`).test(pathname) ||
     new RegExp(`^/api/animatic/candidate/${SAFE_ID_SEGMENT}$`).test(pathname) ||
     /^\/api\/animatic\/artifact\/[a-f0-9]{64}$/.test(pathname);
 }
-
-function asBadRequest(error) {
-  if (error instanceof HttpError) return error;
-  return new HttpError(400, error && error.message ? error.message : 'invalid request data');
-}
+function asBadRequest(error) { return error instanceof HttpError ? error : new HttpError(400, error && error.message ? error.message : 'invalid request data'); }
 
 async function handleCharacterApi(req, res, url) {
-  const route = url.pathname;
-  const method = req.method;
+  const route = url.pathname; const method = req.method;
   if (method === 'GET' && route === '/api/characters') return core.sendJson(res, 200, { characters: characters.list() });
   if (method === 'POST' && route === '/api/character') {
-    const body = await readJson(req);
-    let character;
+    const body = await readJson(req); let character;
     try { character = characters.upsert(body || {}); } catch (error) { throw asBadRequest(error); }
     return core.sendJson(res, 200, { ok: true, character });
   }
@@ -200,15 +161,10 @@ async function handleInvocationApi(req, res, url) {
     const body = await readJson(req, 256 * 1024);
     if (!isObject(body)) throw new HttpError(400, 'invocation record is required');
     let recorded;
-    try { recorded = invocationLedger.record({ ...body, origin: 'http_legacy', status: 'proposed' }); }
-    catch (error) { throw asBadRequest(error); }
-    if (body.supersede && recorded.entry.shotId) {
-      invocationLedger.markStaleSuperseded({
-        shotId: recorded.entry.shotId,
-        requestId: recorded.entry.requestId || recorded.entry.id,
-        adapterId: recorded.entry.adapterId,
-      });
-    }
+    try { recorded = invocationLedger.record({ ...body, origin: 'http_legacy', status: 'proposed' }); } catch (error) { throw asBadRequest(error); }
+    if (body.supersede && recorded.entry.shotId) invocationLedger.markStaleSuperseded({
+      shotId: recorded.entry.shotId, requestId: recorded.entry.requestId || recorded.entry.id, adapterId: recorded.entry.adapterId,
+    });
     return core.sendJson(res, 201, { ok: true, invocation: recorded.entry, created: recorded.created });
   }
   if (req.method === 'PATCH') {
@@ -224,70 +180,51 @@ async function handleInvocationApi(req, res, url) {
   throw new HttpError(404, 'not found');
 }
 
+function candidateView(record) {
+  const view = animaticCandidates.publicRecord(record);
+  const id = record && record.candidate && record.candidate.candidate_id;
+  return { ...view, review: id ? animaticReview.summaryForCandidate(id) : null };
+}
+
 async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticEnv = process.env } = {}) {
   if (req.method === 'POST' && url.pathname === '/api/animatic/pacing-context') {
     const body = await readJson(req, 64 * 1024);
-    if (!isObject(body) || Object.keys(body).length !== 1 || typeof body.parentRequestId !== 'string') {
-      throw new HttpError(400, 'pacing context accepts only parentRequestId');
-    }
+    if (!isObject(body) || Object.keys(body).length !== 1 || typeof body.parentRequestId !== 'string') throw new HttpError(400, 'pacing context accepts only parentRequestId');
     let created;
-    try { created = animaticPacingContext.create({ parentRequestId: body.parentRequestId, env: animaticEnv }); }
-    catch (error) { throw asBadRequest(error); }
-    return core.sendJson(res, created.created ? 201 : 200, {
-      ok: true, created: created.created, context: animaticPacingContext.publicContext(created.context),
-    });
+    try { created = animaticPacingContext.create({ parentRequestId: body.parentRequestId, env: animaticEnv }); } catch (error) { throw asBadRequest(error); }
+    return core.sendJson(res, created.created ? 201 : 200, { ok: true, created: created.created, context: animaticPacingContext.publicContext(created.context) });
   }
-
   const contextMatch = url.pathname.match(/^\/api\/animatic\/pacing-context\/([a-f0-9]{64})$/);
   if (req.method === 'GET' && contextMatch) {
     const context = animaticPacingContext.readByDigest(contextMatch[1]);
     return core.sendJson(res, 200, { ok: true, context: animaticPacingContext.publicContext(context) });
   }
-
   if (req.method === 'POST' && url.pathname === '/api/animatic/pacing-proposal') {
     const body = await readJson(req, 512 * 1024);
-    if (!isObject(body) || !isObject(body.proposal) || typeof body.contextDigest !== 'string' ||
-        Object.keys(body).some((key) => !['contextDigest', 'proposal'].includes(key))) {
+    if (!isObject(body) || !isObject(body.proposal) || typeof body.contextDigest !== 'string' || Object.keys(body).some((key) => !['contextDigest', 'proposal'].includes(key))) {
       throw new HttpError(400, 'pacing proposal requires one stored contextDigest and creative proposal');
     }
     let created;
-    try { created = animaticPacing.createFromContext({ contextDigest: body.contextDigest, proposal: body.proposal }); }
-    catch (error) { throw asBadRequest(error); }
-    return core.sendJson(res, created.created ? 201 : 200, {
-      ok: true, created: created.created, proposal: animaticPacing.publicProposal(created.proposal),
-    });
+    try { created = animaticPacing.createFromContext({ contextDigest: body.contextDigest, proposal: body.proposal }); } catch (error) { throw asBadRequest(error); }
+    return core.sendJson(res, created.created ? 201 : 200, { ok: true, created: created.created, proposal: animaticPacing.publicProposal(created.proposal) });
   }
-
   const pacingMatch = url.pathname.match(/^\/api\/animatic\/pacing-proposal\/([a-f0-9]{64})$/);
   if (req.method === 'GET' && pacingMatch) {
     const proposal = animaticPacing.readByDigest(pacingMatch[1]);
     return core.sendJson(res, 200, { ok: true, proposal: animaticPacing.publicProposal(proposal) });
   }
-
   if (req.method === 'POST' && url.pathname === '/api/animatic/prepare') {
     if (!sourceRights) throw new HttpError(503, 'RAINDESK_SOURCE_RIGHTS is required before animatic preparation');
     const body = await readJson(req, 64 * 1024);
-    if (!isObject(body) || Object.keys(body).length !== 1 || typeof body.proposalDigest !== 'string') {
-      throw new HttpError(400, 'animatic preparation accepts only one stored proposalDigest');
-    }
+    if (!isObject(body) || Object.keys(body).length !== 1 || typeof body.proposalDigest !== 'string') throw new HttpError(400, 'animatic preparation accepts only one stored proposalDigest');
     let proposal;
-    try { proposal = animaticPacing.readByDigest(body.proposalDigest.trim()); }
-    catch (error) { throw asBadRequest(error); }
-    const fresh = animaticPacing.freshness(proposal);
-    if (fresh.stale) throw new HttpError(409, 'pacing proposal is stale because its source artwork or direction changed');
+    try { proposal = animaticPacing.readByDigest(body.proposalDigest.trim()); } catch (error) { throw asBadRequest(error); }
+    if (animaticPacing.freshness(proposal).stale) throw new HttpError(409, 'pacing proposal is stale because its source artwork or direction changed');
     let prepared;
-    try {
-      prepared = animaticPreparation.prepare({
-        parentRequestId: proposal.parentRequestId,
-        snapshotInput: animaticPacing.snapshotInput(proposal),
-        sourceRights,
-      });
-    } catch (error) { throw asBadRequest(error); }
-    return core.sendJson(res, prepared.created ? 201 : 200, {
-      ok: true, proposal: animaticPacing.publicProposal(proposal), ...prepared,
-    });
+    try { prepared = animaticPreparation.prepare({ parentRequestId: proposal.parentRequestId, snapshotInput: animaticPacing.snapshotInput(proposal), sourceRights }); }
+    catch (error) { throw asBadRequest(error); }
+    return core.sendJson(res, prepared.created ? 201 : 200, { ok: true, proposal: animaticPacing.publicProposal(proposal), ...prepared });
   }
-
   if (req.method === 'POST' && url.pathname === '/api/animatic/execute') {
     const body = await readJson(req, 64 * 1024);
     const invocationId = body && typeof body.invocationId === 'string' ? body.invocationId.trim() : '';
@@ -300,41 +237,55 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
       throw error;
     }
   }
-
+  if (req.method === 'GET' && url.pathname === '/api/animatic/candidates') {
+    const sequenceId = String(url.searchParams.get('sequenceId') || '').trim() || null;
+    const projectId = String(url.searchParams.get('projectId') || '').trim() || null;
+    const limit = Number(url.searchParams.get('limit') || 100);
+    return core.sendJson(res, 200, { ok: true, candidates: animaticCandidates.list({ sequenceId, projectId, limit }).map(candidateView) });
+  }
+  if (url.pathname === '/api/animatic/review') {
+    if (req.method === 'POST') {
+      const body = await readJson(req, 64 * 1024);
+      if (!isObject(body) || Object.keys(body).some((key) => !['candidateId', 'decision', 'note', 'idempotencyKey'].includes(key))) {
+        throw new HttpError(400, 'animatic review accepts candidateId, decision, note and idempotencyKey only');
+      }
+      let result;
+      try { result = animaticReview.append(body); } catch (error) { throw asBadRequest(error); }
+      return core.sendJson(res, result.created ? 201 : 200, { ok: true, ...result });
+    }
+    if (req.method === 'GET') {
+      const candidateId = String(url.searchParams.get('candidateId') || '').trim() || null;
+      const sequenceId = String(url.searchParams.get('sequenceId') || '').trim() || null;
+      if (candidateId) return core.sendJson(res, 200, { ok: true, review: animaticReview.summaryForCandidate(candidateId), decisions: animaticReview.list({ candidateId }) });
+      if (sequenceId) return core.sendJson(res, 200, { ok: true, review: animaticReview.summaryForSequence(sequenceId), decisions: animaticReview.list({ sequenceId }) });
+      throw new HttpError(400, 'candidateId or sequenceId is required');
+    }
+  }
   if (req.method === 'GET' && /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(url.pathname)) {
     const digest = url.pathname.slice('/api/animatic/snapshot/'.length);
     return core.sendJson(res, 200, { ok: true, snapshot: animaticPreparation.readPreparedSnapshot(digest) });
   }
-
   if (req.method === 'GET' && new RegExp(`^/api/animatic/execution/${SAFE_ID_SEGMENT}$`).test(url.pathname)) {
     const id = url.pathname.slice('/api/animatic/execution/'.length);
     const row = animaticExecutionStore.get(id);
     if (!row) throw new HttpError(404, 'no such animatic execution attempt');
     let candidate = null;
-    if (row.candidateId) candidate = animaticCandidates.publicRecord(animaticCandidates.read(row.candidateId));
+    if (row.candidateId) candidate = candidateView(animaticCandidates.read(row.candidateId));
     return core.sendJson(res, 200, { ok: true, execution: animaticExecutionStore.publicRow(row), candidate });
   }
-
   if (req.method === 'GET' && new RegExp(`^/api/animatic/candidate/${SAFE_ID_SEGMENT}$`).test(url.pathname)) {
     const id = url.pathname.slice('/api/animatic/candidate/'.length);
-    return core.sendJson(res, 200, { ok: true, candidate: animaticCandidates.publicRecord(animaticCandidates.read(id)) });
+    return core.sendJson(res, 200, { ok: true, candidate: candidateView(animaticCandidates.read(id)) });
   }
-
   if ((req.method === 'GET' || req.method === 'HEAD') && /^\/api\/animatic\/artifact\/[a-f0-9]{64}$/.test(url.pathname)) {
     const sha = url.pathname.slice('/api/animatic/artifact/'.length);
     if (req.method === 'HEAD') {
       const item = videoArtifacts.stat(sha);
-      res.writeHead(200, {
-        'Content-Type': 'video/mp4', 'Content-Length': item.bytes, 'Accept-Ranges': 'bytes',
-        'Cache-Control': 'private, max-age=31536000, immutable',
-      });
-      res.end();
-      return;
+      res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': item.bytes, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=31536000, immutable' });
+      res.end(); return;
     }
-    videoArtifacts.serve(req, res, sha);
-    return;
+    videoArtifacts.serve(req, res, sha); return;
   }
-
   throw new HttpError(404, 'not found');
 }
 
@@ -346,19 +297,15 @@ function createServer(deps = {}) {
   const animaticEnv = deps.animaticEnv || process.env;
   const sourceRights = deps.sourceRights || animaticEnv.RAINDESK_SOURCE_RIGHTS || null;
   const server = core.createServer({ ...deps, agentImpl, partnerImpl: composedPartner });
-
   const inherited = server.listeners('request')[0];
   if (typeof inherited !== 'function') throw new Error('inherited Raindesk request listener missing');
   server.removeListener('request', inherited);
   server.on('request', (req, res) => {
     let url;
-    try { url = new URL(req.url, `http://${req.headers.host || `${core.HOST}:${core.PORT}`}`); }
-    catch (_e) { return inherited(req, res); }
-
+    try { url = new URL(req.url, `http://${req.headers.host || `${core.HOST}:${core.PORT}`}`); } catch (_e) { return inherited(req, res); }
     const composed = characterRoute(url.pathname) || invocationRoute(url.pathname) || animaticRoute(url.pathname);
     if (!composed) return inherited(req, res);
     if (authToken && !core.requestAuthorized(req, authToken)) return inherited(req, res);
-
     let promise;
     if (animaticRoute(url.pathname)) promise = handleAnimaticApi(req, res, url, { sourceRights, animaticEnv });
     else if (invocationRoute(url.pathname)) promise = handleInvocationApi(req, res, url);
@@ -371,28 +318,14 @@ function createServer(deps = {}) {
       try { core.sendJson(res, status, { error: message }); } catch (_e) { res.destroy(); }
     });
   });
-
-  server.raindesk = {
-    ...server.raindesk,
-    partnerImpl: composedPartner,
-    characters,
-    sourceRightsConfigured: Boolean(sourceRights),
-  };
+  server.raindesk = { ...server.raindesk, partnerImpl: composedPartner, characters, sourceRightsConfigured: Boolean(sourceRights) };
   return server;
 }
 
-function start({
-  host = core.HOST,
-  port = core.PORT,
-  authToken = process.env.RAINDESK_REMOTE_TOKEN || null,
-  allowWildcard = process.env.RAINDESK_ALLOW_WILDCARD === '1',
-} = {}) {
+function start({ host = core.HOST, port = core.PORT, authToken = process.env.RAINDESK_REMOTE_TOKEN || null, allowWildcard = process.env.RAINDESK_ALLOW_WILDCARD === '1' } = {}) {
   return new Promise((resolve, reject) => {
-    try {
-      core.validateBindOptions({ host, authToken, allowWildcard });
-      jobStore.recoverInterrupted();
-      animaticExecutionStore.recoverInterrupted();
-    } catch (error) { reject(error); return; }
+    try { core.validateBindOptions({ host, authToken, allowWildcard }); jobStore.recoverInterrupted(); animaticExecutionStore.recoverInterrupted(); }
+    catch (error) { reject(error); return; }
     const server = createServer({ authToken: core.isLoopbackHost(host) ? null : authToken });
     server.once('error', reject);
     server.listen(port, host, () => {
@@ -402,18 +335,12 @@ function start({
     });
   });
 }
-
-if (require.main === module) {
-  start().catch((error) => {
-    console.error('[raindesk] failed to start:', error); // eslint-disable-line no-console
-    process.exit(1);
-  });
-}
+if (require.main === module) start().catch((error) => { console.error('[raindesk] failed to start:', error); process.exit(1); }); // eslint-disable-line no-console
 
 module.exports = {
   ...core,
   createServer, start,
   resolveCharacterShotId, resolveArtworkShotId, authoritativeArtRevision,
   persistInvocationProposals, withAuthoritativeContext, withCharacterContext,
-  handleCharacterApi, handleInvocationApi, handleAnimaticApi, animaticRoute,
+  handleCharacterApi, handleInvocationApi, handleAnimaticApi, animaticRoute, candidateView,
 };
