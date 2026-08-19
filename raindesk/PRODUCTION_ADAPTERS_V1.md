@@ -56,9 +56,13 @@ The new `capability-planner.js` façade treats specialist production capabilitie
 - surface/external adapters are not mislabeled as server executors;
 - private `implementationRef` values are never copied into the Partner `executionPlan`.
 
-## First real registered adapter
+The registry also exposes a deliberately server-internal `getImplementationRef()` accessor. It exists for bounded executor bridges; public `get`, `list`, `resolve`, Partner plans and invocation requests still omit the private implementation pointer.
 
-`bounded_image_region_v1` describes the existing bounded image-generation route:
+## Registered adapters
+
+### `bounded_image_region_v1`
+
+The existing bounded image-generation route:
 
 - capability: `local_image_take`;
 - availability: `available`;
@@ -70,9 +74,25 @@ The new `capability-planner.js` façade treats specialist production capabilitie
 - output is an immutable candidate take;
 - accepted artwork remains unchanged until commit.
 
-Its implementation reference remains registry-internal.
+### `animatic_timing_v1` — explicit configuration only
 
-## Intentionally unregistered production capabilities
+Raindesk now has a registration seam for the video-skill slice-C animatic executor. It is **not** registered merely because the recipe exists. The owner/operator must explicitly set `RAINDESK_ANIMATIC_EXECUTOR` when constructing the default registry.
+
+When configured, the descriptor declares:
+
+- capability: `animatic_timing`;
+- invocation boundary: `external`;
+- creative mutation: yes;
+- review required: yes;
+- input authority: `SequenceSourceSnapshot@0.2.0` targeting `animatic_timing_v1` / contract `0.2.0`;
+- outputs: `ExecutionAttempt@0.2.0`, `SequenceCandidateManifest@0.2.0`, and animatic media;
+- accepted artwork remains untouched and review state remains outside the immutable candidate manifest.
+
+Without that explicit configuration, `animatic_pass` remains honestly `planning_only`.
+
+This slice registers capability truth and the private hand-off seam only. It does **not** yet construct the snapshot, spawn the executor, mirror its outputs, or show a playable candidate in the desk.
+
+## Still-unregistered production capabilities
 
 No adapters are registered yet for:
 
@@ -83,11 +103,10 @@ No adapters are registered yet for:
 - multi-actor blocking;
 - environment construction;
 - comic layout;
-- animatic timing;
 - automatic visual inspection.
 
 Those capabilities therefore remain honestly `planning_only`/`unavailable` until a later slice registers a real adapter.
 
 ## Scope
 
-V1 does not execute arbitrary adapter callbacks. The next execution slice can bind validated descriptors to bounded invocation functions/connector calls while retaining the same capability IDs, evidence gates, review policy and deterministic selection rules.
+V1 still does not execute arbitrary adapter callbacks. The next animatic slice should bind the configured external implementation to a bounded snapshot compiler/invoker while retaining the same capability IDs, evidence gates, review policy and deterministic selection rules.
