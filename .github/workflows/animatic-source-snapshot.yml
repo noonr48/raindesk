@@ -49,6 +49,7 @@ jobs:
           node --check public/js/surface-handoff.js
           node --check dev/browser-animatic-pacing-smoke.js
           node --check dev/browser-animatic-review-smoke.js
+          node --check dev/browser-animatic-reload-smoke.js
           node --check server.js
           node --check lib/tests/animatic-contract.test.js
           node --check lib/tests/animatic-pacing-context.test.js
@@ -90,7 +91,7 @@ jobs:
           CHROME_BIN="$BROWSER" \
           ANIMATIC_PACING_SCREENSHOT="$(pwd)/artifacts/animatic/pacing-review.png" \
           ANIMATIC_PACING_RECEIPT="$(pwd)/artifacts/animatic/pacing-review-receipt.json" \
-          node dev/browser-animatic-review-smoke.js
+          node dev/browser-animatic-reload-smoke.js
 
       - name: Upload animatic browser proof
         if: always()
