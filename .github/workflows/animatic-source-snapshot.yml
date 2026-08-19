@@ -47,6 +47,7 @@ jobs:
           node --check public/js/animatic-pacing.js
           node --check public/js/animatic-takes.js
           node --check public/js/surface-handoff.js
+          node --check dev/browser-animatic-pacing-smoke.js
           node --check server.js
           node --check lib/tests/animatic-contract.test.js
           node --check lib/tests/animatic-pacing-context.test.js
@@ -74,3 +75,27 @@ jobs:
       - name: Run complete Raindesk deterministic suite
         working-directory: raindesk
         run: npm test
+
+      - name: Run native pacing preview review journey
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
+          if [ -z "$BROWSER" ]; then
+            echo "Chromium/Chrome not available" >&2
+            exit 1
+          fi
+          mkdir -p artifacts/animatic
+          CHROME_BIN="$BROWSER" \
+          ANIMATIC_PACING_SCREENSHOT="$(pwd)/artifacts/animatic/pacing-review.png" \
+          ANIMATIC_PACING_RECEIPT="$(pwd)/artifacts/animatic/pacing-review-receipt.json" \
+          node dev/browser-animatic-pacing-smoke.js
+
+      - name: Upload animatic browser proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-animatic-browser-proof
+          path: raindesk/artifacts/animatic/*
+          if-no-files-found: warn
+          retention-days: 7
