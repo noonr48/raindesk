@@ -23,30 +23,35 @@ function solidPng(value = 25) {
   return Buffer.from(Canvas.encodePNG(8, 8, data));
 }
 
-function seed() {
-  const asset = blobs.putPng(solidPng());
-  const revision = docs.save('ROUTE_A', {
-    schemaVersion: 1, shotId: 'ROUTE_A', canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
+function seed({
+  shotId = 'ROUTE_PREP',
+  parentId = 'invoke_route_prepare',
+  turnId = 'turn_route_prepare',
+  value = 25,
+} = {}) {
+  const asset = blobs.putPng(solidPng(value));
+  const revision = docs.save(shotId, {
+    schemaVersion: 1, shotId, canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
     layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
   }, { reason: 'route fixture' });
-  direction.ensureLegacyShot('ROUTE_A', { title: 'Route A', beat: 'hold then cut' });
+  direction.ensureLegacyShot(shotId, { title: shotId, beat: 'hold then cut' });
   ledger.record({
-    id: 'invoke_route_parent', requestId: 'invoke_route_parent', origin: 'partner_server', turnId: 'turn_route', shotId: 'ROUTE_A',
+    id: parentId, requestId: parentId, origin: 'partner_server', turnId, shotId,
     adapterId: 'animatic_timing_v1', capabilityId: 'animatic_timing',
     stageId: 'animatic_pass:2:animatic_timing', recipeId: 'animatic_pass',
     invocationBoundary: 'external', disposition: 'proposal', reviewRequired: true, creativeMutation: true,
-    scope: { shotId: 'ROUTE_A', artRevisionId: revision.revisionId, selectionFingerprint: null, selectionStable: null },
+    scope: { shotId, artRevisionId: revision.revisionId, selectionFingerprint: null, selectionStable: null },
     requiredEvidence: ['shot_scope'], requiredInputs: ['SequenceSourceSnapshot@0.2.0'],
     expectedOutputs: ['SequenceCandidateManifest@0.2.0'], preserves: [], sideEffects: [], status: 'proposed',
   });
-  return revision;
+  return { shotId, parentId, revision };
 }
 
-function proposalInput(sequenceId = 'route-seq') {
+function proposalInput(shotId, sequenceId = 'route-seq') {
   return {
     projectId: 'after-last-rain', sequenceId, fpsNum: 24, fpsDen: 1, fidelity: 'draft',
     label: 'hold then cut', rationale: 'Keep the first board readable before the cut.',
-    shots: [{ shotId: 'ROUTE_A', durationFrames: 24, note: 'hold' }],
+    shots: [{ shotId, durationFrames: 24, note: 'hold' }],
   };
 }
 
@@ -65,7 +70,7 @@ async function withServer(t, deps, fn) {
   await fn(`http://127.0.0.1:${server.address().port}`);
 }
 
-async function createProposal(base, parentRequestId = 'invoke_route_parent', proposal = proposalInput()) {
+async function createProposal(base, parentRequestId, proposal) {
   const res = await fetch(`${base}/api/animatic/pacing-proposal`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ parentRequestId, proposal }),
@@ -74,14 +79,14 @@ async function createProposal(base, parentRequestId = 'invoke_route_parent', pro
 }
 
 test('prepare route accepts only a stored proposal digest, uses server rights, and redacts local paths', async (t) => {
-  seed();
+  const seeded = seed();
   await withServer(t, { sourceRights: 'server-owned-rights-assertion' }, async (base) => {
-    const created = await createProposal(base);
+    const created = await createProposal(base, seeded.parentId, proposalInput(seeded.shotId));
     assert.equal(created.res.status, 201);
     assert.equal(created.body.ok, true);
     const digest = created.body.proposal.proposalDigest;
     assert.match(digest, /^[a-f0-9]{64}$/);
-    assert.equal(created.body.proposal.shots[0].shotId, 'ROUTE_A');
+    assert.equal(created.body.proposal.shots[0].shotId, seeded.shotId);
     assert.equal(JSON.stringify(created.body.proposal).includes(scratch), false);
 
     let res = await fetch(`${base}/api/animatic/pacing-proposal/${digest}`);
@@ -114,8 +119,8 @@ test('prepare route accepts only a stored proposal digest, uses server rights, a
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         proposalDigest: digest,
-        parentRequestId: 'invoke_route_parent',
-        snapshot: { shots: [{ shotId: 'ROUTE_A', revisionId: 'browser-forged', durationFrames: 999 }] },
+        parentRequestId: seeded.parentId,
+        snapshot: { shots: [{ shotId: seeded.shotId, revisionId: 'browser-forged', durationFrames: 999 }] },
       }),
     });
     assert.equal(res.status, 400);
@@ -152,17 +157,17 @@ test('HTTP invocation POST cannot mint the trusted Partner origin needed to crea
 });
 
 test('stored proposal becomes stale after source artwork changes and cannot be prepared', async (t) => {
-  const revision = seed();
+  const seeded = seed({ shotId: 'ROUTE_STALE', parentId: 'invoke_route_stale', turnId: 'turn_route_stale', value: 55 });
   await withServer(t, { sourceRights: 'server-rights' }, async (base) => {
-    const created = await createProposal(base, 'invoke_route_parent', proposalInput('stale-route-seq'));
+    const created = await createProposal(base, seeded.parentId, proposalInput(seeded.shotId, 'stale-route-seq'));
     assert.equal(created.res.status, 201);
     const digest = created.body.proposal.proposalDigest;
 
     const asset = blobs.putPng(solidPng(90));
-    docs.save('ROUTE_A', {
-      schemaVersion: 1, shotId: 'ROUTE_A', canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
+    docs.save(seeded.shotId, {
+      schemaVersion: 1, shotId: seeded.shotId, canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
       layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
-    }, { baseRevisionId: revision.revisionId, reason: 'source changed after pacing review' });
+    }, { baseRevisionId: seeded.revision.revisionId, reason: 'source changed after pacing review' });
 
     let res = await fetch(`${base}/api/animatic/pacing-proposal/${digest}`);
     assert.equal(res.status, 200);
