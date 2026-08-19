@@ -20,6 +20,7 @@ const LEDGER_PATH = path.join(DATA_DIR, 'invocation-ledger.json');
 const STORE_SCHEMA_VERSION = 2;
 const MAX_ENTRIES = 500;
 const MAX_RECORD_BYTES = 64 * 1024;
+const DIGEST_RE = /^[a-f0-9]{64}$/;
 const STATUSES = new Set(['proposed', 'approved', 'stale', 'handed_off', 'cancelled']);
 
 function now() { return new Date().toISOString(); }
@@ -71,6 +72,13 @@ function boundedObject(value, what, maxBytes = 32 * 1024) {
   try { return JSON.parse(raw); } catch (_e) { throw new HttpError(400, `${what} is malformed`); }
 }
 
+function cleanDigest(value, what = 'snapshot digest') {
+  if (value == null || value === '') return null;
+  const digest = text(value, 64);
+  if (!DIGEST_RE.test(digest)) throw new HttpError(400, `${what} must be a 64-character lowercase sha256`);
+  return digest;
+}
+
 function cleanScope(value) {
   if (value == null) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invocation scope must be an object');
@@ -95,6 +103,8 @@ function cleanInvocation(input = {}, { preserveTimestamps = false } = {}) {
     schemaVersion: STORE_SCHEMA_VERSION,
     id,
     requestId: text(input.requestId, 96) || id,
+    parentRequestId: text(input.parentRequestId, 96) || null,
+    sourceSnapshotDigest: cleanDigest(input.sourceSnapshotDigest),
     turnId: text(input.turnId, 128) || null,
     shotId,
     adapterId: text(input.adapterId, 96) || null,
@@ -125,6 +135,8 @@ function cleanInvocation(input = {}, { preserveTimestamps = false } = {}) {
 function immutableShape(entry) {
   return {
     requestId: entry.requestId,
+    parentRequestId: entry.parentRequestId || null,
+    sourceSnapshotDigest: entry.sourceSnapshotDigest || null,
     turnId: entry.turnId,
     shotId: entry.shotId,
     adapterId: entry.adapterId,
@@ -141,6 +153,32 @@ function immutableShape(entry) {
     expectedOutputs: entry.expectedOutputs,
     preserves: entry.preserves,
     sideEffects: entry.sideEffects,
+  };
+}
+
+function inputFromRequest(request, extras = {}) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) throw new HttpError(400, 'invocation request is required');
+  return {
+    id: request.id,
+    requestId: request.id,
+    turnId: request.turnId || null,
+    shotId: request.scope && request.scope.shotId ? request.scope.shotId : null,
+    adapterId: request.adapterId || null,
+    capabilityId: request.capabilityId || null,
+    stageId: request.stageId || null,
+    recipeId: request.recipeId || null,
+    invocationBoundary: request.invocationBoundary || null,
+    disposition: request.disposition || null,
+    reviewRequired: request.reviewRequired,
+    creativeMutation: request.creativeMutation,
+    scope: request.scope || null,
+    requiredEvidence: request.requiredEvidence,
+    requiredInputs: request.requiredInputs,
+    expectedOutputs: request.expectedOutputs,
+    preserves: request.preserves,
+    sideEffects: request.sideEffects,
+    status: 'proposed',
+    ...extras,
   };
 }
 
@@ -216,6 +254,10 @@ function record(input) {
   return { entry, created: true };
 }
 
+function recordFromRequest(request, extras = {}) {
+  return record(inputFromRequest(request, extras));
+}
+
 function setStatus(id, status) {
   const store = read();
   const entry = find(store, text(id, 96));
@@ -271,7 +313,7 @@ function list({ shotId = null, status = null, limit = 100 } = {}) {
 }
 
 module.exports = {
-  DATA_DIR, LEDGER_PATH, STORE_SCHEMA_VERSION, STATUSES, MAX_ENTRIES, MAX_RECORD_BYTES,
-  canonicalValue, canonicalJson, cleanScope, cleanInvocation, immutableShape, migrateV1,
-  read, write, record, find, setStatus, pendingForShot, markStaleSuperseded, list,
+  DATA_DIR, LEDGER_PATH, STORE_SCHEMA_VERSION, STATUSES, MAX_ENTRIES, MAX_RECORD_BYTES, DIGEST_RE,
+  canonicalValue, canonicalJson, cleanDigest, cleanScope, cleanInvocation, immutableShape, inputFromRequest, migrateV1,
+  read, write, record, recordFromRequest, find, setStatus, pendingForShot, markStaleSuperseded, list,
 };
