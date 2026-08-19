@@ -26,8 +26,19 @@
   function getAnimaticPacingProposal(proposalDigest) {
     return api().GET(`/api/animatic/pacing-proposal/${encodeURIComponent(proposalDigest)}`);
   }
+  function listAnimaticPacingProposals({ shotId = null, sequenceId = null, contextDigest = null, limit = 20 } = {}) {
+    const qs = new URLSearchParams();
+    if (shotId) qs.set('shotId', shotId);
+    if (sequenceId) qs.set('sequenceId', sequenceId);
+    if (contextDigest) qs.set('contextDigest', contextDigest);
+    qs.set('limit', String(limit));
+    return api().GET(`/api/animatic/pacing-proposals?${qs.toString()}`);
+  }
   function prepareAnimatic(proposalDigest) {
     return api().POST('/api/animatic/prepare', { proposalDigest });
+  }
+  function previewAnimatic(proposalDigest) {
+    return api().POST('/api/animatic/preview', { proposalDigest });
   }
   function executeAnimatic(invocationId, { retry = false } = {}) {
     return api().POST('/api/animatic/execute', { invocationId, retry: retry === true });
@@ -62,7 +73,9 @@
     getAnimaticPacingContext,
     createAnimaticPacingProposal,
     getAnimaticPacingProposal,
+    listAnimaticPacingProposals,
     prepareAnimatic,
+    previewAnimatic,
     executeAnimatic,
     getAnimaticExecution,
     listAnimaticCandidates,
