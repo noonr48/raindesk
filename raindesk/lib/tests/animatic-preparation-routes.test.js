@@ -89,13 +89,11 @@ test('prepare route uses server rights, returns path-redacted snapshot, and supp
   });
 });
 
-test('prepare route refuses to proceed until server source rights are configured', async (t) => {
-  const existing = ledger.find(ledger.read(), 'invoke_route_parent');
-  assert.ok(existing, 'fixture parent survives from prior test process state');
+test('prepare route refuses before touching request data when server source rights are not configured', async (t) => {
   await withServer(t, { sourceRights: null }, async (base) => {
     const res = await fetch(`${base}/api/animatic/prepare`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parentRequestId: 'invoke_route_parent', snapshot: {} }),
+      body: JSON.stringify({ parentRequestId: 'does_not_need_to_exist', snapshot: {}, sourceRights: 'browser-cannot-upgrade-this' }),
     });
     assert.equal(res.status, 503);
     assert.match((await res.json()).error, /SOURCE_RIGHTS/i);
