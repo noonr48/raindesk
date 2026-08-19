@@ -28,10 +28,14 @@ jobs:
           set -euo pipefail
           node --check lib/animatic-contract.js
           node --check lib/animatic-pacing-context.js
+          node --check lib/animatic-pacing-proposals.js
+          node --check lib/animatic-pacing-index.js
+          node --check lib/animatic-pacing-advisor.js
+          node --check lib/animatic-partner-pacing.js
+          node --check lib/animatic-preview.js
           node --check lib/shot-projection.js
           node --check lib/animatic-snapshots.js
           node --check lib/animatic-preparation.js
-          node --check lib/animatic-pacing-proposals.js
           node --check lib/animatic-review-decisions.js
           node --check lib/production-adapters.js
           node --check lib/partner-invocation-ledger.js
@@ -39,22 +43,33 @@ jobs:
           node --check lib/animatic-candidates.js
           node --check lib/animatic-executor.js
           node --check lib/video-artifacts.js
+          node --check public/js/animatic-api.js
+          node --check public/js/animatic-pacing.js
+          node --check public/js/animatic-takes.js
           node --check public/js/surface-handoff.js
           node --check server.js
           node --check lib/tests/animatic-contract.test.js
           node --check lib/tests/animatic-pacing-context.test.js
+          node --check lib/tests/animatic-pacing-proposals.test.js
+          node --check lib/tests/animatic-pacing-advisor.test.js
+          node --check lib/tests/animatic-partner-pacing.test.js
+          node --check lib/tests/animatic-preview.test.js
+          node --check lib/tests/animatic-preview-routes.test.js
           node --check lib/tests/animatic-review-decisions.test.js
           node --check lib/tests/animatic-snapshots.test.js
           node --check lib/tests/animatic-preparation.test.js
           node --check lib/tests/animatic-preparation-routes.test.js
-          node --check lib/tests/animatic-pacing-proposals.test.js
           node --check lib/tests/animatic-adapter-registration.test.js
           node --check lib/tests/animatic-executor.test.js
           node --check lib/tests/animatic-artifact-routes.test.js
           node --check lib/tests/invocation-ledger-v2.test.js
           node --check lib/tests/server-authoritative-context.test.js
           node --check lib/tests/server-proposal-authority.test.js
+          node --check lib/tests/server-pacing-advice.test.js
           node --check lib/tests/surface-handoff.test.js
+          node --check tests/frontend/animatic-api.test.js
+          node --check tests/frontend/animatic-pacing.test.js
+          node --check tests/frontend/animatic-takes.test.js
 
       - name: Run complete Raindesk deterministic suite
         working-directory: raindesk
