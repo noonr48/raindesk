@@ -3,10 +3,10 @@
 /**
  * Durable Invocation Ledger v2.
  *
- * Approval is authority, not merely UI state. The ledger therefore preserves
- * the bounded immutable request facts that were approved so reload/retry or a
- * later external process cannot silently broaden the request. It still never
- * executes anything and never stores artwork bytes.
+ * Approval is authority, not merely UI state. The ledger preserves the bounded
+ * immutable request facts that were proposed/approved, records where authority
+ * was minted, and enforces a one-way lifecycle so reload/retry or a later
+ * process cannot silently broaden or resurrect a request.
  */
 
 const fs = require('fs');
@@ -22,6 +22,14 @@ const MAX_ENTRIES = 500;
 const MAX_RECORD_BYTES = 64 * 1024;
 const DIGEST_RE = /^[a-f0-9]{64}$/;
 const STATUSES = new Set(['proposed', 'approved', 'stale', 'handed_off', 'cancelled']);
+const ORIGINS = new Set(['legacy', 'http_legacy', 'partner_server', 'server_prepared']);
+const STATUS_TRANSITIONS = Object.freeze({
+  proposed: Object.freeze(['approved', 'stale', 'cancelled']),
+  approved: Object.freeze(['handed_off', 'stale', 'cancelled']),
+  handed_off: Object.freeze([]),
+  stale: Object.freeze([]),
+  cancelled: Object.freeze([]),
+});
 
 function now() { return new Date().toISOString(); }
 function emptyStore() { return { schemaVersion: STORE_SCHEMA_VERSION, invocations: [], createdAt: now(), updatedAt: now() }; }
@@ -79,6 +87,11 @@ function cleanDigest(value, what = 'snapshot digest') {
   return digest;
 }
 
+function cleanOrigin(value) {
+  const origin = text(value, 32);
+  return ORIGINS.has(origin) ? origin : 'legacy';
+}
+
 function cleanScope(value) {
   if (value == null) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invocation scope must be an object');
@@ -103,6 +116,7 @@ function cleanInvocation(input = {}, { preserveTimestamps = false } = {}) {
     schemaVersion: STORE_SCHEMA_VERSION,
     id,
     requestId: text(input.requestId, 96) || id,
+    origin: cleanOrigin(input.origin),
     parentRequestId: text(input.parentRequestId, 96) || null,
     sourceSnapshotDigest: cleanDigest(input.sourceSnapshotDigest),
     turnId: text(input.turnId, 128) || null,
@@ -135,6 +149,7 @@ function cleanInvocation(input = {}, { preserveTimestamps = false } = {}) {
 function immutableShape(entry) {
   return {
     requestId: entry.requestId,
+    origin: entry.origin || 'legacy',
     parentRequestId: entry.parentRequestId || null,
     sourceSnapshotDigest: entry.sourceSnapshotDigest || null,
     turnId: entry.turnId,
@@ -179,6 +194,7 @@ function inputFromRequest(request, extras = {}) {
     sideEffects: request.sideEffects,
     status: 'proposed',
     ...extras,
+    origin: 'partner_server',
   };
 }
 
@@ -187,7 +203,7 @@ function migrateV1(store) {
     throw new HttpError(500, 'Invocation ledger is malformed');
   }
   let invocations;
-  try { invocations = store.invocations.map((item) => cleanInvocation(item, { preserveTimestamps: true })); }
+  try { invocations = store.invocations.map((item) => cleanInvocation({ ...item, origin: 'legacy' }, { preserveTimestamps: true })); }
   catch (_error) { throw new HttpError(500, 'Invocation ledger v1 contains a malformed record'); }
   return {
     schemaVersion: STORE_SCHEMA_VERSION,
@@ -195,6 +211,27 @@ function migrateV1(store) {
     createdAt: text(store.createdAt, 64) || now(),
     updatedAt: now(),
   };
+}
+
+function normalizeV2(store) {
+  if (!store || store.schemaVersion !== STORE_SCHEMA_VERSION || !Array.isArray(store.invocations)) {
+    throw new HttpError(500, 'Invocation ledger is malformed');
+  }
+  const needsUpgrade = store.invocations.some((item) => !item || !ORIGINS.has(item.origin) ||
+    !Object.prototype.hasOwnProperty.call(item, 'parentRequestId') ||
+    !Object.prototype.hasOwnProperty.call(item, 'sourceSnapshotDigest'));
+  if (!needsUpgrade) return store;
+  let invocations;
+  try { invocations = store.invocations.map((item) => cleanInvocation({ ...item, origin: ORIGINS.has(item && item.origin) ? item.origin : 'legacy' }, { preserveTimestamps: true })); }
+  catch (_error) { throw new HttpError(500, 'Invocation ledger v2 contains a malformed legacy record'); }
+  const upgraded = {
+    schemaVersion: STORE_SCHEMA_VERSION,
+    invocations,
+    createdAt: text(store.createdAt, 64) || now(),
+    updatedAt: now(),
+  };
+  atomicWrite(upgraded);
+  return upgraded;
 }
 
 function read() {
@@ -211,10 +248,7 @@ function read() {
     atomicWrite(migrated);
     return migrated;
   }
-  if (!store || store.schemaVersion !== STORE_SCHEMA_VERSION || !Array.isArray(store.invocations)) {
-    throw new HttpError(500, 'Invocation ledger is malformed');
-  }
-  return store;
+  return normalizeV2(store);
 }
 
 function write(store) {
@@ -258,11 +292,20 @@ function recordFromRequest(request, extras = {}) {
   return record(inputFromRequest(request, extras));
 }
 
+function canTransition(from, to) {
+  if (from === to) return true;
+  return Boolean(STATUS_TRANSITIONS[from] && STATUS_TRANSITIONS[from].includes(to));
+}
+
 function setStatus(id, status) {
   const store = read();
   const entry = find(store, text(id, 96));
   if (!entry) return null;
   if (!STATUSES.has(status)) throw new HttpError(400, 'unknown invocation status');
+  if (!canTransition(entry.status, status)) {
+    throw new HttpError(409, `invocation lifecycle cannot move from ${entry.status} to ${status}`);
+  }
+  if (entry.status === status) return entry;
   entry.status = status;
   const stamp = now();
   if (status === 'approved') entry.approvedAt = stamp;
@@ -280,11 +323,7 @@ function pendingForShot(shotId) {
     (item.status === 'proposed' || item.status === 'approved'));
 }
 
-/**
- * A newer request supersedes only pending requests for the same shot+adapter.
- * The adapter-less fallback exists solely for schema-v1/legacy callers that
- * predate v2 authority records; all v2 Raindesk requests carry adapterId.
- */
+/** A newer request supersedes only pending requests for the same shot+adapter. */
 function markStaleSuperseded({ shotId, requestId, adapterId = null }) {
   const store = read();
   const key = text(shotId, 96);
@@ -313,7 +352,10 @@ function list({ shotId = null, status = null, limit = 100 } = {}) {
 }
 
 module.exports = {
-  DATA_DIR, LEDGER_PATH, STORE_SCHEMA_VERSION, STATUSES, MAX_ENTRIES, MAX_RECORD_BYTES, DIGEST_RE,
-  canonicalValue, canonicalJson, cleanDigest, cleanScope, cleanInvocation, immutableShape, inputFromRequest, migrateV1,
-  read, write, record, recordFromRequest, find, setStatus, pendingForShot, markStaleSuperseded, list,
+  DATA_DIR, LEDGER_PATH, STORE_SCHEMA_VERSION, STATUSES, ORIGINS, STATUS_TRANSITIONS,
+  MAX_ENTRIES, MAX_RECORD_BYTES, DIGEST_RE,
+  canonicalValue, canonicalJson, cleanDigest, cleanOrigin, cleanScope, cleanInvocation,
+  immutableShape, inputFromRequest, migrateV1, normalizeV2,
+  read, write, record, recordFromRequest, find, canTransition, setStatus,
+  pendingForShot, markStaleSuperseded, list,
 };
