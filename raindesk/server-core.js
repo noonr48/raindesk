@@ -221,6 +221,10 @@ function validateBindOptions({ host, authToken, allowWildcard = false }) {
   if (isWildcardHost(host) && !allowWildcard) {
     throw new Error('refusing wildcard network bind; use a specific trusted interface or set RAINDESK_ALLOW_WILDCARD=1');
   }
+  // Explicit owner-directed opt-out (RAINDESK_REMOTE_UNPROTECTED=1): a private
+  // LAN/private-mesh deployment may deliberately run with no access key so the
+  // artist lands straight in the desk. Default remains token-required.
+  if (process.env.RAINDESK_REMOTE_UNPROTECTED === '1') return true;
   if (typeof authToken !== 'string' || authToken.length < 24) {
     throw new Error('remote Raindesk requires RAINDESK_REMOTE_TOKEN with at least 24 characters');
   }

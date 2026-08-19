@@ -28,6 +28,17 @@ test('remote bind policy refuses unauthenticated and accidental wildcard exposur
   assert.equal(validateBindOptions({ host: '100.80.1.2', authToken: 'a'.repeat(24) }), true);
   assert.throws(() => validateBindOptions({ host: '0.0.0.0', authToken: 'a'.repeat(24) }), /wildcard/);
   assert.equal(validateBindOptions({ host: '0.0.0.0', authToken: 'a'.repeat(24), allowWildcard: true }), true);
+  // Owner-directed unprotected remote: env opt-out bypasses the token demand.
+  const prevUnprotected = process.env.RAINDESK_REMOTE_UNPROTECTED;
+  process.env.RAINDESK_REMOTE_UNPROTECTED = '1';
+  try {
+    assert.equal(validateBindOptions({ host: '0.0.0.0', authToken: null, allowWildcard: true }), true);
+  } finally {
+    if (prevUnprotected === undefined) delete process.env.RAINDESK_REMOTE_UNPROTECTED;
+    else process.env.RAINDESK_REMOTE_UNPROTECTED = prevUnprotected;
+  }
+  // Default (no env) still demands the token.
+  assert.throws(() => validateBindOptions({ host: '0.0.0.0', authToken: null, allowWildcard: true }), /REMOTE_TOKEN/);
 });
 
 test('remote auth supports unlock cookie and bearer access while APIs reject strangers', async (t) => {
