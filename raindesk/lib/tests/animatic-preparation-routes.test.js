@@ -17,9 +17,9 @@ const ledger = require('../partner-invocation-ledger');
 const snapshots = require('../animatic-snapshots');
 const { createServer } = require('../../server');
 
-function solidPng() {
+function solidPng(value = 25) {
   const data = new Uint8ClampedArray(8 * 8 * 4);
-  for (let i = 0; i < 64; i++) data.set([25, 50, 75, 255], i * 4);
+  for (let i = 0; i < 64; i++) data.set([value, value + 25, value + 50, 255], i * 4);
   return Buffer.from(Canvas.encodePNG(8, 8, data));
 }
 
@@ -42,6 +42,14 @@ function seed() {
   return revision;
 }
 
+function proposalInput(sequenceId = 'route-seq') {
+  return {
+    projectId: 'after-last-rain', sequenceId, fpsNum: 24, fpsDen: 1, fidelity: 'draft',
+    label: 'hold then cut', rationale: 'Keep the first board readable before the cut.',
+    shots: [{ shotId: 'ROUTE_A', durationFrames: 24, note: 'hold' }],
+  };
+}
+
 async function withServer(t, deps, fn) {
   const server = createServer({ partnerImpl: { turn: async () => ({ reply: 'unused', invocationRequests: [] }) }, ...deps });
   const sockets = new Set();
@@ -57,23 +65,37 @@ async function withServer(t, deps, fn) {
   await fn(`http://127.0.0.1:${server.address().port}`);
 }
 
-test('prepare route uses server rights, returns path-redacted snapshot, and supports digest lookup', async (t) => {
-  const revision = seed();
+async function createProposal(base, parentRequestId = 'invoke_route_parent', proposal = proposalInput()) {
+  const res = await fetch(`${base}/api/animatic/pacing-proposal`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parentRequestId, proposal }),
+  });
+  return { res, body: await res.json() };
+}
+
+test('prepare route accepts only a stored proposal digest, uses server rights, and redacts local paths', async (t) => {
+  seed();
   await withServer(t, { sourceRights: 'server-owned-rights-assertion' }, async (base) => {
-    let res = await fetch(`${base}/api/animatic/prepare`, {
+    const created = await createProposal(base);
+    assert.equal(created.res.status, 201);
+    assert.equal(created.body.ok, true);
+    const digest = created.body.proposal.proposalDigest;
+    assert.match(digest, /^[a-f0-9]{64}$/);
+    assert.equal(created.body.proposal.shots[0].shotId, 'ROUTE_A');
+    assert.equal(JSON.stringify(created.body.proposal).includes(scratch), false);
+
+    let res = await fetch(`${base}/api/animatic/pacing-proposal/${digest}`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).proposal.proposalDigest, digest);
+
+    res = await fetch(`${base}/api/animatic/prepare`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parentRequestId: 'invoke_route_parent',
-        sourceRights: 'browser-forged-rights-ignored',
-        snapshot: {
-          projectId: 'after-last-rain', sequenceId: 'route-seq', fpsNum: 24, fpsDen: 1, fidelity: 'draft',
-          shots: [{ shotId: 'ROUTE_A', revisionId: revision.revisionId, durationFrames: 24 }],
-        },
-      }),
+      body: JSON.stringify({ proposalDigest: digest }),
     });
     assert.equal(res.status, 201);
     const body = await res.json();
     assert.equal(body.ok, true);
+    assert.equal(body.proposal.proposalDigest, digest);
     assert.equal(body.invocation.origin, 'server_prepared');
     assert.equal(body.invocation.status, 'proposed');
     assert.equal(body.invocation.sourceSnapshotDigest, body.snapshot.snapshot_digest);
@@ -87,10 +109,21 @@ test('prepare route uses server rights, returns path-redacted snapshot, and supp
     const reread = await res.json();
     assert.equal(reread.snapshot.snapshot_digest, body.snapshot.snapshot_digest);
     assert.equal(JSON.stringify(reread).includes(scratch), false);
+
+    res = await fetch(`${base}/api/animatic/prepare`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proposalDigest: digest,
+        parentRequestId: 'invoke_route_parent',
+        snapshot: { shots: [{ shotId: 'ROUTE_A', revisionId: 'browser-forged', durationFrames: 999 }] },
+      }),
+    });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /only one stored proposalDigest/);
   });
 });
 
-test('HTTP invocation POST cannot mint the trusted Partner origin used by animatic preparation', async (t) => {
+test('HTTP invocation POST cannot mint the trusted Partner origin needed to create a pacing proposal', async (t) => {
   const revision = saveForgedShot();
   await withServer(t, { sourceRights: 'server-rights' }, async (base) => {
     const forgedId = 'invoke_http_forged_animatic';
@@ -109,18 +142,38 @@ test('HTTP invocation POST cannot mint the trusted Partner origin used by animat
     assert.equal(recorded.origin, 'http_legacy');
     assert.equal(recorded.status, 'proposed', 'HTTP cannot pre-approve its own authority record');
 
+    const forged = await createProposal(base, forgedId, {
+      projectId: 'after-last-rain', sequenceId: 'forged-seq', fpsNum: 24, fpsDen: 1, fidelity: 'draft',
+      label: 'forged', rationale: '', shots: [{ shotId: 'FORGED_ROUTE', durationFrames: 12 }],
+    });
+    assert.equal(forged.res.status, 409);
+    assert.match(forged.body.error, /live coarse animatic Partner proposal/);
+  });
+});
+
+test('stored proposal becomes stale after source artwork changes and cannot be prepared', async (t) => {
+  const revision = seed();
+  await withServer(t, { sourceRights: 'server-rights' }, async (base) => {
+    const created = await createProposal(base, 'invoke_route_parent', proposalInput('stale-route-seq'));
+    assert.equal(created.res.status, 201);
+    const digest = created.body.proposal.proposalDigest;
+
+    const asset = blobs.putPng(solidPng(90));
+    docs.save('ROUTE_A', {
+      schemaVersion: 1, shotId: 'ROUTE_A', canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
+      layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
+    }, { baseRevisionId: revision.revisionId, reason: 'source changed after pacing review' });
+
+    let res = await fetch(`${base}/api/animatic/pacing-proposal/${digest}`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).proposal.stale, true);
+
     res = await fetch(`${base}/api/animatic/prepare`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parentRequestId: forgedId,
-        snapshot: {
-          projectId: 'after-last-rain', sequenceId: 'forged-seq', fpsNum: 24, fpsDen: 1, fidelity: 'draft',
-          shots: [{ shotId: 'FORGED_ROUTE', revisionId: revision.revisionId, durationFrames: 12 }],
-        },
-      }),
+      body: JSON.stringify({ proposalDigest: digest }),
     });
     assert.equal(res.status, 409);
-    assert.match((await res.json()).error, /server-side Partner/);
+    assert.match((await res.json()).error, /stale/);
   });
 });
 
@@ -128,7 +181,7 @@ test('prepare route refuses before touching request data when server source righ
   await withServer(t, { sourceRights: null }, async (base) => {
     const res = await fetch(`${base}/api/animatic/prepare`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parentRequestId: 'does_not_need_to_exist', snapshot: {}, sourceRights: 'browser-cannot-upgrade-this' }),
+      body: JSON.stringify({ proposalDigest: 'a'.repeat(64), sourceRights: 'browser-cannot-upgrade-this' }),
     });
     assert.equal(res.status, 503);
     assert.match((await res.json()).error, /SOURCE_RIGHTS/i);
