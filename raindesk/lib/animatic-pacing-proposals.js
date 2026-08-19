@@ -15,16 +15,17 @@ const path = require('node:path');
 const { HttpError } = require('./errors');
 const invocationLedger = require('./partner-invocation-ledger');
 const shotDocuments = require('./shot-documents');
+const contract = require('./animatic-contract');
 
 const DATA_DIR = process.env.RAINDESK_DATA_DIR
   ? path.resolve(process.env.RAINDESK_DATA_DIR)
   : path.join(__dirname, '..', 'data');
 const PROPOSAL_DIR = path.join(DATA_DIR, 'animatic', 'pacing-proposals');
 const SCHEMA_VERSION = 1;
-const MAX_SHOTS = 256;
-const MAX_DURATION_FRAMES = 24 * 60 * 60 * 4;
-const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
-const FIDELITIES = new Set(['draft', 'preview']);
+const ID_RE = contract.CONTRACT_ID_RE;
+const FIDELITIES = contract.FIDELITIES;
+const MAX_SHOTS = contract.MAX_SHOTS;
+const MAX_DURATION_FRAMES = contract.MAX_DURATION_FRAMES;
 const TOP_KEYS = new Set(['projectId', 'sequenceId', 'fpsNum', 'fpsDen', 'fidelity', 'label', 'rationale', 'shots']);
 const SHOT_KEYS = new Set(['shotId', 'durationFrames', 'note']);
 
@@ -108,8 +109,8 @@ function normalizeCreative(input) {
   assertClosedObject(input, TOP_KEYS, 'pacing proposal');
   const projectId = assertId(input.projectId, 'projectId');
   const sequenceId = assertId(input.sequenceId, 'sequenceId');
-  const fpsNum = positiveInteger(input.fpsNum, 'fpsNum', 240000);
-  const fpsDen = positiveInteger(input.fpsDen, 'fpsDen', 1001);
+  const fpsNum = positiveInteger(input.fpsNum, 'fpsNum', contract.MAX_FPS_NUM);
+  const fpsDen = positiveInteger(input.fpsDen, 'fpsDen', contract.MAX_FPS_DEN);
   const fidelity = text(input.fidelity, 32);
   if (!FIDELITIES.has(fidelity)) throw new HttpError(400, 'fidelity must be draft or preview');
   const label = text(input.label, 160);
