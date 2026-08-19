@@ -29,7 +29,8 @@
     if (published) return published;
     const title = document && document.getElementById ? document.getElementById('shotTitle') : null;
     const copy = String(title && title.textContent || '').trim();
-    return copy ? copy.split('·')[0].trim() || null : null;
+    const candidate = copy ? copy.split('·')[0].trim() : '';
+    return candidate && candidate !== 'raindesk' ? candidate : null;
   }
 
   function seconds(value) {
@@ -136,7 +137,13 @@
     if (windowRoot && windowRoot.addEventListener) {
       windowRoot.addEventListener('raindesk:shot-change', () => {
         const next = currentShotId(windowRoot, document);
-        if (next !== lastShotId) { removeOffers(); lastShotId = next; }
+        if (next === lastShotId) return;
+        removeOffers();
+        lastShotId = next;
+        // Initial desktop workspace opening can precede shot-title publication.
+        // The shot-context bridge is the authoritative signal that a concrete
+        // shot is now visible, so rehydrate its persisted pacing suggestions.
+        if (next) setTimeout(() => restore(), 0);
       });
     }
 
