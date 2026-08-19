@@ -7,8 +7,8 @@
  * creative authority is composed here: character identity comes from the
  * registry, artwork revision identity comes from ShotDocument rather than
  * browser assertions, actionable Partner requests are durably registered
- * before browser exposure, and animatic preparation binds review to one exact
- * source snapshot without exposing local panel paths.
+ * before browser exposure, and the animatic path binds preparation/execution
+ * to exact immutable snapshots and locally mirrored candidate artifacts.
  */
 
 const core = require('./server-core');
@@ -16,6 +16,10 @@ const characters = require('./lib/characters');
 const invocationLedger = require('./lib/partner-invocation-ledger');
 const shotDocuments = require('./lib/shot-documents');
 const animaticPreparation = require('./lib/animatic-preparation');
+const animaticExecutor = require('./lib/animatic-executor');
+const animaticExecutionStore = require('./lib/animatic-execution-store');
+const animaticCandidates = require('./lib/animatic-candidates');
+const videoArtifacts = require('./lib/video-artifacts');
 const direction = require('./lib/direction');
 const partner = require('./lib/partner');
 const agent = require('./lib/agent');
@@ -23,6 +27,7 @@ const jobStore = require('./lib/job-store');
 const { HttpError } = require('./lib/errors');
 
 const CHARACTER_BODY_LIMIT = 512 * 1024;
+const SAFE_ID_SEGMENT = '[A-Za-z0-9._-]+';
 
 function isObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -145,7 +150,12 @@ function invocationRoute(pathname) {
 }
 
 function animaticRoute(pathname) {
-  return pathname === '/api/animatic/prepare' || /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(pathname);
+  return pathname === '/api/animatic/prepare' ||
+    pathname === '/api/animatic/execute' ||
+    /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(pathname) ||
+    new RegExp(`^/api/animatic/execution/${SAFE_ID_SEGMENT}$`).test(pathname) ||
+    new RegExp(`^/api/animatic/candidate/${SAFE_ID_SEGMENT}$`).test(pathname) ||
+    /^\/api\/animatic\/artifact\/[a-f0-9]{64}$/.test(pathname);
 }
 
 function asBadRequest(error) {
@@ -203,10 +213,6 @@ async function handleInvocationApi(req, res, url) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new HttpError(400, 'invocation record is required');
       }
-      // HTTP POST is a compatibility/history intake only. It may never claim
-      // the trusted origins used by Partner proposals or server-prepared work,
-      // and it cannot create a pre-approved record. Those origins are minted
-      // only by in-process server boundaries.
       let recorded;
       try {
         recorded = invocationLedger.record({ ...body, origin: 'http_legacy', status: 'proposed' });
@@ -237,7 +243,7 @@ async function handleInvocationApi(req, res, url) {
   throw new HttpError(404, 'not found');
 }
 
-async function handleAnimaticApi(req, res, url, { sourceRights = null } = {}) {
+async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticEnv = process.env } = {}) {
   if (req.method === 'POST' && url.pathname === '/api/animatic/prepare') {
     if (!sourceRights) throw new HttpError(503, 'RAINDESK_SOURCE_RIGHTS is required before animatic preparation');
     const body = await readJson(req, 512 * 1024);
@@ -255,9 +261,55 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null } = {}) {
     return core.sendJson(res, prepared.created ? 201 : 200, { ok: true, ...prepared });
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/animatic/execute') {
+    const body = await readJson(req, 64 * 1024);
+    const invocationId = body && typeof body.invocationId === 'string' ? body.invocationId.trim() : '';
+    if (!invocationId) throw new HttpError(400, 'invocationId is required');
+    try {
+      const result = await animaticExecutor.execute(invocationId, { retry: body.retry === true, env: animaticEnv });
+      return core.sendJson(res, result.execution.status === 'running' ? 202 : 200, { ok: true, ...result });
+    } catch (error) {
+      if (error instanceof HttpError && error.execution) {
+        return core.sendJson(res, error.status, { error: error.message, execution: error.execution });
+      }
+      throw error;
+    }
+  }
+
   if (req.method === 'GET' && /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(url.pathname)) {
     const digest = url.pathname.slice('/api/animatic/snapshot/'.length);
     return core.sendJson(res, 200, { ok: true, snapshot: animaticPreparation.readPreparedSnapshot(digest) });
+  }
+
+  if (req.method === 'GET' && new RegExp(`^/api/animatic/execution/${SAFE_ID_SEGMENT}$`).test(url.pathname)) {
+    const id = url.pathname.slice('/api/animatic/execution/'.length);
+    const row = animaticExecutionStore.get(id);
+    if (!row) throw new HttpError(404, 'no such animatic execution attempt');
+    let candidate = null;
+    if (row.candidateId) candidate = animaticCandidates.publicRecord(animaticCandidates.read(row.candidateId));
+    return core.sendJson(res, 200, { ok: true, execution: animaticExecutionStore.publicRow(row), candidate });
+  }
+
+  if (req.method === 'GET' && new RegExp(`^/api/animatic/candidate/${SAFE_ID_SEGMENT}$`).test(url.pathname)) {
+    const id = url.pathname.slice('/api/animatic/candidate/'.length);
+    return core.sendJson(res, 200, { ok: true, candidate: animaticCandidates.publicRecord(animaticCandidates.read(id)) });
+  }
+
+  if ((req.method === 'GET' || req.method === 'HEAD') && /^\/api\/animatic\/artifact\/[a-f0-9]{64}$/.test(url.pathname)) {
+    const sha = url.pathname.slice('/api/animatic/artifact/'.length);
+    if (req.method === 'HEAD') {
+      const item = videoArtifacts.stat(sha);
+      res.writeHead(200, {
+        'Content-Type': 'video/mp4',
+        'Content-Length': item.bytes,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'private, max-age=31536000, immutable',
+      });
+      res.end();
+      return;
+    }
+    videoArtifacts.serve(req, res, sha);
+    return;
   }
 
   throw new HttpError(404, 'not found');
@@ -268,7 +320,8 @@ function createServer(deps = {}) {
   const basePartner = deps.partnerImpl || partner.createPartner({ agentImpl });
   const composedPartner = withAuthoritativeContext(basePartner);
   const authToken = deps.authToken || null;
-  const sourceRights = deps.sourceRights || process.env.RAINDESK_SOURCE_RIGHTS || null;
+  const animaticEnv = deps.animaticEnv || process.env;
+  const sourceRights = deps.sourceRights || animaticEnv.RAINDESK_SOURCE_RIGHTS || null;
   const server = core.createServer({ ...deps, agentImpl, partnerImpl: composedPartner });
 
   const inherited = server.listeners('request')[0];
@@ -284,10 +337,10 @@ function createServer(deps = {}) {
     if (authToken && !core.requestAuthorized(req, authToken)) return inherited(req, res);
 
     let promise;
-    if (animaticRoute(url.pathname)) promise = handleAnimaticApi(req, res, url, { sourceRights });
+    if (animaticRoute(url.pathname)) promise = handleAnimaticApi(req, res, url, { sourceRights, animaticEnv });
     else if (invocationRoute(url.pathname)) promise = handleInvocationApi(req, res, url);
     else promise = handleCharacterApi(req, res, url);
-    return promise.catch((error) => {
+    return Promise.resolve(promise).catch((error) => {
       if (res.headersSent) {
         res.destroy();
         return;
@@ -318,6 +371,7 @@ function start({
     try {
       core.validateBindOptions({ host, authToken, allowWildcard });
       jobStore.recoverInterrupted();
+      animaticExecutionStore.recoverInterrupted();
     } catch (error) {
       reject(error);
       return;
