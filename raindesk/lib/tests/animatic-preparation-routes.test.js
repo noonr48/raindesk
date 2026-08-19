@@ -31,7 +31,7 @@ function seed() {
   }, { reason: 'route fixture' });
   direction.ensureLegacyShot('ROUTE_A', { title: 'Route A', beat: 'hold then cut' });
   ledger.record({
-    id: 'invoke_route_parent', requestId: 'invoke_route_parent', turnId: 'turn_route', shotId: 'ROUTE_A',
+    id: 'invoke_route_parent', requestId: 'invoke_route_parent', origin: 'partner_server', turnId: 'turn_route', shotId: 'ROUTE_A',
     adapterId: 'animatic_timing_v1', capabilityId: 'animatic_timing',
     stageId: 'animatic_pass:2:animatic_timing', recipeId: 'animatic_pass',
     invocationBoundary: 'external', disposition: 'proposal', reviewRequired: true, creativeMutation: true,
@@ -74,6 +74,7 @@ test('prepare route uses server rights, returns path-redacted snapshot, and supp
     assert.equal(res.status, 201);
     const body = await res.json();
     assert.equal(body.ok, true);
+    assert.equal(body.invocation.origin, 'server_prepared');
     assert.equal(body.invocation.status, 'proposed');
     assert.equal(body.invocation.sourceSnapshotDigest, body.snapshot.snapshot_digest);
     assert.equal(JSON.stringify(body.snapshot).includes(scratch), false);
@@ -89,6 +90,40 @@ test('prepare route uses server rights, returns path-redacted snapshot, and supp
   });
 });
 
+test('HTTP invocation POST cannot mint the trusted Partner origin used by animatic preparation', async (t) => {
+  const revision = saveForgedShot();
+  await withServer(t, { sourceRights: 'server-rights' }, async (base) => {
+    const forgedId = 'invoke_http_forged_animatic';
+    let res = await fetch(`${base}/api/invocations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: forgedId, requestId: forgedId, origin: 'partner_server', status: 'approved', shotId: 'FORGED_ROUTE',
+        adapterId: 'animatic_timing_v1', capabilityId: 'animatic_timing',
+        stageId: 'animatic_pass:2:animatic_timing', recipeId: 'animatic_pass',
+        invocationBoundary: 'external', disposition: 'proposal', reviewRequired: true, creativeMutation: true,
+        scope: { shotId: 'FORGED_ROUTE', artRevisionId: revision.revisionId, selectionFingerprint: null, selectionStable: null },
+      }),
+    });
+    assert.equal(res.status, 201);
+    const recorded = (await res.json()).invocation;
+    assert.equal(recorded.origin, 'http_legacy');
+    assert.equal(recorded.status, 'proposed', 'HTTP cannot pre-approve its own authority record');
+
+    res = await fetch(`${base}/api/animatic/prepare`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parentRequestId: forgedId,
+        snapshot: {
+          projectId: 'after-last-rain', sequenceId: 'forged-seq', fpsNum: 24, fpsDen: 1, fidelity: 'draft',
+          shots: [{ shotId: 'FORGED_ROUTE', revisionId: revision.revisionId, durationFrames: 12 }],
+        },
+      }),
+    });
+    assert.equal(res.status, 409);
+    assert.match((await res.json()).error, /server-side Partner/);
+  });
+});
+
 test('prepare route refuses before touching request data when server source rights are not configured', async (t) => {
   await withServer(t, { sourceRights: null }, async (base) => {
     const res = await fetch(`${base}/api/animatic/prepare`, {
@@ -99,3 +134,13 @@ test('prepare route refuses before touching request data when server source righ
     assert.match((await res.json()).error, /SOURCE_RIGHTS/i);
   });
 });
+
+function saveForgedShot() {
+  const asset = blobs.putPng(solidPng());
+  const revision = docs.save('FORGED_ROUTE', {
+    schemaVersion: 1, shotId: 'FORGED_ROUTE', canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
+    layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
+  }, { reason: 'forged route fixture' });
+  direction.ensureLegacyShot('FORGED_ROUTE', { title: 'Forged Route', beat: 'should never authorize execution' });
+  return revision;
+}
