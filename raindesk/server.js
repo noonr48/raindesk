@@ -5,8 +5,9 @@
  *
  * The inherited server remains byte-for-byte in server-core.js. Server-owned
  * creative authority is composed here: character identity comes from the
- * registry, and artwork revision identity comes from ShotDocument rather than
- * browser assertions. Composed routes also host the durable invocation ledger.
+ * registry, artwork revision identity comes from ShotDocument rather than
+ * browser assertions, and actionable Partner requests are durably registered
+ * before the browser is allowed to present them as approval affordances.
  */
 
 const core = require('./server-core');
@@ -57,6 +58,28 @@ function authoritativeArtRevision(context = {}, resolvedShotId = null) {
   }
 }
 
+function persistInvocationProposals(result) {
+  if (!isObject(result) || !Array.isArray(result.invocationRequests) || !result.invocationRequests.length) return result;
+  try {
+    for (const request of result.invocationRequests) {
+      const recorded = invocationLedger.recordFromRequest(request);
+      if (recorded.entry.shotId) {
+        invocationLedger.markStaleSuperseded({
+          shotId: recorded.entry.shotId,
+          requestId: recorded.entry.requestId,
+          adapterId: recorded.entry.adapterId,
+        });
+      }
+    }
+    return result;
+  } catch (error) {
+    // Conversation remains useful, but no browser-only invocation is allowed
+    // to masquerade as durable authority if the proposal ledger is unhealthy.
+    console.error('[raindesk] invocation proposal persistence failed:', error && error.message ? error.message : error); // eslint-disable-line no-console
+    return { ...result, invocationRequests: [], invocationPersistenceError: true };
+  }
+}
+
 function withAuthoritativeContext(basePartner) {
   if (!basePartner || typeof basePartner.turn !== 'function') {
     throw new Error('partnerImpl.turn is required');
@@ -68,24 +91,18 @@ function withAuthoritativeContext(basePartner) {
       const shotId = resolveCharacterShotId(context);
       if (shotId) {
         try {
-          // Server-side registry state is authoritative. Browser-supplied
-          // characterAnchors is never allowed to override persisted identity.
           context.characterAnchors = characters.contextForShot(shotId);
         } catch (_e) {
           // Character context must not strand the creative conversation.
         }
       }
-      // Browser artRevisionId is presentation context only. Capability Planner
-      // and invocation scope receive the revision committed in ShotDocument,
-      // or null when the server cannot prove one.
       context.artRevisionId = authoritativeArtRevision(context, shotId);
-      return basePartner.turn({ ...input, context });
+      const result = await basePartner.turn({ ...input, context });
+      return persistInvocationProposals(result);
     },
   };
 }
 
-// Compatibility export for the Character Anchors slice/tests. Its semantics
-// now include all server-owned authority, not characters only.
 const withCharacterContext = withAuthoritativeContext;
 
 function readBody(req, limit = CHARACTER_BODY_LIMIT) {
@@ -191,9 +208,6 @@ async function handleInvocationApi(req, res, url) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new HttpError(400, 'invocation record is required');
       }
-      // Validate and durably record FIRST. Only then may supersession touch
-      // older entries. v2 scopes supersession by the recorded adapter so an
-      // animatic proposal cannot stale an unrelated image-edit approval.
       let recorded;
       try { recorded = invocationLedger.record(body); } catch (error) { throw asBadRequest(error); }
       if (body.supersede && recorded.entry.shotId) {
@@ -236,8 +250,6 @@ function createServer(deps = {}) {
     catch (_e) { return inherited(req, res); }
 
     if (!characterRoute(url.pathname) && !invocationRoute(url.pathname)) return inherited(req, res);
-    // Let the inherited server perform the normal remote unlock response for
-    // unauthorized requests. Authorized character/invocation routes stay here.
     if (authToken && !core.requestAuthorized(req, authToken)) return inherited(req, res);
 
     const handler = invocationRoute(url.pathname) ? handleInvocationApi : handleCharacterApi;
@@ -295,6 +307,7 @@ module.exports = {
   resolveCharacterShotId,
   resolveArtworkShotId,
   authoritativeArtRevision,
+  persistInvocationProposals,
   withAuthoritativeContext,
   withCharacterContext,
   handleCharacterApi,
