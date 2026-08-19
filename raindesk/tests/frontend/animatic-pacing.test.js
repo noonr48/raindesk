@@ -53,3 +53,25 @@ test('Preview this sends only immutable proposal digest and keeps stale proposal
   assert.match(source, /rough cut is ready in Takes/);
   assert.doesNotMatch(source, /revisionId|sourceRights|adapterId|executor|snapshotInput|invocationId/);
 });
+
+test('authoritative shot-change signal restores persisted pacing after desktop workspace opens early', async () => {
+  const mod = loadModule();
+  let shotChange = null;
+  const calls = [];
+  const windowRoot = {
+    addEventListener(name, fn) { if (name === 'raindesk:shot-change') shotChange = fn; },
+  };
+  const document = {
+    documentElement: { dataset: { raindeskShotId: '' } },
+    getElementById() { return { textContent: 'raindesk' }; },
+  };
+  const api = {
+    async listAnimaticPacingProposals(args) { calls.push(args); return { proposals: [] }; },
+  };
+  mod.PacingOffers({ root: windowRoot, document, api, drawer: null, chatList: null });
+  assert.equal(typeof shotChange, 'function');
+  document.documentElement.dataset.raindeskShotId = 'S01';
+  shotChange();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls, [{ shotId: 'S01', limit: 12 }]);
+});
