@@ -116,13 +116,39 @@ class CDP {
   }
 }
 
+async function openTarget(webSocketDebuggerUrl) {
+  const ws = new WebSocket(webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => { ws.addEventListener('open', resolve, { once: true }); ws.addEventListener('error', reject, { once: true }); });
+  return new CDP(ws);
+}
+
 async function connectPage(browserWsUrl, url) {
   const browser = new URL(browserWsUrl);
   const created = await fetch(`http://${browser.host}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' });
   if (!created.ok) throw new Error(`could not create Chromium page: ${created.status}`);
-  const target = await created.json(); const ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { ws.addEventListener('open', resolve, { once: true }); ws.addEventListener('error', reject, { once: true }); });
-  return new CDP(ws);
+  const target = await created.json();
+  return openTarget(target.webSocketDebuggerUrl);
+}
+
+async function reconnectPage(browserWsUrl, url, ms = 20_000) {
+  const browser = new URL(browserWsUrl);
+  const wanted = new URL(url);
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://${browser.host}/json/list`);
+      if (response.ok) {
+        const targets = await response.json();
+        const target = Array.isArray(targets) ? targets.find((item) => {
+          if (!item || item.type !== 'page' || !item.webSocketDebuggerUrl || !item.url) return false;
+          try { return new URL(item.url).origin === wanted.origin; } catch (_error) { return false; }
+        }) : null;
+        if (target) return openTarget(target.webSocketDebuggerUrl);
+      }
+    } catch (_error) {}
+    await delay(150);
+  }
+  throw new Error('could not reconnect Chromium page after reload');
 }
 
 async function value(cdp, expression) {
@@ -189,17 +215,18 @@ async function main() {
   });
   const sockets = new Set(); server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-chromium-v2-'));
   const debugPort = await freePort();
   const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${debugPort}`, '--window-size=1440,900', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let cdp;
   try {
     console.log('[animatic-browser-v2] connect');
-    cdp = await connectPage(await waitDevtools(debugPort, chrome), `http://127.0.0.1:${server.address().port}/`);
+    const browserWsUrl = await waitDevtools(debugPort, chrome);
+    cdp = await connectPage(browserWsUrl, base);
     console.log('[animatic-browser-v2] boot');
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'Raindesk boot');
     console.log('[animatic-browser-v2] pacing');
-    // Desktop workspace opens Partner during async init; wait for the actual creative offer rather than clicking a hidden mobile handle/tab prematurely.
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'restored pacing card');
     if (!(await retryValue(cdp, `document.querySelector('.animatic-pacing-card')?.textContent?.includes('Restrained')`, 'pacing label'))) throw new Error('Restrained pacing card missing');
 
@@ -218,7 +245,10 @@ async function main() {
 
     console.log('[animatic-browser-v2] reload');
     await cdp.send('Page.reload', { ignoreCache: true });
+    try { cdp.ws.close(); } catch (_e) {}
+    cdp = null;
     await delay(1800);
+    cdp = await reconnectPage(browserWsUrl, base);
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'reload boot');
     console.log('[animatic-browser-v2] restored');
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'pacing card after reload');
