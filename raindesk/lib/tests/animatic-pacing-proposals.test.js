@@ -23,13 +23,15 @@ function solidPng(value) {
 
 function saveShot(shotId, value) {
   const asset = blobs.putPng(solidPng(value));
+  let current = null;
+  try { current = docs.readCurrent(shotId); } catch (_error) { current = null; }
   return docs.save(shotId, {
     schemaVersion: 1,
     shotId,
     canvas: { width: 8, height: 8 },
     activeLayerId: 'L1',
     layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
-  }, { reason: 'pacing proposal fixture' });
+  }, { baseRevisionId: current && current.revisionId || null, reason: 'pacing proposal fixture' });
 }
 
 function parent(id, shotId, revisionId, origin = 'partner_server') {
@@ -92,8 +94,10 @@ test('Partner timing is bound to server-owned revisions and persisted determinis
   const publicView = pacing.publicProposal(first.proposal);
   assert.equal(publicView.stale, false);
   assert.equal(publicView.totalFrames, 112);
-  assert.equal(publicView.totalSeconds, 112 / 24);
-  assert.equal(publicView.shots[0].durationSeconds, 78 / 24);
+  assert.deepEqual(publicView.totalTime, { num: 14, den: 3 });
+  assert.equal(publicView.totalSeconds, 4.667, 'rounded seconds are presentation only');
+  assert.deepEqual(publicView.shots[0].durationTime, { num: 13, den: 4 });
+  assert.equal(publicView.shots[0].durationSeconds, 3.25);
   assert.equal(JSON.stringify(publicView).includes(scratch), false, 'public proposal has no local path');
   assert.deepEqual(pacing.snapshotInput(first.proposal).shots, [
     { shotId: 'PACE_A', revisionId: a.revisionId, durationFrames: 78 },
@@ -155,6 +159,13 @@ test('closed-world validation rejects malformed, duplicate, missing and oversize
   assert.throws(
     () => pacing.create({ parentRequestId: p.id, proposal: creative([{ shotId: 'MISSING_ART', durationFrames: 12 }]) }),
     (error) => error.status === 409 && /must include the parent invocation shot/.test(error.message),
+  );
+  assert.throws(
+    () => pacing.create({ parentRequestId: p.id, proposal: creative([
+      { shotId: 'PACE_GUARD_A', durationFrames: 12 },
+      { shotId: 'MISSING_ART', durationFrames: 12 },
+    ]) }),
+    (error) => error.status === 409 && /no readable persisted artwork revision/.test(error.message),
   );
 });
 
