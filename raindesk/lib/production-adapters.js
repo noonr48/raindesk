@@ -5,8 +5,12 @@
  *
  * Recipes never name concrete tools. Capability Planner asks this registry
  * whether a concrete production path is registered for a stable capability.
- * Descriptors are data-only in v1: execution callbacks arrive in later slices.
+ * Descriptors remain data-only; bounded executors resolve their private runtime
+ * configuration through the same validated configuration function.
  */
+
+const fs = require('node:fs');
+const path = require('node:path');
 
 const ID_RE = /^[a-z][a-z0-9_]{1,95}$/;
 const AVAILABILITY = new Set(['available', 'degraded', 'disabled']);
@@ -43,8 +47,6 @@ function normalizeDescriptor(input = {}) {
   if (!invocationBoundary) throw new Error('adapter invocationBoundary must be server, surface, or external');
   const creativeMutation = Boolean(input.creativeMutation);
   const reviewRequired = Boolean(input.reviewRequired);
-  // Production adapters that change creative content must never silently
-  // become auto-accepting just because they are technically callable.
   if (creativeMutation && !reviewRequired) {
     throw new Error('creative-mutation adapters must require review');
   }
@@ -65,7 +67,7 @@ function normalizeDescriptor(input = {}) {
     outputContract: textList(input.outputContract, 64, 200),
     preserves: textList(input.preserves, 64, 240),
     sideEffects: textList(input.sideEffects, 32, 240),
-    implementationRef: text(input.implementationRef, 300) || null,
+    implementationRef: text(input.implementationRef, 4096) || null,
   });
 }
 
@@ -87,9 +89,6 @@ function publicDescriptor(adapter) {
     outputContract: [...adapter.outputContract],
     preserves: [...adapter.preserves],
     sideEffects: [...adapter.sideEffects],
-    // implementationRef intentionally NOT projected: it is a private internal
-    // implementation pointer (server-side executor resolution only). Public
-    // descriptors (register/list/get/resolve projections) never carry it.
   };
 }
 
@@ -125,9 +124,6 @@ function createRegistry(initial = []) {
     return publicDescriptor(byId.get(assertId(id, 'adapter id')) || null);
   }
 
-  // Deliberately server-internal. Partner/public projections never receive this
-  // value, but the later bounded execution bridge needs a truthful way to find
-  // the configured implementation without duplicating adapter configuration.
   function getImplementationRef(id) {
     const adapter = byId.get(assertId(id, 'adapter id')) || null;
     return adapter ? adapter.implementationRef : null;
@@ -157,9 +153,49 @@ const BUILTIN_ADAPTERS = Object.freeze([
   }),
 ]);
 
+function absoluteExecutable(value) {
+  const raw = text(value, 4096);
+  if (!raw || raw.includes('\0') || !path.isAbsolute(raw)) return null;
+  const resolved = path.resolve(raw);
+  try {
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) return null;
+    fs.accessSync(resolved, fs.constants.X_OK);
+    return resolved;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writableProjectRoot(value) {
+  const raw = text(value, 4096);
+  if (!raw || raw.includes('\0') || !path.isAbsolute(raw)) return null;
+  const resolved = path.resolve(raw);
+  try {
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) return null;
+    fs.accessSync(resolved, fs.constants.W_OK | fs.constants.X_OK);
+    return resolved;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function configuredAnimaticRuntime(env = process.env) {
+  const executable = absoluteExecutable(env && env.RAINDESK_ANIMATIC_EXECUTOR);
+  const projectRoot = writableProjectRoot(env && env.RAINDESK_ANIMATIC_PROJECT_ROOT);
+  const sourceRights = text(env && env.RAINDESK_SOURCE_RIGHTS, 500);
+  if (!executable || !projectRoot || !sourceRights) return null;
+  const requestedTimeout = Number(env && env.RAINDESK_ANIMATIC_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.max(5_000, Math.min(30 * 60_000, Math.floor(requestedTimeout)))
+    : 15 * 60_000;
+  return Object.freeze({ executable, projectRoot, sourceRights, timeoutMs });
+}
+
 function configuredAnimaticAdapter(env = process.env) {
-  const executor = text(env && env.RAINDESK_ANIMATIC_EXECUTOR, 300);
-  if (!executor) return null;
+  const runtime = configuredAnimaticRuntime(env);
+  if (!runtime) return null;
   return Object.freeze({
     id: 'animatic_timing_v1',
     capabilityId: 'animatic_timing',
@@ -175,7 +211,7 @@ function configuredAnimaticAdapter(env = process.env) {
     outputContract: ['ExecutionAttempt@0.2.0', 'SequenceCandidateManifest@0.2.0', 'animatic_media_artifact'],
     preserves: ['source_snapshot_immutability', 'accepted_artwork', 'review_state_outside_candidate_manifest'],
     sideEffects: ['runs_external_video_executor', 'creates_reviewable_candidate_artifacts'],
-    implementationRef: `command:${executor}`,
+    implementationRef: `exec:${runtime.executable}`,
   });
 }
 
@@ -195,5 +231,6 @@ const defaultRegistry = createDefaultRegistry();
 module.exports = {
   ID_RE, AVAILABILITY, BOUNDARIES, BUILTIN_ADAPTERS,
   normalizeDescriptor, publicDescriptor, createRegistry,
+  absoluteExecutable, writableProjectRoot, configuredAnimaticRuntime,
   configuredAnimaticAdapter, builtinAdapters, createDefaultRegistry, defaultRegistry,
 };
