@@ -8,7 +8,7 @@
  * registry, artwork revision identity comes from ShotDocument rather than
  * browser assertions, actionable Partner requests are durably registered
  * before browser exposure, and the animatic path binds pacing context,
- * proposals, preparation, execution and review to server-owned authority.
+ * proposals, preview execution and review to server-owned authority.
  */
 
 const core = require('./server-core');
@@ -18,6 +18,10 @@ const shotDocuments = require('./lib/shot-documents');
 const animaticPreparation = require('./lib/animatic-preparation');
 const animaticPacingContext = require('./lib/animatic-pacing-context');
 const animaticPacing = require('./lib/animatic-pacing-proposals');
+const animaticPacingAdvisor = require('./lib/animatic-pacing-advisor');
+const animaticPartnerPacing = require('./lib/animatic-partner-pacing');
+const animaticPacingIndex = require('./lib/animatic-pacing-index');
+const animaticPreview = require('./lib/animatic-preview');
 const animaticExecutor = require('./lib/animatic-executor');
 const animaticExecutionStore = require('./lib/animatic-execution-store');
 const animaticCandidates = require('./lib/animatic-candidates');
@@ -73,7 +77,7 @@ function persistInvocationProposals(result) {
     return { ...result, invocationRequests: [], invocationPersistenceError: true };
   }
 }
-function withAuthoritativeContext(basePartner) {
+function withAuthoritativeContext(basePartner, { pacingAdvisor = null, animaticEnv = process.env } = {}) {
   if (!basePartner || typeof basePartner.turn !== 'function') throw new Error('partnerImpl.turn is required');
   return {
     ...basePartner,
@@ -84,7 +88,12 @@ function withAuthoritativeContext(basePartner) {
         try { context.characterAnchors = characters.contextForShot(shotId); } catch (_e) { /* keep conversation live */ }
       }
       context.artRevisionId = authoritativeArtRevision(context, shotId);
-      return persistInvocationProposals(await basePartner.turn({ ...input, context }));
+      const persisted = persistInvocationProposals(await basePartner.turn({ ...input, context }));
+      return animaticPartnerPacing.enrichTurn(persisted, {
+        input: { ...input, context },
+        env: animaticEnv,
+        advisor: pacingAdvisor,
+      });
     },
   };
 }
@@ -115,8 +124,9 @@ function animaticRoute(pathname) {
   return pathname === '/api/animatic/pacing-context' ||
     new RegExp(`^/api/animatic/pacing-context/${DIGEST_SEGMENT}$`).test(pathname) ||
     pathname === '/api/animatic/pacing-proposal' ||
+    pathname === '/api/animatic/pacing-proposals' ||
     new RegExp(`^/api/animatic/pacing-proposal/${DIGEST_SEGMENT}$`).test(pathname) ||
-    pathname === '/api/animatic/prepare' || pathname === '/api/animatic/execute' ||
+    pathname === '/api/animatic/prepare' || pathname === '/api/animatic/preview' || pathname === '/api/animatic/execute' ||
     pathname === '/api/animatic/candidates' || pathname === '/api/animatic/review' ||
     /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(pathname) ||
     new RegExp(`^/api/animatic/execution/${SAFE_ID_SEGMENT}$`).test(pathname) ||
@@ -208,6 +218,13 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
     try { created = animaticPacing.createFromContext({ contextDigest: body.contextDigest, proposal: body.proposal }); } catch (error) { throw asBadRequest(error); }
     return core.sendJson(res, created.created ? 201 : 200, { ok: true, created: created.created, proposal: animaticPacing.publicProposal(created.proposal) });
   }
+  if (req.method === 'GET' && url.pathname === '/api/animatic/pacing-proposals') {
+    const shotId = String(url.searchParams.get('shotId') || '').trim() || null;
+    const sequenceId = String(url.searchParams.get('sequenceId') || '').trim() || null;
+    const contextDigest = String(url.searchParams.get('contextDigest') || '').trim() || null;
+    const limit = Number(url.searchParams.get('limit') || 50);
+    return core.sendJson(res, 200, { ok: true, proposals: animaticPacingIndex.list({ shotId, sequenceId, contextDigest, limit }) });
+  }
   const pacingMatch = url.pathname.match(/^\/api\/animatic\/pacing-proposal\/([a-f0-9]{64})$/);
   if (req.method === 'GET' && pacingMatch) {
     const proposal = animaticPacing.readByDigest(pacingMatch[1]);
@@ -224,6 +241,24 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
     try { prepared = animaticPreparation.prepare({ parentRequestId: proposal.parentRequestId, snapshotInput: animaticPacing.snapshotInput(proposal), sourceRights }); }
     catch (error) { throw asBadRequest(error); }
     return core.sendJson(res, prepared.created ? 201 : 200, { ok: true, proposal: animaticPacing.publicProposal(proposal), ...prepared });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/animatic/preview') {
+    if (!sourceRights) throw new HttpError(503, 'RAINDESK_SOURCE_RIGHTS is required before animatic preview');
+    const body = await readJson(req, 64 * 1024);
+    if (!isObject(body) || Object.keys(body).length !== 1 || typeof body.proposalDigest !== 'string') throw new HttpError(400, 'animatic preview accepts only one stored proposalDigest');
+    let result;
+    try { result = await animaticPreview.preview({ proposalDigest: body.proposalDigest, sourceRights, env: animaticEnv }); }
+    catch (error) {
+      if (error instanceof HttpError && error.execution) return core.sendJson(res, error.status, { error: error.message, execution: error.execution });
+      throw error;
+    }
+    return core.sendJson(res, result.execution && result.execution.status === 'running' ? 202 : 200, {
+      ok: true,
+      proposal: result.proposal,
+      execution: result.execution,
+      candidate: result.candidate,
+      retried: result.retried,
+    });
   }
   if (req.method === 'POST' && url.pathname === '/api/animatic/execute') {
     const body = await readJson(req, 64 * 1024);
@@ -292,9 +327,12 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
 function createServer(deps = {}) {
   const agentImpl = deps.agentImpl || deps.agent || agent;
   const basePartner = deps.partnerImpl || partner.createPartner({ agentImpl });
-  const composedPartner = withAuthoritativeContext(basePartner);
-  const authToken = deps.authToken || null;
   const animaticEnv = deps.animaticEnv || process.env;
+  const pacingAdvisor = Object.prototype.hasOwnProperty.call(deps, 'pacingAdvisor')
+    ? deps.pacingAdvisor
+    : (deps.partnerImpl ? null : animaticPacingAdvisor.createAdvisor({ agentImpl }));
+  const composedPartner = withAuthoritativeContext(basePartner, { pacingAdvisor, animaticEnv });
+  const authToken = deps.authToken || null;
   const sourceRights = deps.sourceRights || animaticEnv.RAINDESK_SOURCE_RIGHTS || null;
   const server = core.createServer({ ...deps, agentImpl, partnerImpl: composedPartner });
   const inherited = server.listeners('request')[0];
