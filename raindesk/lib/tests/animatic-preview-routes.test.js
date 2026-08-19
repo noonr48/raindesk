@@ -71,27 +71,29 @@ function solidPng(value = 30) {
 }
 
 function seedProposal() {
+  const suffix = crypto.randomBytes(4).toString('hex');
+  const shotId = `PREVIEW_${suffix}`;
+  const parentId = `invoke_preview_${suffix}`;
   const asset = blobs.putPng(solidPng());
-  const revision = docs.save('PREVIEW_A', {
-    schemaVersion: 1, shotId: 'PREVIEW_A', canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
+  const revision = docs.save(shotId, {
+    schemaVersion: 1, shotId, canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
     layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
   }, { reason: 'preview route fixture' });
-  direction.ensureLegacyShot('PREVIEW_A', { title: 'Preview A', beat: 'hold, then cut' });
-  const parentId = 'invoke_preview_parent';
+  direction.ensureLegacyShot(shotId, { title: `Preview ${suffix}`, beat: 'hold, then cut' });
   ledger.record({
-    id: parentId, requestId: parentId, origin: 'partner_server', turnId: 'turn_preview', shotId: 'PREVIEW_A',
+    id: parentId, requestId: parentId, origin: 'partner_server', turnId: `turn_${suffix}`, shotId,
     adapterId: 'animatic_timing_v1', capabilityId: 'animatic_timing', stageId: 'animatic_pass:2:animatic_timing', recipeId: 'animatic_pass',
     invocationBoundary: 'external', disposition: 'proposal', reviewRequired: true, creativeMutation: true,
-    scope: { shotId: 'PREVIEW_A', artRevisionId: revision.revisionId, selectionFingerprint: null, selectionStable: null },
+    scope: { shotId, artRevisionId: revision.revisionId, selectionFingerprint: null, selectionStable: null },
     requiredEvidence: ['shot_scope'], requiredInputs: ['SequenceSourceSnapshot@0.2.0'], expectedOutputs: ['SequenceCandidateManifest@0.2.0'],
     preserves: ['accepted_sequence_until_review'], sideEffects: ['creates_animatic_candidate'], status: 'proposed',
   });
   const context = pacingContexts.create({ parentRequestId: parentId, env: { RAINDESK_ANIMATIC_FPS_NUM: '24', RAINDESK_ANIMATIC_FPS_DEN: '1' } }).context;
   const proposal = pacing.createFromContext({
     contextDigest: context.contextDigest,
-    proposal: { label: 'Restrained', rationale: 'Let it land.', fidelity: 'draft', shots: [{ shotId: 'PREVIEW_A', durationFrames: 36, note: 'hold then cut' }] },
+    proposal: { label: 'Restrained', rationale: 'Let it land.', fidelity: 'draft', shots: [{ shotId, durationFrames: 36, note: 'hold then cut' }] },
   }).proposal;
-  return { proposal, revision };
+  return { proposal, revision, shotId };
 }
 
 async function withServer(t, fn) {
@@ -114,7 +116,7 @@ async function withServer(t, fn) {
 }
 
 test('Preview this approves exact proposal, renders one immutable candidate, and repeat is idempotent', async (t) => {
-  const { proposal } = seedProposal();
+  const { proposal, shotId } = seedProposal();
   await withServer(t, async (base) => {
     let res = await fetch(`${base}/api/animatic/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposalDigest: proposal.proposalDigest }),
@@ -129,7 +131,7 @@ test('Preview this approves exact proposal, renders one immutable candidate, and
     assert.equal(body.candidate.candidate.review_state, undefined);
     assert.equal(review.list({ candidateId: 'cand-preview' }).length, 0, 'preview never auto-keeps a candidate');
 
-    const preparedRows = ledger.list({ shotId: 'PREVIEW_A', limit: 100 }).filter((row) => row.origin === 'server_prepared');
+    const preparedRows = ledger.list({ shotId, limit: 100 }).filter((row) => row.origin === 'server_prepared');
     assert.equal(preparedRows.length, 1);
     assert.equal(preparedRows[0].status, 'handed_off');
 
@@ -151,10 +153,10 @@ test('Preview this approves exact proposal, renders one immutable candidate, and
 });
 
 test('stale stored proposal cannot be previewed after artwork changes', async (t) => {
-  const { proposal, revision } = seedProposal();
+  const { proposal, revision, shotId } = seedProposal();
   const asset = blobs.putPng(solidPng(100));
-  docs.save('PREVIEW_A', {
-    schemaVersion: 1, shotId: 'PREVIEW_A', canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
+  docs.save(shotId, {
+    schemaVersion: 1, shotId, canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
     layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
   }, { baseRevisionId: revision.revisionId, reason: 'make old pacing stale' });
   await withServer(t, async (base) => {
