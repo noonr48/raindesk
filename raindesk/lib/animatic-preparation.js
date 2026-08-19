@@ -27,6 +27,9 @@ function parentProposal(id) {
   if (!key) throw new HttpError(400, 'parentRequestId is required');
   const entry = ledger.find(ledger.read(), key);
   if (!entry) throw new HttpError(404, 'no such server-minted parent invocation');
+  if (entry.origin !== 'partner_server') {
+    throw new HttpError(409, 'parent invocation was not minted by the server-side Partner boundary');
+  }
   if (entry.adapterId !== ADAPTER_ID || entry.capabilityId !== CAPABILITY_ID ||
       entry.invocationBoundary !== 'external' || entry.disposition !== 'proposal' ||
       entry.reviewRequired !== true || entry.creativeMutation !== true) {
@@ -70,6 +73,7 @@ function prepare({ parentRequestId, snapshotInput, sourceRights } = {}) {
   const recorded = ledger.record({
     id,
     requestId: id,
+    origin: 'server_prepared',
     parentRequestId: parent.id,
     sourceSnapshotDigest: snapshot.snapshot_digest,
     turnId: parent.turnId,
