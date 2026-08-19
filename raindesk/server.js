@@ -7,8 +7,8 @@
  * creative authority is composed here: character identity comes from the
  * registry, artwork revision identity comes from ShotDocument rather than
  * browser assertions, actionable Partner requests are durably registered
- * before browser exposure, and the animatic path binds pacing/preparation/
- * execution to exact immutable snapshots and locally mirrored candidates.
+ * before browser exposure, and the animatic path binds pacing context,
+ * proposals, preparation and execution to immutable server-owned authority.
  */
 
 const core = require('./server-core');
@@ -16,6 +16,7 @@ const characters = require('./lib/characters');
 const invocationLedger = require('./lib/partner-invocation-ledger');
 const shotDocuments = require('./lib/shot-documents');
 const animaticPreparation = require('./lib/animatic-preparation');
+const animaticPacingContext = require('./lib/animatic-pacing-context');
 const animaticPacing = require('./lib/animatic-pacing-proposals');
 const animaticExecutor = require('./lib/animatic-executor');
 const animaticExecutionStore = require('./lib/animatic-execution-store');
@@ -85,9 +86,7 @@ function persistInvocationProposals(result) {
 }
 
 function withAuthoritativeContext(basePartner) {
-  if (!basePartner || typeof basePartner.turn !== 'function') {
-    throw new Error('partnerImpl.turn is required');
-  }
+  if (!basePartner || typeof basePartner.turn !== 'function') throw new Error('partnerImpl.turn is required');
   return {
     ...basePartner,
     async turn(input = {}) {
@@ -142,17 +141,13 @@ async function readJson(req, limit = CHARACTER_BODY_LIMIT) {
 }
 
 function characterRoute(pathname) {
-  return pathname === '/api/characters' ||
-    pathname === '/api/character' ||
-    pathname === '/api/character/shot-binding';
+  return pathname === '/api/characters' || pathname === '/api/character' || pathname === '/api/character/shot-binding';
 }
-
-function invocationRoute(pathname) {
-  return pathname === '/api/invocations';
-}
-
+function invocationRoute(pathname) { return pathname === '/api/invocations'; }
 function animaticRoute(pathname) {
-  return pathname === '/api/animatic/pacing-proposal' ||
+  return pathname === '/api/animatic/pacing-context' ||
+    new RegExp(`^/api/animatic/pacing-context/${DIGEST_SEGMENT}$`).test(pathname) ||
+    pathname === '/api/animatic/pacing-proposal' ||
     new RegExp(`^/api/animatic/pacing-proposal/${DIGEST_SEGMENT}$`).test(pathname) ||
     pathname === '/api/animatic/prepare' ||
     pathname === '/api/animatic/execute' ||
@@ -170,18 +165,13 @@ function asBadRequest(error) {
 async function handleCharacterApi(req, res, url) {
   const route = url.pathname;
   const method = req.method;
-
-  if (method === 'GET' && route === '/api/characters') {
-    return core.sendJson(res, 200, { characters: characters.list() });
-  }
-
+  if (method === 'GET' && route === '/api/characters') return core.sendJson(res, 200, { characters: characters.list() });
   if (method === 'POST' && route === '/api/character') {
     const body = await readJson(req);
     let character;
     try { character = characters.upsert(body || {}); } catch (error) { throw asBadRequest(error); }
     return core.sendJson(res, 200, { ok: true, character });
   }
-
   if (route === '/api/character/shot-binding') {
     if (method === 'GET') {
       const shotId = String(url.searchParams.get('shotId') || '').trim();
@@ -190,77 +180,81 @@ async function handleCharacterApi(req, res, url) {
     }
     if (method === 'POST') {
       const body = await readJson(req, 256 * 1024);
-      if (!body || typeof body.shotId !== 'string' || !body.shotId.trim()) {
-        throw new HttpError(400, 'shotId is required');
-      }
+      if (!body || typeof body.shotId !== 'string' || !body.shotId.trim()) throw new HttpError(400, 'shotId is required');
       let binding;
       try { binding = characters.bindShot(body.shotId.trim(), body.characterIds); } catch (error) { throw asBadRequest(error); }
       return core.sendJson(res, 200, binding);
     }
   }
-
   throw new HttpError(404, 'not found');
 }
 
 async function handleInvocationApi(req, res, url) {
-  const route = url.pathname;
-  const method = req.method;
-
-  if (route === '/api/invocations') {
-    if (method === 'GET') {
-      const shotId = String(url.searchParams.get('shotId') || '').trim() || null;
-      const status = String(url.searchParams.get('status') || '').trim() || null;
-      return core.sendJson(res, 200, { ok: true, invocations: invocationLedger.list({ shotId, status }) });
-    }
-    if (method === 'POST') {
-      const body = await readJson(req, 256 * 1024);
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        throw new HttpError(400, 'invocation record is required');
-      }
-      let recorded;
-      try {
-        recorded = invocationLedger.record({ ...body, origin: 'http_legacy', status: 'proposed' });
-      } catch (error) {
-        throw asBadRequest(error);
-      }
-      if (body.supersede && recorded.entry.shotId) {
-        invocationLedger.markStaleSuperseded({
-          shotId: recorded.entry.shotId,
-          requestId: recorded.entry.requestId || recorded.entry.id,
-          adapterId: recorded.entry.adapterId,
-        });
-      }
-      return core.sendJson(res, 201, { ok: true, invocation: recorded.entry, created: recorded.created });
-    }
-    if (method === 'PATCH') {
-      const body = await readJson(req, 64 * 1024);
-      const id = body && typeof body.id === 'string' ? body.id.trim() : '';
-      if (!id) throw new HttpError(400, 'id is required');
-      const status = body && typeof body.status === 'string' ? body.status.trim() : '';
-      if (!invocationLedger.STATUSES.has(status)) throw new HttpError(400, 'unknown invocation status');
-      const entry = invocationLedger.setStatus(id, status);
-      if (!entry) throw new HttpError(404, 'no such invocation');
-      return core.sendJson(res, 200, { ok: true, invocation: entry });
-    }
+  if (url.pathname !== '/api/invocations') throw new HttpError(404, 'not found');
+  if (req.method === 'GET') {
+    const shotId = String(url.searchParams.get('shotId') || '').trim() || null;
+    const status = String(url.searchParams.get('status') || '').trim() || null;
+    return core.sendJson(res, 200, { ok: true, invocations: invocationLedger.list({ shotId, status }) });
   }
-
+  if (req.method === 'POST') {
+    const body = await readJson(req, 256 * 1024);
+    if (!isObject(body)) throw new HttpError(400, 'invocation record is required');
+    let recorded;
+    try { recorded = invocationLedger.record({ ...body, origin: 'http_legacy', status: 'proposed' }); }
+    catch (error) { throw asBadRequest(error); }
+    if (body.supersede && recorded.entry.shotId) {
+      invocationLedger.markStaleSuperseded({
+        shotId: recorded.entry.shotId,
+        requestId: recorded.entry.requestId || recorded.entry.id,
+        adapterId: recorded.entry.adapterId,
+      });
+    }
+    return core.sendJson(res, 201, { ok: true, invocation: recorded.entry, created: recorded.created });
+  }
+  if (req.method === 'PATCH') {
+    const body = await readJson(req, 64 * 1024);
+    const id = body && typeof body.id === 'string' ? body.id.trim() : '';
+    if (!id) throw new HttpError(400, 'id is required');
+    const status = body && typeof body.status === 'string' ? body.status.trim() : '';
+    if (!invocationLedger.STATUSES.has(status)) throw new HttpError(400, 'unknown invocation status');
+    const entry = invocationLedger.setStatus(id, status);
+    if (!entry) throw new HttpError(404, 'no such invocation');
+    return core.sendJson(res, 200, { ok: true, invocation: entry });
+  }
   throw new HttpError(404, 'not found');
 }
 
 async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticEnv = process.env } = {}) {
+  if (req.method === 'POST' && url.pathname === '/api/animatic/pacing-context') {
+    const body = await readJson(req, 64 * 1024);
+    if (!isObject(body) || Object.keys(body).length !== 1 || typeof body.parentRequestId !== 'string') {
+      throw new HttpError(400, 'pacing context accepts only parentRequestId');
+    }
+    let created;
+    try { created = animaticPacingContext.create({ parentRequestId: body.parentRequestId, env: animaticEnv }); }
+    catch (error) { throw asBadRequest(error); }
+    return core.sendJson(res, created.created ? 201 : 200, {
+      ok: true, created: created.created, context: animaticPacingContext.publicContext(created.context),
+    });
+  }
+
+  const contextMatch = url.pathname.match(/^\/api\/animatic\/pacing-context\/([a-f0-9]{64})$/);
+  if (req.method === 'GET' && contextMatch) {
+    const context = animaticPacingContext.readByDigest(contextMatch[1]);
+    return core.sendJson(res, 200, { ok: true, context: animaticPacingContext.publicContext(context) });
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/animatic/pacing-proposal') {
     const body = await readJson(req, 512 * 1024);
-    if (!isObject(body) || !isObject(body.proposal)) throw new HttpError(400, 'pacing proposal request is required');
-    let created;
-    try {
-      created = animaticPacing.create({ parentRequestId: body.parentRequestId, proposal: body.proposal });
-    } catch (error) {
-      throw asBadRequest(error);
+    if (!isObject(body) || !isObject(body.proposal) || typeof body.contextDigest !== 'string' ||
+        Object.keys(body).some((key) => !['contextDigest', 'proposal'].includes(key))) {
+      throw new HttpError(400, 'pacing proposal requires one stored contextDigest and creative proposal');
     }
+    let created;
+    try { created = animaticPacing.createFromContext({ contextDigest: body.contextDigest, proposal: body.proposal }); }
+    catch (error) { throw asBadRequest(error); }
     return core.sendJson(res, created.created ? 201 : 200, {
-      ok: true,
-      created: created.created,
-      proposal: animaticPacing.publicProposal(created.proposal),
+      ok: true, created: created.created, proposal: animaticPacing.publicProposal(created.proposal),
     });
   }
 
@@ -273,17 +267,14 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
   if (req.method === 'POST' && url.pathname === '/api/animatic/prepare') {
     if (!sourceRights) throw new HttpError(503, 'RAINDESK_SOURCE_RIGHTS is required before animatic preparation');
     const body = await readJson(req, 64 * 1024);
-    if (!isObject(body)) throw new HttpError(400, 'animatic preparation request is required');
-    const keys = Object.keys(body);
-    if (keys.length !== 1 || keys[0] !== 'proposalDigest') {
+    if (!isObject(body) || Object.keys(body).length !== 1 || typeof body.proposalDigest !== 'string') {
       throw new HttpError(400, 'animatic preparation accepts only one stored proposalDigest');
     }
-    const digest = String(body.proposalDigest || '').trim();
     let proposal;
-    try { proposal = animaticPacing.readByDigest(digest); }
+    try { proposal = animaticPacing.readByDigest(body.proposalDigest.trim()); }
     catch (error) { throw asBadRequest(error); }
     const fresh = animaticPacing.freshness(proposal);
-    if (fresh.stale) throw new HttpError(409, 'pacing proposal is stale because source artwork changed');
+    if (fresh.stale) throw new HttpError(409, 'pacing proposal is stale because its source artwork or direction changed');
     let prepared;
     try {
       prepared = animaticPreparation.prepare({
@@ -291,13 +282,9 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
         snapshotInput: animaticPacing.snapshotInput(proposal),
         sourceRights,
       });
-    } catch (error) {
-      throw asBadRequest(error);
-    }
+    } catch (error) { throw asBadRequest(error); }
     return core.sendJson(res, prepared.created ? 201 : 200, {
-      ok: true,
-      proposal: animaticPacing.publicProposal(proposal),
-      ...prepared,
+      ok: true, proposal: animaticPacing.publicProposal(proposal), ...prepared,
     });
   }
 
@@ -309,9 +296,7 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
       const result = await animaticExecutor.execute(invocationId, { retry: body.retry === true, env: animaticEnv });
       return core.sendJson(res, result.execution.status === 'running' ? 202 : 200, { ok: true, ...result });
     } catch (error) {
-      if (error instanceof HttpError && error.execution) {
-        return core.sendJson(res, error.status, { error: error.message, execution: error.execution });
-      }
+      if (error instanceof HttpError && error.execution) return core.sendJson(res, error.status, { error: error.message, execution: error.execution });
       throw error;
     }
   }
@@ -340,9 +325,7 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
     if (req.method === 'HEAD') {
       const item = videoArtifacts.stat(sha);
       res.writeHead(200, {
-        'Content-Type': 'video/mp4',
-        'Content-Length': item.bytes,
-        'Accept-Ranges': 'bytes',
+        'Content-Type': 'video/mp4', 'Content-Length': item.bytes, 'Accept-Ranges': 'bytes',
         'Cache-Control': 'private, max-age=31536000, immutable',
       });
       res.end();
@@ -381,10 +364,7 @@ function createServer(deps = {}) {
     else if (invocationRoute(url.pathname)) promise = handleInvocationApi(req, res, url);
     else promise = handleCharacterApi(req, res, url);
     return Promise.resolve(promise).catch((error) => {
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
+      if (res.headersSent) { res.destroy(); return; }
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof HttpError ? error.message : 'internal error';
       if (!(error instanceof HttpError)) console.error('[raindesk] composed route error:', error); // eslint-disable-line no-console
@@ -412,10 +392,7 @@ function start({
       core.validateBindOptions({ host, authToken, allowWildcard });
       jobStore.recoverInterrupted();
       animaticExecutionStore.recoverInterrupted();
-    } catch (error) {
-      reject(error);
-      return;
-    }
+    } catch (error) { reject(error); return; }
     const server = createServer({ authToken: core.isLoopbackHost(host) ? null : authToken });
     server.once('error', reject);
     server.listen(port, host, () => {
@@ -435,16 +412,8 @@ if (require.main === module) {
 
 module.exports = {
   ...core,
-  createServer,
-  start,
-  resolveCharacterShotId,
-  resolveArtworkShotId,
-  authoritativeArtRevision,
-  persistInvocationProposals,
-  withAuthoritativeContext,
-  withCharacterContext,
-  handleCharacterApi,
-  handleInvocationApi,
-  handleAnimaticApi,
-  animaticRoute,
+  createServer, start,
+  resolveCharacterShotId, resolveArtworkShotId, authoritativeArtRevision,
+  persistInvocationProposals, withAuthoritativeContext, withCharacterContext,
+  handleCharacterApi, handleInvocationApi, handleAnimaticApi, animaticRoute,
 };
