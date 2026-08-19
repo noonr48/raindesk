@@ -403,9 +403,21 @@
         // retargets click/dblclick to the header, which would break rename's
         // dblclick on the title. A stationary press never captures; a real drag
         // captures on its first >3px move and keeps the drag robust.
+        // The threshold listeners live at DOCUMENT capture level: a long steep
+        // drag can leave the head's own rect on its first interpolated step
+        // (head-only listeners then never fire and the gesture dead-ends —
+        // proven live on the creative-sheets put-away drag).
         let captured = false;
         const moved = (ev) => Math.abs(ev.clientX - start.x) > 3 || Math.abs(ev.clientY - start.y) > 3;
+        const teardown = () => {
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          document.removeEventListener('pointercancel', up, true);
+        };
         const move = (ev) => {
+          // Severed-gesture guard: a hover (buttons===0) after a press that
+          // never received up/cancel must not ghost-drag — tear down and stop.
+          if (!ev.buttons) { teardown(); return; }
           if (!captured) {
             if (!moved(ev)) return;
             captured = true;
@@ -417,16 +429,19 @@
           renderObject(obj);
         };
         const up = async (ev) => {
+          teardown();
           try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
-          head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up);
-          // A click is not a drag: without movement there is nothing to persist,
-          // and the re-render would replace the title between the clicks of a
-          // rename dblclick (bc77b18's reservation narrowed to mid-rename only).
-          if (!moved(ev)) return;
+          // A click is not a drag: nothing persisted without a real drag
+          // (captured), and the re-render would replace the title between
+          // the clicks of a rename dblclick. A stale up from a severed
+          // gesture cannot collapse or persist from unrelated coordinates.
+          if (!captured || !moved(ev)) return;
           if (overTabs(ev.clientX, ev.clientY)) { obj.visible = false; obj.collapsed = true; }
           await persistObject(obj); render(); renderTabs(); onContextChange();
         };
-        head.addEventListener('pointermove', move); head.addEventListener('pointerup', up);
+        document.addEventListener('pointermove', move, true);
+        document.addEventListener('pointerup', up, true);
+        document.addEventListener('pointercancel', up, true);
       });
     }
     function installResize(el, id) {
