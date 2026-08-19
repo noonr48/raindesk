@@ -22,7 +22,7 @@ const DATA_DIR = process.env.RAINDESK_DATA_DIR
 const PROPOSAL_DIR = path.join(DATA_DIR, 'animatic', 'pacing-proposals');
 const SCHEMA_VERSION = 1;
 const MAX_SHOTS = 256;
-const MAX_DURATION_FRAMES = 24 * 60 * 60 * 4; // four hours at 24 fps equivalent ceiling.
+const MAX_DURATION_FRAMES = 24 * 60 * 60 * 4;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 const FIDELITIES = new Set(['draft', 'preview']);
 const TOP_KEYS = new Set(['projectId', 'sequenceId', 'fpsNum', 'fpsDen', 'fidelity', 'label', 'rationale', 'shots']);
@@ -67,6 +67,24 @@ function positiveInteger(value, what, max) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0 || number > max) throw new HttpError(400, `${what} must be a positive bounded integer`);
   return number;
+}
+
+function gcd(a, b) {
+  let x = Math.abs(Number(a));
+  let y = Math.abs(Number(b));
+  while (y) {
+    const next = x % y;
+    x = y;
+    y = next;
+  }
+  return x || 1;
+}
+
+function timeValue(frames, fpsNum, fpsDen) {
+  const numerator = frames * fpsDen;
+  const denominator = fpsNum;
+  const divisor = gcd(numerator, denominator);
+  return { num: numerator / divisor, den: denominator / divisor };
 }
 
 function parentInvocation(parentRequestId) {
@@ -125,9 +143,11 @@ function currentRevision(shotId) {
 }
 
 function bindSourceRevisions(parent, creative) {
+  if (!creative.shots.some((item) => item.shotId === parent.shotId)) {
+    throw new HttpError(409, 'pacing proposal must include the parent invocation shot');
+  }
   const shots = creative.shots.map((item) => ({ ...item, revisionId: currentRevision(item.shotId) }));
   const active = shots.find((item) => item.shotId === parent.shotId);
-  if (!active) throw new HttpError(409, 'pacing proposal must include the parent invocation shot');
   if (active.revisionId !== parent.scope.artRevisionId) {
     throw new HttpError(409, 'parent shot artwork changed after the Partner proposal; ask for a fresh pacing proposal');
   }
@@ -262,10 +282,12 @@ function publicProposal(proposal) {
       shotId: item.shotId,
       revisionId: item.revisionId,
       durationFrames: item.durationFrames,
+      durationTime: timeValue(item.durationFrames, proposal.fpsNum, proposal.fpsDen),
       durationSeconds: Math.round(item.durationFrames * frameSeconds * 1000) / 1000,
       note: item.note,
     })),
     totalFrames,
+    totalTime: timeValue(totalFrames, proposal.fpsNum, proposal.fpsDen),
     totalSeconds: Math.round(totalFrames * frameSeconds * 1000) / 1000,
     stale: fresh.stale,
     changedShots: fresh.changedShots,
@@ -277,7 +299,7 @@ module.exports = {
   DATA_DIR, PROPOSAL_DIR, SCHEMA_VERSION, MAX_SHOTS, MAX_DURATION_FRAMES,
   ID_RE, FIDELITIES, TOP_KEYS, SHOT_KEYS,
   canonicalValue, canonicalJson, sha256, assertClosedObject, assertId,
-  positiveInteger, parentInvocation, normalizeCreative, currentRevision,
+  positiveInteger, gcd, timeValue, parentInvocation, normalizeCreative, currentRevision,
   bindSourceRevisions, digestMaterial, proposalPath, persist, create,
   readByDigest, freshness, snapshotInput, publicProposal,
 };
