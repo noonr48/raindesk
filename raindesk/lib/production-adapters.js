@@ -125,8 +125,16 @@ function createRegistry(initial = []) {
     return publicDescriptor(byId.get(assertId(id, 'adapter id')) || null);
   }
 
+  // Deliberately server-internal. Partner/public projections never receive this
+  // value, but the later bounded execution bridge needs a truthful way to find
+  // the configured implementation without duplicating adapter configuration.
+  function getImplementationRef(id) {
+    const adapter = byId.get(assertId(id, 'adapter id')) || null;
+    return adapter ? adapter.implementationRef : null;
+  }
+
   for (const descriptor of initial) register(descriptor);
-  return { register, unregister, list, resolve, get };
+  return { register, unregister, list, resolve, get, getImplementationRef };
 }
 
 const BUILTIN_ADAPTERS = Object.freeze([
@@ -149,9 +157,43 @@ const BUILTIN_ADAPTERS = Object.freeze([
   }),
 ]);
 
-const defaultRegistry = createRegistry(BUILTIN_ADAPTERS);
+function configuredAnimaticAdapter(env = process.env) {
+  const executor = text(env && env.RAINDESK_ANIMATIC_EXECUTOR, 300);
+  if (!executor) return null;
+  return Object.freeze({
+    id: 'animatic_timing_v1',
+    capabilityId: 'animatic_timing',
+    label: 'Video-skill animatic timing',
+    description: 'Configured external slice-C executor that compiles an immutable SequenceSourceSnapshot into a reviewable animatic candidate.',
+    availability: 'available',
+    invocationBoundary: 'external',
+    priority: 100,
+    creativeMutation: true,
+    reviewRequired: true,
+    requiredEvidence: ['shot_scope'],
+    inputContract: ['SequenceSourceSnapshot@0.2.0', 'adapter_id=animatic_timing_v1', 'adapter_contract_version=0.2.0', 'fidelity=draft|preview'],
+    outputContract: ['ExecutionAttempt@0.2.0', 'SequenceCandidateManifest@0.2.0', 'animatic_media_artifact'],
+    preserves: ['source_snapshot_immutability', 'accepted_artwork', 'review_state_outside_candidate_manifest'],
+    sideEffects: ['runs_external_video_executor', 'creates_reviewable_candidate_artifacts'],
+    implementationRef: `command:${executor}`,
+  });
+}
+
+function builtinAdapters(env = process.env) {
+  const out = [...BUILTIN_ADAPTERS];
+  const animatic = configuredAnimaticAdapter(env);
+  if (animatic) out.push(animatic);
+  return out;
+}
+
+function createDefaultRegistry(env = process.env) {
+  return createRegistry(builtinAdapters(env));
+}
+
+const defaultRegistry = createDefaultRegistry();
 
 module.exports = {
   ID_RE, AVAILABILITY, BOUNDARIES, BUILTIN_ADAPTERS,
-  normalizeDescriptor, publicDescriptor, createRegistry, defaultRegistry,
+  normalizeDescriptor, publicDescriptor, createRegistry,
+  configuredAnimaticAdapter, builtinAdapters, createDefaultRegistry, defaultRegistry,
 };
