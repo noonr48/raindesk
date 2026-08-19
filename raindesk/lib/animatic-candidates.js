@@ -185,6 +185,30 @@ function read(candidateId) {
   }
 }
 
+function list({ sequenceId = null, projectId = null, limit = 100 } = {}) {
+  let names;
+  try { names = fs.readdirSync(CANDIDATE_DIR); }
+  catch (error) {
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+  const rows = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -5);
+    if (!ID_RE.test(id)) continue;
+    let record;
+    try { record = read(id); }
+    catch (_error) { continue; }
+    if (sequenceId !== null && (record.candidate.sequence_id || null) !== sequenceId) continue;
+    if (projectId !== null && (record.candidate.project_id || null) !== projectId) continue;
+    rows.push(record);
+  }
+  rows.sort((a, b) => String(a.importedAt || '').localeCompare(String(b.importedAt || '')) ||
+    String(a.candidate.candidate_id).localeCompare(String(b.candidate.candidate_id)));
+  return rows.slice(-Math.max(1, Math.min(500, Number(limit) || 100)));
+}
+
 function publicRecord(record) {
   if (!record) return null;
   return {
@@ -215,5 +239,5 @@ module.exports = {
   DATA_DIR, CANDIDATE_DIR, ID_RE, SHA_RE, MAX_JSON_BYTES,
   assertId, assertSha, assertClosedObject, realContained, readJsonFile,
   validateAttempt, validateCandidate, resolveManifestArtifact, candidatePath, persist,
-  importExternal, read, publicRecord,
+  importExternal, read, list, publicRecord,
 };
