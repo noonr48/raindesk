@@ -49,8 +49,8 @@ RIPPLE: frontier empty (test-only last commit; no wiring updates outstanding). j
 MIRROR:
 - WEAKEST: mutation-probe ran raw (not oracle-receipted) → covered by receipted suite re-runs proving the revert clean (35/35 ×2 post-probe).
 - MISSING (shift: cold user opens URL tomorrow): server must survive reboot — RESIDUAL R1 (auto-restart not yet wired); demo-fallback path tested in api.js design + offline path present.
-- PUNTS: companion persona/name + emoji pack deferred to owner (v2 backlog); 0.0.0.0 unauthenticated bind = trusted-tailnet punt (same as vault-app); disclosed in delivery.
-PREMORTEM: 1) pi headless json contract drift (message_end shape) breaks chat → fallback keeps app usable; 2) ComfyUI GPU/topology change breaks gen → 502 surfaced per-job, never wedges UI; 3) tailnet IP change breaks the URL (delivery artifact + memory note).
+- PUNTS: companion persona/name + emoji pack deferred to owner (v2 backlog); 0.0.0.0 unauthenticated bind = trusted-network punt; disclosed in delivery.
+PREMORTEM: 1) pi headless json contract drift (message_end shape) breaks chat → fallback keeps app usable; 2) ComfyUI GPU/topology change breaks gen → 502 surfaced per-job, never wedges UI; 3) host address change breaks the URL (delivery artifact + memory note).
 FIX-CLAIMS: agent-bridge fix narrative ("json mode, argv, parseReply") verified by live receipts (real companion replies ×3, distinct text, no fallback string).
 CLASS SWEEP: concurrency-boundedness searched across endpoints — gen (MAX_PENDING=4) + chat (CHAT_CONCURRENCY=3) both capped and tested; no other spawn/queue surface (grep).
 REVIEWER (GATED): dispatched xna-reviewer ×2 final waves (spec + adversarial), focus seams named, rationale withheld.
@@ -69,8 +69,8 @@ RESIDUALS:
 - exposure R3: unauthenticated tailnet bind → fires if network context changes; hardening option filed.
 
 ACTIVATION:
-- raindesk-server: LIVE now — wrapper pid 684087 / node listener 684095 (restarted 2026-08-16 03:29:55 +0930 after checkpoint swap 8324d00; live-gen proof in evidence/owner-challenge-3c6c6eccdd7e-1.md). The old v1-mission pid 2143874 is retired. companion-mockup-v1: INERT artifact of the v1 mission, not part of the live app; the process earlier believed to be it (pid 1927) is actually the Vault messaging app (vault-app) and was deliberately left running.
-- design-mockup server (open-design-artifacts companion-app-v1 mockup, NOT the app): LIVE — python3 -m http.server on 0.0.0.0:17590 (pids 290558/290567), same all-interface reachability as the app (static files only, no /api, no writes); INERT with respect to raindesk machinery, candidate for retirement at the reviewer-loop stage.
+- raindesk-server: LIVE (restarted 2026-08-16 03:29 +0930 after checkpoint swap; live-gen proof retained in the private archive). Prior v1-mission server retired.
+- design-mockup server (open-design-artifacts companion-app-v1 mockup, NOT the app): LIVE — static file server on 0.0.0.0:17590, same all-interface reachability as the app (static files only, no /api, no writes); INERT with respect to raindesk machinery, candidate for retirement at the reviewer-loop stage.
 
 TRIAD:
 (a) changed: raindesk app (16 files), 5 repair commits, 1 test commit.

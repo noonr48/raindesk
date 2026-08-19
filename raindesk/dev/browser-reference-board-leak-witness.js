@@ -8,7 +8,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const RC = require('/home/studio/lab/creative/raindesk-recover/raindesk/public/js/canvas');
+const RC = require(require('path').join(__dirname, '..', 'public', 'js', 'canvas'));
 
 const APP_URL = process.env.RD_URL || 'http://127.0.0.1:17600/';
 const CHROME = process.env.CHROME_BIN || 'chromium';

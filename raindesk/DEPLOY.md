@@ -1,8 +1,9 @@
-# Raindesk production deployment
+# Raindesk production deployment (template)
 
-Live URL: `http://studio-server:17600` (LAN/private-mesh wildcard bind).
+Bind the desk on your own trusted host: `http://<your-host>:17600`
+(LAN/mesh wildcard bind).
 
-## Run configuration (agent-process registry, name `raindesk-server`)
+## Run configuration
 
 ```
 cwd:   raindesk/
@@ -10,17 +11,17 @@ cmd:   node server.js
 env:
   RAINDESK_HOST=0.0.0.0
   RAINDESK_ALLOW_WILDCARD=1
+  RAINDESK_REMOTE_TOKEN=<24+ char secret>   # default: key-protected
+  # OR the keyless mode (trusted networks only — anyone on the network
+  # reaches the desk with no key):
   RAINDESK_REMOTE_UNPROTECTED=1
 ```
 
-- OWNER DIRECTIVE 2026-08-19: no access key — the artist must land straight
-  in the desk on window open. `RAINDESK_REMOTE_UNPROTECTED=1` is the explicit
-  opt-out that bypasses the merged stack's token demand (default deployments
-  still require a 24-char `RAINDESK_REMOTE_TOKEN`). Do NOT restore a token
-  unless the owner asks for one.
-- Before restarting production, read this file and the registry row
-  (`agent_process_status --name raindesk-server`); a restart without these
-  env vars degrades to loopback-only (2026-08-19 incident) or refuses to
-  start (wildcard/token guards).
-- Scratch/smoke servers stay on the loopback default (127.0.0.1) — never
+- The server refuses remote binds without a long token, and wildcards without
+  the explicit opt-in (`server-core.js validateBindOptions`). Choose the mode
+  that matches your network's trust level; the default is token-protected.
+- A restart without these env vars degrades to loopback-only (2026-08
+  incident postmortem: a post-merge restart silently rebound 127.0.0.1,
+  breaking remote access until re-deployed).
+- Scratch/test servers stay on the loopback default (127.0.0.1) — never
   expose them remotely.
