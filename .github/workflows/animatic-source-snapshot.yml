@@ -43,6 +43,7 @@ jobs:
           node --check server.js
           node --check lib/tests/animatic-contract.test.js
           node --check lib/tests/animatic-pacing-context.test.js
+          node --check lib/tests/animatic-review-decisions.test.js
           node --check lib/tests/animatic-snapshots.test.js
           node --check lib/tests/animatic-preparation.test.js
           node --check lib/tests/animatic-preparation-routes.test.js
