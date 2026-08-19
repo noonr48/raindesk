@@ -1,0 +1,34 @@
+name: Animatic Source Snapshot v1
+
+on:
+  push:
+    branches:
+      - 'chatgpt/animatic-adapter-slice-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  animatic-source-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check animatic source bridge
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check lib/shot-projection.js
+          node --check lib/animatic-snapshots.js
+          node --check lib/tests/animatic-snapshots.test.js
+          node --check lib/production-adapters.js
+          node --check lib/tests/animatic-adapter-registration.test.js
+
+      - name: Run complete Raindesk deterministic suite
+        working-directory: raindesk
+        run: npm test
