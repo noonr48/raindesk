@@ -1,4 +1,4 @@
-name: Animatic Source Snapshot v1
+name: Animatic Vertical Slice Authority Gates
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  animatic-source-snapshot:
+  animatic-authority:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -22,15 +22,21 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Syntax check animatic source bridge
+      - name: Syntax check animatic and approval authority surfaces
         working-directory: raindesk
         run: |
           set -euo pipefail
           node --check lib/shot-projection.js
           node --check lib/animatic-snapshots.js
-          node --check lib/tests/animatic-snapshots.test.js
           node --check lib/production-adapters.js
+          node --check lib/partner-invocation-ledger.js
+          node --check public/js/surface-handoff.js
+          node --check server.js
+          node --check lib/tests/animatic-snapshots.test.js
           node --check lib/tests/animatic-adapter-registration.test.js
+          node --check lib/tests/invocation-ledger-v2.test.js
+          node --check lib/tests/server-authoritative-context.test.js
+          node --check lib/tests/surface-handoff.test.js
 
       - name: Run complete Raindesk deterministic suite
         working-directory: raindesk
