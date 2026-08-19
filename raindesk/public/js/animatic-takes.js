@@ -51,9 +51,19 @@
     section.setAttribute('aria-label', 'animatic takes');
     const reviewKeys = new Map();
     let loading = false;
+    let rerenderQueued = false;
 
     function keepSectionAttached() {
       if (gensList && !gensList.contains(section)) gensList.prepend(section);
+    }
+
+    function queueRender() {
+      if (rerenderQueued) return;
+      rerenderQueued = true;
+      setTimeout(() => {
+        rerenderQueued = false;
+        render().catch(() => {});
+      }, 0);
     }
 
     async function submitDecision(record, decision, button) {
@@ -140,10 +150,18 @@
     }
 
     const observer = typeof MutationObserver !== 'undefined' && gensList
-      ? new MutationObserver(() => keepSectionAttached()) : null;
+      ? new MutationObserver(() => {
+        // chat.js owns the ordinary image-Take list and legitimately redraws
+        // the whole host container after its async list request. Reattach and
+        // re-query durable animatic state whenever that host redraw removes us.
+        if (!gensList.contains(section)) {
+          keepSectionAttached();
+          queueRender();
+        }
+      }) : null;
     if (observer) observer.observe(gensList, { childList: true });
     keepSectionAttached();
-    return { section, render, renderCard, submitDecision, destroy: () => observer && observer.disconnect() };
+    return { section, render, renderCard, submitDecision, queueRender, destroy: () => observer && observer.disconnect() };
   }
 
   function install(windowRoot) {
