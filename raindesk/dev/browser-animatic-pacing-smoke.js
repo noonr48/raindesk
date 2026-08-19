@@ -185,7 +185,7 @@ async function main() {
     cdp = await connectPage(await waitForDevtools(child), base);
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot === 'ready'`, 'Raindesk boot');
     await delay(700);
-    await nativeClick(cdp, '#drawerHandle');
+    await nativeClick(cdp, '[data-tab="agent"]');
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'restored pacing proposal');
     const shownDigest = await value(cdp, `document.querySelector('.animatic-pacing-card')?.textContent?.includes('Restrained')`);
     if (!shownDigest) throw new Error('expected Restrained pacing card not shown');
@@ -204,7 +204,7 @@ async function main() {
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot === 'ready'`, 'Raindesk reload');
     await delay(800);
-    await nativeClick(cdp, '#drawerHandle');
+    await nativeClick(cdp, '[data-tab="agent"]');
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'pacing proposal after reload');
     await nativeClick(cdp, '[data-tab="gens"]');
     await waitFor(cdp, `document.querySelector('.animatic-take-status')?.textContent?.includes('kept')`, 'review state after reload');
