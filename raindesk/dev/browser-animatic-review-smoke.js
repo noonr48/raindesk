@@ -126,21 +126,48 @@ async function connectPage(browserWsUrl, url) {
 }
 
 async function value(cdp, expression) {
-  const result = await cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true });
+  const result = await cdp.send('Runtime.evaluate', { expression, awaitPromise: false, returnByValue: true, userGesture: true });
   if (result.exceptionDetails) throw new Error(`browser expression failed: ${JSON.stringify(result.exceptionDetails)}`);
   return result.result && result.result.value;
 }
 
+function transientEvaluate(error) {
+  return Boolean(error && /CDP timeout: Runtime\.evaluate/.test(String(error.message || error)));
+}
+
+async function retryValue(cdp, expression, label, ms = 20_000) {
+  const deadline = Date.now() + ms;
+  let lastTransient = null;
+  while (Date.now() < deadline) {
+    try { return await value(cdp, expression); }
+    catch (error) {
+      if (!transientEvaluate(error)) throw error;
+      lastTransient = error;
+      await delay(180);
+    }
+  }
+  throw new Error(`timed out evaluating ${label}${lastTransient ? ' after transient renderer swaps' : ''}`);
+}
+
 async function waitFor(cdp, expression, label, ms = 30_000) {
   const deadline = Date.now() + ms;
-  while (Date.now() < deadline) { if (await value(cdp, expression)) return; await delay(120); }
-  throw new Error(`timed out waiting for ${label}`);
+  let lastTransient = null;
+  while (Date.now() < deadline) {
+    try {
+      if (await value(cdp, expression)) return;
+    } catch (error) {
+      if (!transientEvaluate(error)) throw error;
+      lastTransient = error;
+    }
+    await delay(120);
+  }
+  throw new Error(`timed out waiting for ${label}${lastTransient ? ' after transient renderer swaps' : ''}`);
 }
 
 async function nativeClick(cdp, selector) {
-  await value(cdp, `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(e)e.scrollIntoView({block:'center',inline:'center'});return !!e})()`);
+  await retryValue(cdp, `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(e)e.scrollIntoView({block:'center',inline:'center'});return !!e})()`, `scroll ${selector}`);
   await delay(120);
-  const raw = await value(cdp, `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;const r=e.getBoundingClientRect();for(const [fx,fy] of [[.5,.5],[.3,.5],[.7,.5],[.5,.3],[.5,.7]]){const x=r.left+r.width*fx,y=r.top+r.height*fy,h=document.elementFromPoint(x,y);if(h&&(h===e||e.contains(h)))return JSON.stringify({x,y});}return null})()`);
+  const raw = await retryValue(cdp, `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;const r=e.getBoundingClientRect();for(const [fx,fy] of [[.5,.5],[.3,.5],[.7,.5],[.5,.3],[.5,.7]]){const x=r.left+r.width*fx,y=r.top+r.height*fy,h=document.elementFromPoint(x,y);if(h&&(h===e||e.contains(h)))return JSON.stringify({x,y});}return null})()`, `locate ${selector}`);
   if (!raw) throw new Error(`native click target not exposed: ${selector}`);
   const point = JSON.parse(raw);
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
@@ -167,15 +194,21 @@ async function main() {
   const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${debugPort}`, '--window-size=1440,900', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let cdp;
   try {
+    console.log('[animatic-browser-v2] connect');
     cdp = await connectPage(await waitDevtools(debugPort, chrome), `http://127.0.0.1:${server.address().port}/`);
+    console.log('[animatic-browser-v2] boot');
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'Raindesk boot');
+    console.log('[animatic-browser-v2] pacing');
     // Desktop workspace opens Partner during async init; wait for the actual creative offer rather than clicking a hidden mobile handle/tab prematurely.
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'restored pacing card');
-    if (!(await value(cdp, `document.querySelector('.animatic-pacing-card')?.textContent?.includes('Restrained')`))) throw new Error('Restrained pacing card missing');
+    if (!(await retryValue(cdp, `document.querySelector('.animatic-pacing-card')?.textContent?.includes('Restrained')`, 'pacing label'))) throw new Error('Restrained pacing card missing');
 
+    console.log('[animatic-browser-v2] preview');
     await nativeClick(cdp, '.animatic-preview-btn');
+    console.log('[animatic-browser-v2] take');
     await waitFor(cdp, `!!document.querySelector('.animatic-take-card video')`, 'playable Take', 25_000);
     await waitFor(cdp, `document.querySelector('.animatic-take-card video')?.getAttribute('src')?.startsWith('/api/animatic/artifact/')`, 'same-origin MP4');
+    console.log('[animatic-browser-v2] keep');
     await nativeClick(cdp, '.animatic-take-card .animatic-review-btn.keep');
     await waitFor(cdp, `document.querySelector('.animatic-take-status')?.textContent?.includes('kept')`, 'Keep state');
 
@@ -183,9 +216,11 @@ async function main() {
     if (decisions.length !== 1 || decisions[0].decision !== 'keep' || decisions[0].actor_role !== 'owner') throw new Error('durable owner Keep missing');
     if (fs.readFileSync(spawnCounter, 'utf8').trim().split('\n').length !== 1) throw new Error('executor spawned more than once');
 
+    console.log('[animatic-browser-v2] reload');
     await cdp.send('Page.reload', { ignoreCache: true });
     await delay(1800);
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'reload boot');
+    console.log('[animatic-browser-v2] restored');
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'pacing card after reload');
     await waitFor(cdp, `!!document.querySelector('[data-tab="gens"]')`, 'Takes tab after reload');
     await nativeClick(cdp, '[data-tab="gens"]');
