@@ -45,7 +45,6 @@
     try { return seam.liveScope(); } catch (_e) { return null; }
   }
 
-  // Byte-parity mirror of lib/adapter-invocations.js stableSelection.
   function stableSelection(selection) {
     if (!selection || typeof selection !== 'object' || Array.isArray(selection)) return null;
     const out = { type: text(selection.type, 64) || 'selection' };
@@ -71,12 +70,6 @@
     return out;
   }
 
-  /**
-   * Approval scope is fail-closed. If a request froze a revision or selection,
-   * the live surface must positively prove the same value. A missing seam is
-   * not evidence of sameness and a fingerprint without its canonical frozen
-   * selection cannot be reconstructed after reload.
-   */
   function sameScope(request, root, document) {
     if (!sameShot(request, document)) return false;
     const scope = request && request.scope;
@@ -135,8 +128,6 @@
 
   function requestFromLedger(row) {
     if (!row || row.adapterId !== 'bounded_image_region_v1' || row.capabilityId !== 'local_image_take') return null;
-    // Schema-v1 rows are still readable history, but without their original
-    // frozen scope/flags we cannot lawfully recreate an approval after reload.
     if (!row.scope || row.reviewRequired !== true || row.creativeMutation !== true) return null;
     return {
       schemaVersion: 1,
@@ -174,14 +165,15 @@
     }
 
     function recordApproval(request) {
-      if (!root || !root.fetch || !request) return;
-      const body = approvalRecord(request);
-      if (!body) return;
+      if (!root || !root.fetch || !request || !request.id) return;
+      // The server already minted and durably recorded this exact request before
+      // it was exposed to the browser. Approval changes only lifecycle; the
+      // browser never POSTs a new authority record.
       root.fetch('/api/invocations', {
-        method: 'POST',
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }).catch(() => { /* approval remains valid in-page if persistence is down */ });
+        body: JSON.stringify({ id: request.id, status: 'approved' }),
+      }).catch(() => { /* local surface hand-off may still continue offline */ });
     }
 
     function markHandedOff(invocationId) {
