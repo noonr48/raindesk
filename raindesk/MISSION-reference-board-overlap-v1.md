@@ -22,4 +22,4 @@ Close A7 in `public/js/reference-board.js`: (1) document-listener accumulation a
 
 ## Standing blockers (owner-gated, not this slice)
 
-Owner taste verdict (vault `7a61439f`: 1 / 2 / roll / controlnet) — sole owner-gated input. ComfyUI 8188 restoration — infrastructure. Three stale smokes (creative-desk, director-loop, creative-sheets) — later slice.
+Owner taste verdict (delivery msg `7a61439f`: 1 / 2 / roll / controlnet) — sole owner-gated input. ComfyUI 8188 restoration — infrastructure. Three stale smokes (creative-desk, director-loop, creative-sheets) — later slice.

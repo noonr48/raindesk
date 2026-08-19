@@ -9,7 +9,7 @@ import re
 import sys
 import urllib.request
 
-PATH = "/home/studio/lab/creative/after-the-last-rain/open-design-artifacts/companion-app-v1/index.html"
+PATH = __import__("os").path.join(__import__("os").path.dirname(__file__) or ".", "index.html")
 URL = "http://127.0.0.1:17590/index.html"
 
 disk = open(PATH, encoding="utf-8").read()

@@ -43,7 +43,7 @@ psychology, scale, implication; the 13-beat collapse order is fixed.
  * system paths, then fall back to PATH lookup for interactive shells.
  */
 function resolvePiBinary() {
-  const home = process.env.HOME || '/home/studio';
+  const home = process.env.HOME || '/home';
   const candidates = [
     path.join(home, '.local', 'share', 'pi-studio-runtime', 'bin', 'pi'),
     path.join(home, '.local', 'bin', 'pi'),

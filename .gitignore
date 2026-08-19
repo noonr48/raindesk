@@ -3,3 +3,4 @@ raindesk/data/
 packet/
 raindesk/evidence/
 .sloane/
+__pycache__/

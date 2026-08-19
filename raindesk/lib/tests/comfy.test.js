@@ -107,7 +107,7 @@ test('runInpaint: upload -> patch -> prompt -> poll -> view URL, end to end over
   const { fetchImpl, state } = mockComfy();
   const result = await comfy.runInpaint({
     shotId: 'S01',
-    prompt: 'rain-lantern mood',
+    prompt: 'misty harbor mood',
     negative: 'gore',
     seed: '99',
     imageBuffer: PNG,
@@ -121,7 +121,7 @@ test('runInpaint: upload -> patch -> prompt -> poll -> view URL, end to end over
   assert.equal(state.prompts.length, 1);
   const wf = state.prompts[0].prompt;
   assert.equal(state.prompts[0].client_id, 'raindesk');
-  assert.equal(wf['2'].inputs.text, 'rain-lantern mood');
+  assert.equal(wf['2'].inputs.text, 'misty harbor mood');
   assert.equal(wf['3'].inputs.text, 'gore');
   assert.equal(wf['4'].inputs.image, 'raindesk/upd_1.png');
   assert.equal(wf['5'].inputs.image, 'raindesk/upd_2.png');

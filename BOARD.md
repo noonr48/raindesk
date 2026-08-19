@@ -1,8 +1,8 @@
 # After the Last Rain — Creative Push System (working root)
 
-**Provenance:** packet exported verbatim from `the-box-project` ref `roompc/main` = GitHub `noonr48/the-box-project` main `d934ec4c` (verified equal 2026-08-14). Canonical docs stay in the repo; this root is the Mill + Push working surface so the dirty server repo is never touched by creative automation.
-**Vault conversation:** `animaiton/ storyboard` (owner's animation thread; fetch full UUID from `/api/conversations` at build time).
-**Design:** the Mill (overnight candidate generation on studio-server + ComfyUI/MiniMax-H3) + the Push (one verb-only daily Vault message) + ingest (owner reply → agent turn → board update → commit via roompc bridge).
+**Provenance:** packet exported verbatim from the upstream film-planning repo `main` @ `d934ec4c` (verified equal 2026-08-14; the private packet/ directory is excluded from this public repo). This root is the Mill + Push working surface.
+**Delivery channel:** the owner's animation/storyboard messaging thread (conversation id resolved at build time).
+**Design:** the Mill (overnight candidate generation on the studio host + ComfyUI/MiniMax-H3) + the Push (one verb-only daily owner message) + ingest (owner reply → agent turn → board update → commit via the upstream bridge).
 
 ## Owner-locked constraints (auto-inject into every mill prompt)
 
@@ -28,7 +28,7 @@ States: `breakdown → candidates → picked → polish → fl2va-test → locke
 | S06 | Beats 6–8 — city uproots / Hethrn's arms manifest at the tower peak / king's-party cut | queued | awaits S05 |
 | S07 | Beats 9–13 — flood, tunnel, boats, the Rain Throat, forest-river exit | queued | awaits S06 |
 
-**Assets:** current working character references (Anna, Hethrn, Tate, Edward, king, etc.) listed with SHA-256 in the repo's `archive/chat-imports/2026-08-09-after-the-last-rain/ASSET_MANIFEST.md` — binaries live in the Vault conversation export; recover before first mill run. The 2026-08-12 location plates (LOCATION_GUIDE) are exploratory until promoted.
+**Assets:** current working character references (Anna, Hethrn, Tate, Edward, king, etc.) listed with SHA-256 in the upstream repo's `archive/chat-imports/` manifest — binaries live in the private message export; recover before first mill run. Location plates (LOCATION_GUIDE) are exploratory until promoted.
 
 ## Mill run rules (hard gates)
 

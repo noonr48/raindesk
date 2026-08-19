@@ -9,19 +9,19 @@ ASK (VERBATIM): "yes. that looks great. let's agentically build, test, review an
 Clauses (the WHAT):
 | # | clause (the ask's words) | evidence artifact | verdict |
 |---|---|---|---|
-| 1 | "agentically build" | app live: curl tailnet → `LIVE 200`; 10 commits a7b6918..10d3b97 | MET |
+| 1 | "agentically build" | app live on the network: `LIVE 200`; 10 commits a7b6918..10d3b97 | MET |
 | 2 | "test" | receipted suite `file-inspection-test_run-6a33323aad2d6d84` @ v1 close (SHA 10d3b97) → `ℹ pass 35 / fail 0`, exit 0 (harness-minted id — provenance note in raindesk/evidence/owner-challenge-3c6c6eccdd7e-1.md) | MET |
 | 3 | "review" | 6 reviewer waves dispatched; final two strict-form packets: `FINDINGS: none / VERDICT: pass / FOLLOW-UPS: none` (spec + adversarial, verbatim in transcript) | MET |
 | 4 | "refine agentically" | repair waves from blocked verdicts: 716b5cd, 2280dc6, aedc9fd, 10d3b97 (each = review finding → fix → suite green) | MET |
-| 5 | "a version for the desktop as well" | `app.css:374 @media (min-width:1024px)` docked drawer; 1440px headless screenshot delivered (vault msg 5aba67d5); reviewer-verified both waves | MET |
+| 5 | "a version for the desktop as well" | `app.css:374 @media (min-width:1024px)` docked drawer; 1440px headless screenshot delivered (delivery msg 5aba67d5); reviewer-verified both waves | MET |
 | 6 | "use as much sub-agents as you want" | 13 children across 9 waves (analyst/builders/reviewers), ledger log_id 6750/6752/6753 | MET |
 | 7 | "autonomously proceed" | owner input only at start; all repairs, dispatches, releases executed without asking | MET |
 
 Instructions (the HOW — from BUILD_BRIEF + owner directives):
 | # | instruction | honored — evidence |
 |---|---|---|
-| 1 | Owner never sees terminals/ComfyUI/paths | UI = bubbles+canvas only; delivery via artifact-delivery msg 5aba67d5 |
-| 2 | Never touch /home/studio/ComfyUI trees; HTTP only | comfy.js uses fetch only (grep: no fs writes in lib/comfy.js); reviewers verified |
+| 1 | Owner never sees terminals/ComfyUI/paths | UI = bubbles+canvas only; delivery via owner messaging (msg 5aba67d5) |
+| 2 | Never touch the ComfyUI install tree; HTTP only | comfy.js uses fetch only (grep: no fs writes in lib/comfy.js); reviewers verified |
 | 3 | One generation at a time | queue.js serial chain + `two jobs run sequentially` test green |
 | 4 | Commit prefix `raindesk:` | `git log --oneline` — all 10 commits prefixed |
 | 5 | Phone-first; no external resources | AC-7 scoped grep 0 hits (reviewer-verified) |
@@ -36,8 +36,8 @@ INHERITED (S=1): sub-agent backend — primary re-ran its suite (fixed deps-key 
 
 ## WIRING (R-G2.5)
 
-CONSUMERS: grep systemd user+system dirs + crontab for `raindesk` → zero hits; consumers = managed-process registry (at v1 close: pid 2143874; since 2026-08-16 checkpoint-swap restart: wrapper 684087 / node listener 684095) + Vault msg 5aba67d5 + this repo. Frontend fetches only `/api/*` same-origin.
-REACHABILITY: server serves the app (`LIVE 200` tailnet + root); ACTIVATION: restarted after each server-code mutation (v1-era pid 2143874, started 18:19:58Z — superseded 2026-08-16 by the checkpoint-swap restart: wrapper 684087 / node listener 684095 @ 03:29:55 +0930; 10d3b97 is test-only — no restart owed) — nothing holds an old version.
+CONSUMERS: grep systemd user+system dirs + crontab for `raindesk` → zero hits; consumers = managed-process registry (restarted after each server-code mutation) + owner messaging (msg 5aba67d5) + this repo. Frontend fetches only `/api/*` same-origin.
+REACHABILITY: server serves the app (`LIVE 200` network + root); ACTIVATION: restarted after each server-code mutation (checkpoint-swap restart 2026-08-16; 10d3b97 is test-only — no restart owed) — nothing holds an old version.
 TWINS: preset candidates `raindesk/presets/creative.txt` (canonical) + `lib/presets/creative.txt` (landing) — agent.js prefers first-existing, tested (`loadPreset prefers a preset file…`).
 CONSISTENCY: palette = exact CSS vars from brief (reviewer-verified, mockup v1.1 lineage); naming (lib/ singular modules, tests colocated) uniform.
 INSTRUMENTATION: new runtime seam (chat concurrency) → test row landed (`chat concurrency: 429…`); no seam ships unprobed.
@@ -61,12 +61,12 @@ REVIEWER (GATED): dispatched xna-reviewer ×2 final waves (spec + adversarial), 
 TRACE:
 | clause | change | evidence |
 |---|---|---|
-| build/test/review/refine/desktop/agents/autonomy | raindesk/ app, 13 commits, 44 tests, 8 waves, live server | receipts 6a33323aad2d6d84 + 2d56d817991d37f3 + f243bcfff4849822 + 14cb2d6e7d11f06f (harness-minted ids — provenance + reproducible command in raindesk/evidence/owner-challenge-3c6c6eccdd7e-1.md); LIVE 200; vault 5aba67d5; strict packets in transcript |
+| build/test/review/refine/desktop/agents/autonomy | raindesk/ app, 13 commits, 44 tests, 8 waves, live server | receipts 6a33323aad2d6d84 + 2d56d817991d37f3 + f243bcfff4849822 + 14cb2d6e7d11f06f (harness-minted ids — provenance kept in the private archive); LIVE 200; delivery msg 5aba67d5; strict packets in transcript |
 
 RESIDUALS:
-- durability R1: server survives manual restart only — fires when studio-server reboots → fix = systemd user unit (owner-approved service install).
+- durability R1: server survives manual restart only — fires when the host reboots → fix = systemd user unit (owner-approved service install).
 - drift R2: pi json-contract change → fires on pi update; revisit trigger in memory af0cbc23.
-- exposure R3: unauthenticated tailnet bind → fires if network context changes; hardening option filed.
+- exposure R3: unauthenticated network bind → fires if network context changes; hardening option filed.
 
 ACTIVATION:
 - raindesk-server: LIVE (restarted 2026-08-16 03:29 +0930 after checkpoint swap; live-gen proof retained in the private archive). Prior v1-mission server retired.

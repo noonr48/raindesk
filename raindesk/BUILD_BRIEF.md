@@ -7,7 +7,7 @@ Design contract: `open-design-artifacts/companion-app-v1/index.html` (mockup v1.
 Raindesk: a creative companion app for "After the Last Rain". Full-screen layered canvas showing the current shot page; free-lasso + pen tools; GEN button runs context-aware inpaint via local ComfyUI and paints the result as an in-place TEMP overlay inside the lasso region (never a mini preview); re-GEN cycles takes; COMMIT merges the chosen take into the active layer; ✕ discards. A side drawer (three-line handle) holds the agent chat (real agent via `pi -p` headless) and a "my gens" tab. Board lanes (set / in dev / unplanned) as quiet counters. Phone-first layout AND a desktop-adapted layout (drawer docked as a side panel ≥1024px, larger canvas, same flows). Fun, friend-toned agent copy with emojis. Palette: rain-teal #0e2129/#132b34/#1d3a46/#2e5666, lantern-gold #e8b04b/#b8893a, cream #f3ead8, coral accent #e07856 (from mockup CSS vars).
 
 ## Architecture (fixed decisions — do not relitigate)
-- **Tree**: `/home/studio/lab/creative/after-the-last-rain/raindesk/` (inside the existing git repo; commit per coherent cluster).
+- **Tree**: `raindesk/` (inside this repo; commit per coherent cluster).
 - **Backend**: Node.js ≥18, zero-build, `server.js` + `lib/` modules. Serves static `public/` and the JSON API on **127.0.0.1:17600** (loopback; private-mesh exposes it). [Built deviation, commit 716b5cd: binds `0.0.0.0:17600` — reachable on EVERY interface of the host (home-LAN NICs, private mesh, docker bridges), and the API is unauthenticated; set `RAINDESK_HOST=127.0.0.1` to restore this brief's loopback intent (server.js:40).] No framework beyond node:http if possible (deps allowed only if genuinely needed; prefer none).
 - **Frontend**: `public/` — vanilla JS + CSS (no build step). Canvas engine in `public/js/canvas.js` (layers, lasso path, pen strokes, overlay compositing), UI in `public/js/app.js`, chat in `public/js/chat.js`. CSS vars carry the palette. Responsive: single column <1024px (drawer overlays), desktop ≥1024px (drawer docked right, canvas fills).
 - **Generation bridge**: `lib/comfy.js` — POST workflow JSON to `http://127.0.0.1:8188/prompt`, poll `/history/{id}`, fetch outputs from `/view`. **Workflow**: SDXL inpaint on `Illustrious-XL-v0.1.safetensors` (checkpoint swapped 2026-08-15 from z-anime-base-aio-bf16, which produced structureless mush across 3 takes; swap verified by live-gen proof) — LoadCheckpoint → CLIPTextEncode (positive/negative from request) → LoadImage(image) + LoadImageMask or InpaintModelConditioning → VAEEncodeForInpaint → KSampler (steps ≤ 24, cfg ≤ 6, dpmpp_2m/karras) → VAEDecode → SaveImage. Discover exact node names from live `/object_info` before finalizing (server has custom nodes). Feather the mask ~16-32px client-side before upload so blends are soft. Save outputs under unique prefixes `raindesk/{shot}/{ts}`.
@@ -26,7 +26,7 @@ Raindesk: a creative companion app for "After the Last Rain". Full-screen layere
 8. Tests: `tests/` with node:test — run `node --test tests/` green; every mutation accompanied by a green run. Vision-verify final UI on both layouts before release (primary's job).
 
 ## Constraints (hard)
-- Never touch /home/studio/ComfyUI trees or models; only HTTP.
+- Never touch the ComfyUI install tree or models; only HTTP.
 - One generation at a time; GPU state re-checked before enqueue (the server was just restarted by the primary).
 - Owner never sees: terminals, ComfyUI, paths — only the app.
 - Commit style: small, coherent, message prefix `raindesk:`.

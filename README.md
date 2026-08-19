@@ -27,7 +27,7 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 | Board lanes | Shots move `set / in dev / unplanned` — glanceable counters, agent-maintained |
 | Test discipline | 231 node:test assertions across unit + route suites; native-Chromium browser journeys (zero mocks) for every major surface; regression tests are **mutation-proven** (we break the code deliberately to prove the test bites — `killproof_deskfit.py`); receipted runs after every mutation |
 
-**Stack (deliberately boring):** zero-dependency Node http backend; vanilla-JS DOM-free canvas core with its own PNG codec; ComfyUI over HTTP only; one-shot headless `pi` turns for the companion. Loopback/tailnet-bound, trusted-home-network exposure model (same as the estate's other tools).
+**Stack (deliberately boring):** zero-dependency Node http backend; vanilla-JS DOM-free canvas core with its own PNG codec; ComfyUI over HTTP only; one-shot headless `pi` turns for the companion. Loopback-bound by default; trusted-network exposure is an explicit launch choice.
 
 ## 3 · How we work (the build discipline)
 
@@ -59,7 +59,7 @@ raindesk/            the app (server.js, lib/, public/, tests/, dev/ browser smo
   AGENTS.md          orientation for AI coding agents working in this repo
   BUILD_BRIEF.md     mission contract + acceptance criteria
   DEEP_REVIEW.md     closeout review sheet (paste-or-fail)
-  DEPLOY.md          production deployment record (env trio, incident notes)
+  DEPLOY.md          deployment template (env options, incident notes)
 BOARD.md             shot board state (S01–S07 seeded from the collapse sequence)
 open-design-artifacts/  the UI mockup this app was built from (v1.1, vision-verified)
 check_atr_root.py    working-root integrity check
@@ -81,4 +81,4 @@ CONTRIBUTING.md      how to contribute (license in = license out)
 
 ---
 
-*Built on the STUDIO estate (studio-server). Companion preset and verification receipts live in-repo. The film materials are private and remain so.*
+*Built agent-first. Companion preset and verification receipts live in-repo. The film materials are private and remain so.*
