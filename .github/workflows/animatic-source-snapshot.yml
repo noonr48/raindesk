@@ -29,6 +29,8 @@ jobs:
           node --check lib/shot-projection.js
           node --check lib/animatic-snapshots.js
           node --check lib/animatic-preparation.js
+          node --check lib/animatic-pacing-proposals.js
+          node --check lib/animatic-review-decisions.js
           node --check lib/production-adapters.js
           node --check lib/partner-invocation-ledger.js
           node --check lib/animatic-execution-store.js
@@ -40,6 +42,7 @@ jobs:
           node --check lib/tests/animatic-snapshots.test.js
           node --check lib/tests/animatic-preparation.test.js
           node --check lib/tests/animatic-preparation-routes.test.js
+          node --check lib/tests/animatic-pacing-proposals.test.js
           node --check lib/tests/animatic-adapter-registration.test.js
           node --check lib/tests/animatic-executor.test.js
           node --check lib/tests/animatic-artifact-routes.test.js
