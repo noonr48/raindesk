@@ -409,7 +409,15 @@
         // proven live on the creative-sheets put-away drag).
         let captured = false;
         const moved = (ev) => Math.abs(ev.clientX - start.x) > 3 || Math.abs(ev.clientY - start.y) > 3;
+        const teardown = () => {
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          document.removeEventListener('pointercancel', up, true);
+        };
         const move = (ev) => {
+          // Severed-gesture guard: a hover (buttons===0) after a press that
+          // never received up/cancel must not ghost-drag — tear down and stop.
+          if (!ev.buttons) { teardown(); return; }
           if (!captured) {
             if (!moved(ev)) return;
             captured = true;
@@ -421,14 +429,13 @@
           renderObject(obj);
         };
         const up = async (ev) => {
-          document.removeEventListener('pointermove', move, true);
-          document.removeEventListener('pointerup', up, true);
-          document.removeEventListener('pointercancel', up, true);
+          teardown();
           try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
-          // A click is not a drag: without movement there is nothing to persist,
-          // and the re-render would replace the title between the clicks of a
-          // rename dblclick (bc77b18's reservation narrowed to mid-rename only).
-          if (!moved(ev)) return;
+          // A click is not a drag: nothing persisted without a real drag
+          // (captured), and the re-render would replace the title between
+          // the clicks of a rename dblclick. A stale up from a severed
+          // gesture cannot collapse or persist from unrelated coordinates.
+          if (!captured || !moved(ev)) return;
           if (overTabs(ev.clientX, ev.clientY)) { obj.visible = false; obj.collapsed = true; }
           await persistObject(obj); render(); renderTabs(); onContextChange();
         };
