@@ -28,9 +28,11 @@ test('animatic API keeps pacing authority on digest-bound server routes', async 
     label: 'Restrained', fidelity: 'draft', shots: [{ shotId: 'S01', durationFrames: 48 }],
   });
   await api.getAnimaticPacingProposal('c'.repeat(64));
+  await api.listAnimaticPacingProposals({ shotId: 'S01', sequenceId: 'scene-one', contextDigest: 'e'.repeat(64), limit: 9 });
   await api.prepareAnimatic('d'.repeat(64));
+  await api.previewAnimatic('f'.repeat(64));
 
-  assert.deepEqual(calls.slice(0, 5), [
+  assert.deepEqual(calls.slice(0, 4), [
     { method: 'POST', path: '/api/animatic/pacing-context', payload: { parentRequestId: 'invoke_parent' } },
     { method: 'GET', path: `/api/animatic/pacing-context/${'a'.repeat(64)}` },
     { method: 'POST', path: '/api/animatic/pacing-proposal', payload: {
@@ -38,8 +40,14 @@ test('animatic API keeps pacing authority on digest-bound server routes', async 
       proposal: { label: 'Restrained', fidelity: 'draft', shots: [{ shotId: 'S01', durationFrames: 48 }] },
     } },
     { method: 'GET', path: `/api/animatic/pacing-proposal/${'c'.repeat(64)}` },
-    { method: 'POST', path: '/api/animatic/prepare', payload: { proposalDigest: 'd'.repeat(64) } },
   ]);
+  assert.match(calls[4].path, /^\/api\/animatic\/pacing-proposals\?/);
+  assert.match(calls[4].path, /shotId=S01/);
+  assert.match(calls[4].path, /sequenceId=scene-one/);
+  assert.match(calls[4].path, new RegExp(`contextDigest=${'e'.repeat(64)}`));
+  assert.match(calls[4].path, /limit=9/);
+  assert.deepEqual(calls[5], { method: 'POST', path: '/api/animatic/prepare', payload: { proposalDigest: 'd'.repeat(64) } });
+  assert.deepEqual(calls[6], { method: 'POST', path: '/api/animatic/preview', payload: { proposalDigest: 'f'.repeat(64) } });
 });
 
 test('animatic API exposes execution, candidate listing and review without filesystem authority', async () => {
