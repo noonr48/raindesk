@@ -56,7 +56,8 @@ test('a newer same-shot request marks prior pending invocations stale', () => {
   assert.equal(stillPending[0].id, 'invoke_new456');
 });
 
-test('handed_off removes from pending; cancelled removes from pending; other shots untouched', () => {
+test('approved handed_off removes from pending; cancelled removes from pending; other shots untouched', () => {
+  ledger.setStatus('invoke_new456', 'approved');
   ledger.setStatus('invoke_new456', 'handed_off');
   assert.equal(ledger.pendingForShot('S01').length, 0);
   ledger.record(invocation({ id: 'invoke_s02', shotId: 'S02' }));
