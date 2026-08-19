@@ -26,6 +26,7 @@ jobs:
         working-directory: raindesk
         run: |
           set -euo pipefail
+          node --check lib/animatic-contract.js
           node --check lib/shot-projection.js
           node --check lib/animatic-snapshots.js
           node --check lib/animatic-preparation.js
@@ -39,6 +40,7 @@ jobs:
           node --check lib/video-artifacts.js
           node --check public/js/surface-handoff.js
           node --check server.js
+          node --check lib/tests/animatic-contract.test.js
           node --check lib/tests/animatic-snapshots.test.js
           node --check lib/tests/animatic-preparation.test.js
           node --check lib/tests/animatic-preparation-routes.test.js
