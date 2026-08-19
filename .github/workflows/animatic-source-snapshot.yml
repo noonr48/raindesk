@@ -28,14 +28,17 @@ jobs:
           set -euo pipefail
           node --check lib/shot-projection.js
           node --check lib/animatic-snapshots.js
+          node --check lib/animatic-preparation.js
           node --check lib/production-adapters.js
           node --check lib/partner-invocation-ledger.js
           node --check public/js/surface-handoff.js
           node --check server.js
           node --check lib/tests/animatic-snapshots.test.js
+          node --check lib/tests/animatic-preparation.test.js
           node --check lib/tests/animatic-adapter-registration.test.js
           node --check lib/tests/invocation-ledger-v2.test.js
           node --check lib/tests/server-authoritative-context.test.js
+          node --check lib/tests/server-proposal-authority.test.js
           node --check lib/tests/surface-handoff.test.js
 
       - name: Run complete Raindesk deterministic suite
