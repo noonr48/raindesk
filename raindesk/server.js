@@ -3,15 +3,16 @@
 /**
  * Raindesk server composition layer.
  *
- * The inherited server remains byte-for-byte in server-core.js. Character
- * Anchors is composed here so the feature can add authenticated registry
- * routes and authoritative shot-character context without widening the core
- * route surface or teaching the browser to forge Partner evidence.
+ * The inherited server remains byte-for-byte in server-core.js. Server-owned
+ * creative authority is composed here: character identity comes from the
+ * registry, and artwork revision identity comes from ShotDocument rather than
+ * browser assertions. Composed routes also host the durable invocation ledger.
  */
 
 const core = require('./server-core');
 const characters = require('./lib/characters');
 const invocationLedger = require('./lib/partner-invocation-ledger');
+const shotDocuments = require('./lib/shot-documents');
 const direction = require('./lib/direction');
 const partner = require('./lib/partner');
 const agent = require('./lib/agent');
@@ -36,7 +37,27 @@ function resolveCharacterShotId(context = {}) {
   }
 }
 
-function withCharacterContext(basePartner) {
+function resolveArtworkShotId(context = {}, resolvedShotId = null) {
+  if (typeof context.legacyShotId === 'string' && context.legacyShotId.trim()) return context.legacyShotId.trim();
+  if (typeof resolvedShotId === 'string' && resolvedShotId.trim()) return resolvedShotId.trim();
+  return null;
+}
+
+function authoritativeArtRevision(context = {}, resolvedShotId = null) {
+  const shotId = resolveArtworkShotId(context, resolvedShotId);
+  if (!shotId) return null;
+  try {
+    const current = shotDocuments.readCurrent(shotId);
+    return current && typeof current.revisionId === 'string' ? current.revisionId : null;
+  } catch (_e) {
+    // Never fall back to a browser-claimed revision when the authority source
+    // is absent or unhealthy. Null keeps ordinary conversation alive while
+    // revision-bound hand-offs fail closed.
+    return null;
+  }
+}
+
+function withAuthoritativeContext(basePartner) {
   if (!basePartner || typeof basePartner.turn !== 'function') {
     throw new Error('partnerImpl.turn is required');
   }
@@ -54,10 +75,18 @@ function withCharacterContext(basePartner) {
           // Character context must not strand the creative conversation.
         }
       }
+      // Browser artRevisionId is presentation context only. Capability Planner
+      // and invocation scope receive the revision committed in ShotDocument,
+      // or null when the server cannot prove one.
+      context.artRevisionId = authoritativeArtRevision(context, shotId);
       return basePartner.turn({ ...input, context });
     },
   };
 }
+
+// Compatibility export for the Character Anchors slice/tests. Its semantics
+// now include all server-owned authority, not characters only.
+const withCharacterContext = withAuthoritativeContext;
 
 function readBody(req, limit = CHARACTER_BODY_LIMIT) {
   return new Promise((resolve, reject) => {
@@ -162,13 +191,17 @@ async function handleInvocationApi(req, res, url) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new HttpError(400, 'invocation record is required');
       }
-      // Validate and record FIRST; supersede stale-marking only after the
-      // record durably lands — a malformed body must never wipe pending
-      // entries (record-before-supersede, reviewer A2/A3).
+      // Validate and durably record FIRST. Only then may supersession touch
+      // older entries. v2 scopes supersession by the recorded adapter so an
+      // animatic proposal cannot stale an unrelated image-edit approval.
       let recorded;
       try { recorded = invocationLedger.record(body); } catch (error) { throw asBadRequest(error); }
-      if (body.supersede && typeof body.shotId === 'string' && body.shotId.trim()) {
-        invocationLedger.markStaleSuperseded({ shotId: body.shotId, requestId: body.requestId || body.id || '' });
+      if (body.supersede && recorded.entry.shotId) {
+        invocationLedger.markStaleSuperseded({
+          shotId: recorded.entry.shotId,
+          requestId: recorded.entry.requestId || recorded.entry.id,
+          adapterId: recorded.entry.adapterId,
+        });
       }
       return core.sendJson(res, 201, { ok: true, invocation: recorded.entry, created: recorded.created });
     }
@@ -190,7 +223,7 @@ async function handleInvocationApi(req, res, url) {
 function createServer(deps = {}) {
   const agentImpl = deps.agentImpl || deps.agent || agent;
   const basePartner = deps.partnerImpl || partner.createPartner({ agentImpl });
-  const composedPartner = withCharacterContext(basePartner);
+  const composedPartner = withAuthoritativeContext(basePartner);
   const authToken = deps.authToken || null;
   const server = core.createServer({ ...deps, agentImpl, partnerImpl: composedPartner });
 
@@ -260,6 +293,10 @@ module.exports = {
   createServer,
   start,
   resolveCharacterShotId,
+  resolveArtworkShotId,
+  authoritativeArtRevision,
+  withAuthoritativeContext,
   withCharacterContext,
   handleCharacterApi,
+  handleInvocationApi,
 };
