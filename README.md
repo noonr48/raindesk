@@ -4,7 +4,7 @@
 
 Raindesk exists because of one observation: the owner is an excellent **reviewer** and reluctant **producer**. Blank pages stop work; button-chains stop work; tab-switching stops work. So the machine does the producing, the owner reacts — and the reaction *is* the creative act. The product goal is not "a drawing tool"; it is **a place the owner wants to be, where staying costs 30 seconds and still moves the film forward.**
 
-> Status: **v1 shipped 2026-08-14**, autonomously built (owner-approved brief → sub-agent build waves → independent review gates). 44 automated tests, mutation-proven regression tests, receipted verification discipline (see *How we work*). This README is also the surface for **external AI review (GPT Pro)** — questions we want answered are at the bottom.
+> Status: **v1.1 foundation shipped, hardened through 2026-08-19** — world-space creative desk, revisioned sheets, beat-scoped directing, reference board, durable approvals. **231 automated tests** + native-Chromium journey smokes; mutation-proven regression tests; receipted verification discipline (see *How we work*). **Open-sourced 2026-08-19 under AGPL-3.0** — use it, improve it, contribute back. AI agents (human- or GPT-driven) are welcome contributors; see `AGENTS.md`.
 
 ---
 
@@ -25,7 +25,7 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 | Pen & layers | 4-color pen with thickness, layer stack (base/pen/gen), visibility, bounded undo |
 | Companion chat | A real agent (headless pi runtime, json-mode) wearing a friend-toned creative preset; knows the film's locked constraints; never times out silently (120 s → warm fallback); concurrency-capped |
 | Board lanes | Shots move `set / in dev / unplanned` — glanceable counters, agent-maintained |
-| Test discipline | 44 node:test suites; regression tests are **mutation-proven** (we break the code deliberately to prove the test bites — `killproof_deskfit.py`); receipted runs after every mutation |
+| Test discipline | 231 node:test assertions across unit + route suites; native-Chromium browser journeys (zero mocks) for every major surface; regression tests are **mutation-proven** (we break the code deliberately to prove the test bites — `killproof_deskfit.py`); receipted runs after every mutation |
 
 **Stack (deliberately boring):** zero-dependency Node http backend; vanilla-JS DOM-free canvas core with its own PNG codec; ComfyUI over HTTP only; one-shot headless `pi` turns for the companion. Loopback/tailnet-bound, trusted-home-network exposure model (same as the estate's other tools).
 
@@ -55,16 +55,24 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 ## 5 · Repo map
 
 ```
-raindesk/            the app (server.js, lib/, public/, tests/)
+raindesk/            the app (server.js, lib/, public/, tests/, dev/ browser smokes)
+  AGENTS.md          orientation for AI coding agents working in this repo
   BUILD_BRIEF.md     mission contract + acceptance criteria
   DEEP_REVIEW.md     closeout review sheet (paste-or-fail)
+  DEPLOY.md          production deployment record (env trio, incident notes)
 packet/              the film's canonical planning docs (story bibles, locked decisions)
 BOARD.md             shot board state (S01–S07 seeded from the collapse sequence)
 open-design-artifacts/  the UI mockup this app was built from (v1.1, vision-verified)
 check_atr_root.py    working-root integrity check
+LICENSE              GNU AGPL-3.0
+CONTRIBUTING.md      how to contribute (license in = license out)
 ```
 
-## 6 · Questions we want the external reviewer to answer
+## 7 · License
+
+**GNU AGPL-3.0.** The owner's requirement: anyone may use and build on this, but if you do — including running it as a network service — you must share your improvements back under the same license. Contributions are accepted under AGPL-3.0 (see `CONTRIBUTING.md`).
+
+## 6 · Open design questions (agents welcome)
 
 1. **Loop design:** is lasso→GEN→COMMIT the right primitive set for a reviewer-first workflow, or does it still smuggle producer-work back in?
 2. **Layer architecture:** for layer-by-layer generation (roadmap #1), where should layer separation live — ComfyUI workflow layering, prompt-region conditioning, or app-side compositing of single-region gens?
