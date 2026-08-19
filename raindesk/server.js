@@ -6,14 +6,16 @@
  * The inherited server remains byte-for-byte in server-core.js. Server-owned
  * creative authority is composed here: character identity comes from the
  * registry, artwork revision identity comes from ShotDocument rather than
- * browser assertions, and actionable Partner requests are durably registered
- * before the browser is allowed to present them as approval affordances.
+ * browser assertions, actionable Partner requests are durably registered
+ * before browser exposure, and animatic preparation binds review to one exact
+ * source snapshot without exposing local panel paths.
  */
 
 const core = require('./server-core');
 const characters = require('./lib/characters');
 const invocationLedger = require('./lib/partner-invocation-ledger');
 const shotDocuments = require('./lib/shot-documents');
+const animaticPreparation = require('./lib/animatic-preparation');
 const direction = require('./lib/direction');
 const partner = require('./lib/partner');
 const agent = require('./lib/agent');
@@ -51,9 +53,6 @@ function authoritativeArtRevision(context = {}, resolvedShotId = null) {
     const current = shotDocuments.readCurrent(shotId);
     return current && typeof current.revisionId === 'string' ? current.revisionId : null;
   } catch (_e) {
-    // Never fall back to a browser-claimed revision when the authority source
-    // is absent or unhealthy. Null keeps ordinary conversation alive while
-    // revision-bound hand-offs fail closed.
     return null;
   }
 }
@@ -73,8 +72,6 @@ function persistInvocationProposals(result) {
     }
     return result;
   } catch (error) {
-    // Conversation remains useful, but no browser-only invocation is allowed
-    // to masquerade as durable authority if the proposal ledger is unhealthy.
     console.error('[raindesk] invocation proposal persistence failed:', error && error.message ? error.message : error); // eslint-disable-line no-console
     return { ...result, invocationRequests: [], invocationPersistenceError: true };
   }
@@ -90,11 +87,8 @@ function withAuthoritativeContext(basePartner) {
       const context = isObject(input.context) ? { ...input.context } : {};
       const shotId = resolveCharacterShotId(context);
       if (shotId) {
-        try {
-          context.characterAnchors = characters.contextForShot(shotId);
-        } catch (_e) {
-          // Character context must not strand the creative conversation.
-        }
+        try { context.characterAnchors = characters.contextForShot(shotId); }
+        catch (_e) { /* identity context must not strand ordinary conversation */ }
       }
       context.artRevisionId = authoritativeArtRevision(context, shotId);
       const result = await basePartner.turn({ ...input, context });
@@ -136,11 +130,8 @@ function readBody(req, limit = CHARACTER_BODY_LIMIT) {
 async function readJson(req, limit = CHARACTER_BODY_LIMIT) {
   const bytes = await readBody(req, limit);
   if (!bytes.length) throw new HttpError(400, 'empty request body');
-  try {
-    return JSON.parse(bytes.toString('utf8'));
-  } catch (_e) {
-    throw new HttpError(400, 'request body is not valid JSON');
-  }
+  try { return JSON.parse(bytes.toString('utf8')); }
+  catch (_e) { throw new HttpError(400, 'request body is not valid JSON'); }
 }
 
 function characterRoute(pathname) {
@@ -153,9 +144,13 @@ function invocationRoute(pathname) {
   return pathname === '/api/invocations';
 }
 
+function animaticRoute(pathname) {
+  return pathname === '/api/animatic/prepare' || /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(pathname);
+}
+
 function asBadRequest(error) {
   if (error instanceof HttpError) return error;
-  return new HttpError(400, error && error.message ? error.message : 'invalid character data');
+  return new HttpError(400, error && error.message ? error.message : 'invalid request data');
 }
 
 async function handleCharacterApi(req, res, url) {
@@ -234,11 +229,38 @@ async function handleInvocationApi(req, res, url) {
   throw new HttpError(404, 'not found');
 }
 
+async function handleAnimaticApi(req, res, url, { sourceRights = null } = {}) {
+  if (req.method === 'POST' && url.pathname === '/api/animatic/prepare') {
+    if (!sourceRights) throw new HttpError(503, 'RAINDESK_SOURCE_RIGHTS is required before animatic preparation');
+    const body = await readJson(req, 512 * 1024);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'animatic preparation request is required');
+    let prepared;
+    try {
+      prepared = animaticPreparation.prepare({
+        parentRequestId: body.parentRequestId,
+        snapshotInput: body.snapshot,
+        sourceRights,
+      });
+    } catch (error) {
+      throw asBadRequest(error);
+    }
+    return core.sendJson(res, prepared.created ? 201 : 200, { ok: true, ...prepared });
+  }
+
+  if (req.method === 'GET' && /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(url.pathname)) {
+    const digest = url.pathname.slice('/api/animatic/snapshot/'.length);
+    return core.sendJson(res, 200, { ok: true, snapshot: animaticPreparation.readPreparedSnapshot(digest) });
+  }
+
+  throw new HttpError(404, 'not found');
+}
+
 function createServer(deps = {}) {
   const agentImpl = deps.agentImpl || deps.agent || agent;
   const basePartner = deps.partnerImpl || partner.createPartner({ agentImpl });
   const composedPartner = withAuthoritativeContext(basePartner);
   const authToken = deps.authToken || null;
+  const sourceRights = deps.sourceRights || process.env.RAINDESK_SOURCE_RIGHTS || null;
   const server = core.createServer({ ...deps, agentImpl, partnerImpl: composedPartner });
 
   const inherited = server.listeners('request')[0];
@@ -249,11 +271,15 @@ function createServer(deps = {}) {
     try { url = new URL(req.url, `http://${req.headers.host || `${core.HOST}:${core.PORT}`}`); }
     catch (_e) { return inherited(req, res); }
 
-    if (!characterRoute(url.pathname) && !invocationRoute(url.pathname)) return inherited(req, res);
+    const composed = characterRoute(url.pathname) || invocationRoute(url.pathname) || animaticRoute(url.pathname);
+    if (!composed) return inherited(req, res);
     if (authToken && !core.requestAuthorized(req, authToken)) return inherited(req, res);
 
-    const handler = invocationRoute(url.pathname) ? handleInvocationApi : handleCharacterApi;
-    return handler(req, res, url).catch((error) => {
+    let promise;
+    if (animaticRoute(url.pathname)) promise = handleAnimaticApi(req, res, url, { sourceRights });
+    else if (invocationRoute(url.pathname)) promise = handleInvocationApi(req, res, url);
+    else promise = handleCharacterApi(req, res, url);
+    return promise.catch((error) => {
       if (res.headersSent) {
         res.destroy();
         return;
@@ -265,7 +291,12 @@ function createServer(deps = {}) {
     });
   });
 
-  server.raindesk = { ...server.raindesk, partnerImpl: composedPartner, characters };
+  server.raindesk = {
+    ...server.raindesk,
+    partnerImpl: composedPartner,
+    characters,
+    sourceRightsConfigured: Boolean(sourceRights),
+  };
   return server;
 }
 
@@ -312,4 +343,6 @@ module.exports = {
   withCharacterContext,
   handleCharacterApi,
   handleInvocationApi,
+  handleAnimaticApi,
+  animaticRoute,
 };
