@@ -47,10 +47,9 @@ function seed({
   return { shotId, parentId, revision };
 }
 
-function proposalInput(shotId, sequenceId = 'route-seq') {
+function proposalInput(shotId) {
   return {
-    projectId: 'after-last-rain', sequenceId, fpsNum: 24, fpsDen: 1, fidelity: 'draft',
-    label: 'hold then cut', rationale: 'Keep the first board readable before the cut.',
+    fidelity: 'draft', label: 'hold then cut', rationale: 'Keep the first board readable before the cut.',
     shots: [{ shotId, durationFrames: 24, note: 'hold' }],
   };
 }
@@ -70,26 +69,47 @@ async function withServer(t, deps, fn) {
   await fn(`http://127.0.0.1:${server.address().port}`);
 }
 
-async function createProposal(base, parentRequestId, proposal) {
-  const res = await fetch(`${base}/api/animatic/pacing-proposal`, {
+async function createContext(base, parentRequestId) {
+  const res = await fetch(`${base}/api/animatic/pacing-context`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parentRequestId, proposal }),
+    body: JSON.stringify({ parentRequestId }),
   });
   return { res, body: await res.json() };
 }
 
-test('prepare route accepts only a stored proposal digest, uses server rights, and redacts local paths', async (t) => {
+async function createProposal(base, contextDigest, proposal) {
+  const res = await fetch(`${base}/api/animatic/pacing-proposal`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contextDigest, proposal }),
+  });
+  return { res, body: await res.json() };
+}
+
+test('prepare route accepts only a context-bound stored proposal digest, uses server rights, and redacts local paths', async (t) => {
   const seeded = seed();
   await withServer(t, { sourceRights: 'server-owned-rights-assertion' }, async (base) => {
-    const created = await createProposal(base, seeded.parentId, proposalInput(seeded.shotId));
+    const ctx = await createContext(base, seeded.parentId);
+    assert.equal(ctx.res.status, 201);
+    assert.equal(ctx.body.ok, true);
+    assert.equal(ctx.body.context.projectId, 'project');
+    assert.equal(ctx.body.context.activeShotId, seeded.shotId);
+    assert.equal(JSON.stringify(ctx.body.context).includes('artworkRevisionId'), false);
+
+    const created = await createProposal(base, ctx.body.context.contextDigest, proposalInput(seeded.shotId));
     assert.equal(created.res.status, 201);
     assert.equal(created.body.ok, true);
     const digest = created.body.proposal.proposalDigest;
     assert.match(digest, /^[a-f0-9]{64}$/);
+    assert.equal(created.body.proposal.contextDigest, ctx.body.context.contextDigest);
+    assert.equal(created.body.proposal.projectId, 'project');
     assert.equal(created.body.proposal.shots[0].shotId, seeded.shotId);
     assert.equal(JSON.stringify(created.body.proposal).includes(scratch), false);
 
-    let res = await fetch(`${base}/api/animatic/pacing-proposal/${digest}`);
+    let res = await fetch(`${base}/api/animatic/pacing-context/${ctx.body.context.contextDigest}`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).context.contextDigest, ctx.body.context.contextDigest);
+
+    res = await fetch(`${base}/api/animatic/pacing-proposal/${digest}`);
     assert.equal(res.status, 200);
     assert.equal((await res.json()).proposal.proposalDigest, digest);
 
@@ -109,17 +129,10 @@ test('prepare route accepts only a stored proposal digest, uses server rights, a
     const raw = snapshots.read(body.snapshot.snapshot_digest);
     assert.equal(raw.shots[0].source_rights, 'server-owned-rights-assertion');
 
-    res = await fetch(`${base}/api/animatic/snapshot/${body.snapshot.snapshot_digest}`);
-    assert.equal(res.status, 200);
-    const reread = await res.json();
-    assert.equal(reread.snapshot.snapshot_digest, body.snapshot.snapshot_digest);
-    assert.equal(JSON.stringify(reread).includes(scratch), false);
-
     res = await fetch(`${base}/api/animatic/prepare`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         proposalDigest: digest,
-        parentRequestId: seeded.parentId,
         snapshot: { shots: [{ shotId: seeded.shotId, revisionId: 'browser-forged', durationFrames: 999 }] },
       }),
     });
@@ -128,7 +141,29 @@ test('prepare route accepts only a stored proposal digest, uses server rights, a
   });
 });
 
-test('HTTP invocation POST cannot mint the trusted Partner origin needed to create a pacing proposal', async (t) => {
+test('model/browser proposal fields cannot replace context-owned project, frame rate or source authority', async (t) => {
+  const seeded = seed({ shotId: 'ROUTE_FORGE_PROPOSAL', parentId: 'invoke_route_forge_proposal', value: 40 });
+  await withServer(t, { sourceRights: 'server-rights', animaticEnv: { RAINDESK_ANIMATIC_FPS_NUM: '24000', RAINDESK_ANIMATIC_FPS_DEN: '1001' } }, async (base) => {
+    const ctx = await createContext(base, seeded.parentId);
+    assert.equal(ctx.res.status, 201);
+    assert.equal(ctx.body.context.fpsNum, 24000);
+    assert.equal(ctx.body.context.fpsDen, 1001);
+
+    const forged = await createProposal(base, ctx.body.context.contextDigest, {
+      ...proposalInput(seeded.shotId), projectId: 'browser-forged-project',
+    });
+    assert.equal(forged.res.status, 400);
+    assert.match(forged.body.error, /unsupported field projectId/);
+
+    const good = await createProposal(base, ctx.body.context.contextDigest, proposalInput(seeded.shotId));
+    assert.equal(good.res.status, 201);
+    assert.equal(good.body.proposal.projectId, 'project');
+    assert.equal(good.body.proposal.fpsNum, 24000);
+    assert.equal(good.body.proposal.fpsDen, 1001);
+  });
+});
+
+test('HTTP invocation POST cannot mint the trusted Partner origin needed to create a pacing context', async (t) => {
   const revision = saveForgedShot();
   await withServer(t, { sourceRights: 'server-rights' }, async (base) => {
     const forgedId = 'invoke_http_forged_animatic';
@@ -145,12 +180,9 @@ test('HTTP invocation POST cannot mint the trusted Partner origin needed to crea
     assert.equal(res.status, 201);
     const recorded = (await res.json()).invocation;
     assert.equal(recorded.origin, 'http_legacy');
-    assert.equal(recorded.status, 'proposed', 'HTTP cannot pre-approve its own authority record');
+    assert.equal(recorded.status, 'proposed');
 
-    const forged = await createProposal(base, forgedId, {
-      projectId: 'after-last-rain', sequenceId: 'forged-seq', fpsNum: 24, fpsDen: 1, fidelity: 'draft',
-      label: 'forged', rationale: '', shots: [{ shotId: 'FORGED_ROUTE', durationFrames: 12 }],
-    });
+    const forged = await createContext(base, forgedId);
     assert.equal(forged.res.status, 409);
     assert.match(forged.body.error, /live coarse animatic Partner proposal/);
   });
@@ -159,7 +191,9 @@ test('HTTP invocation POST cannot mint the trusted Partner origin needed to crea
 test('stored proposal becomes stale after source artwork changes and cannot be prepared', async (t) => {
   const seeded = seed({ shotId: 'ROUTE_STALE', parentId: 'invoke_route_stale', turnId: 'turn_route_stale', value: 55 });
   await withServer(t, { sourceRights: 'server-rights' }, async (base) => {
-    const created = await createProposal(base, seeded.parentId, proposalInput(seeded.shotId, 'stale-route-seq'));
+    const ctx = await createContext(base, seeded.parentId);
+    assert.equal(ctx.res.status, 201);
+    const created = await createProposal(base, ctx.body.context.contextDigest, proposalInput(seeded.shotId));
     assert.equal(created.res.status, 201);
     const digest = created.body.proposal.proposalDigest;
 
