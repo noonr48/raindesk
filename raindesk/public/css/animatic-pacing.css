@@ -1,0 +1,47 @@
+.animatic-pacing-offers {
+  display: grid;
+  gap: .55rem;
+  margin: .55rem 0 .8rem;
+  padding: .1rem;
+}
+
+.animatic-pacing-kicker {
+  font-size: .68rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  opacity: .58;
+}
+
+.animatic-pacing-card {
+  display: grid;
+  gap: .38rem;
+  padding: .72rem .78rem;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: .8rem;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.animatic-pacing-card.stale { opacity: .62; }
+.animatic-pacing-title { font-size: .88rem; }
+.animatic-pacing-rhythm { font-size: .78rem; line-height: 1.45; }
+.animatic-pacing-rationale { font-size: .74rem; line-height: 1.4; opacity: .7; }
+
+.animatic-pacing-controls {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  min-height: 1.8rem;
+}
+
+.animatic-preview-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: .42rem .7rem;
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.animatic-preview-btn:disabled { cursor: default; opacity: .45; }
+.animatic-pacing-status { font-size: .68rem; opacity: .68; line-height: 1.25; }
