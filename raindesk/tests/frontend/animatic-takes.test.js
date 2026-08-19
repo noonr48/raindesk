@@ -63,3 +63,11 @@ test('animatic take cards use native video and keep review choices honest', () =
   assert.match(source, /different rhythm/);
   assert.doesNotMatch(source, /run_dir|RAINDESK_ANIMATIC_EXECUTOR|implementationRef/);
 });
+
+test('ordinary image-Take redraw cannot strand durable animatic review state', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public', 'js', 'animatic-takes.js'), 'utf8');
+  assert.match(source, /new MutationObserver/);
+  assert.match(source, /if \(!gensList\.contains\(section\)\)/);
+  assert.match(source, /keepSectionAttached\(\);\s*queueRender\(\);/);
+  assert.match(source, /api\.listAnimaticCandidates\(\{ limit: 50 \}\)/);
+});
