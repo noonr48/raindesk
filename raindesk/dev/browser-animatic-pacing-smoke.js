@@ -250,8 +250,11 @@ async function main() {
 
     console.log('[animatic-browser] reload');
     await cdp.send('Page.reload', { ignoreCache: true });
+    // A Runtime.evaluate issued in the same instant as a renderer swap can be
+    // orphaned by Chromium. Wait for the fresh renderer before polling the
+    // application boot marker; this still exercises a native page reload.
+    await delay(1600);
     await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot === 'ready'`, 'Raindesk reload');
-    await delay(800);
     await nativeClick(cdp, '[data-tab="agent"]');
     await waitFor(cdp, `!!document.querySelector('.animatic-pacing-card')`, 'pacing proposal after reload');
     await nativeClick(cdp, '[data-tab="gens"]');
