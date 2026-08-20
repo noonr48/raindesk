@@ -14,14 +14,8 @@
     return value;
   }
 
-  function createAnimaticPacingContext(parentRequestId) {
-    return api().POST('/api/animatic/pacing-context', { parentRequestId });
-  }
   function getAnimaticPacingContext(contextDigest) {
     return api().GET(`/api/animatic/pacing-context/${encodeURIComponent(contextDigest)}`);
-  }
-  function createAnimaticPacingProposal(contextDigest, proposal) {
-    return api().POST('/api/animatic/pacing-proposal', { contextDigest, proposal });
   }
   function getAnimaticPacingProposal(proposalDigest) {
     return api().GET(`/api/animatic/pacing-proposal/${encodeURIComponent(proposalDigest)}`);
@@ -34,17 +28,11 @@
     qs.set('limit', String(limit));
     return api().GET(`/api/animatic/pacing-proposals?${qs.toString()}`);
   }
-  function prepareAnimatic(proposalDigest) {
-    return api().POST('/api/animatic/prepare', { proposalDigest });
-  }
   function previewAnimatic(proposalDigest) {
     return api().POST('/api/animatic/preview', { proposalDigest });
   }
   function getAnimaticPacingExecution(proposalDigest) {
     return api().GET(`/api/animatic/pacing-proposal/${encodeURIComponent(proposalDigest)}/execution`);
-  }
-  function executeAnimatic(invocationId, { retry = false } = {}) {
-    return api().POST('/api/animatic/execute', { invocationId, retry: retry === true });
   }
   function getAnimaticExecution(executionId) {
     return api().GET(`/api/animatic/execution/${encodeURIComponent(executionId)}`);
@@ -72,14 +60,10 @@
   }
 
   return {
-    createAnimaticPacingContext,
     getAnimaticPacingContext,
-    createAnimaticPacingProposal,
     getAnimaticPacingProposal,
     listAnimaticPacingProposals,
-    prepareAnimatic,
     previewAnimatic,
-    executeAnimatic,
     getAnimaticExecution,
     getAnimaticPacingExecution,
     listAnimaticCandidates,

@@ -80,15 +80,22 @@ The branch now contains more than registration. The bounded path currently inclu
 
 Frames plus rational frame rate are the timing authority. Pacing proposals and snapshots share one validation envelope (`lib/animatic-contract.js`) so proposal content cannot be accepted under looser limits than the snapshot compiler.
 
-## Transitional seams that still block merge
+## Vertical-loop status (2026-08-20 closeout)
 
-This branch remains intentionally draft because the artist-facing vertical loop is not complete.
+The artist-facing vertical loop is complete and browser-proven:
 
-- The raw `/api/animatic/prepare` compatibility route can still accept browser-supplied snapshot structure. The merge target is stored-proposal-only preparation: the browser names an immutable pacing proposal and the server derives order, revisions and durations internally.
-- Pacing proposals are not yet rendered as reviewer-first Partner cards.
-- Imported animatic candidates are not yet surfaced as playable Animatic Takes with `Keep / Another / Combine / Reject`.
-- The ReviewDecision scaffold is not yet wired through the owner-visible server/UI path.
-- A real owner-host proof against the pinned video-skill executor is still required after the browser loop closes.
+- Preparation is **stored-proposal-only**: `/api/animatic/prepare` and Preview accept exactly one immutable proposal digest; the server derives order, revisions and durations internally. The reviewer-facing browser API (`public/js/animatic-api.js`) exposes digest reads, Preview, execution polling, candidate listing and review only — context/proposal creation stay behind the server-side Partner boundary, and raw prepare/execute are no longer browser powers.
+- Pacing proposals render as reviewer-first Partner cards with Preview this; preview is asynchronous (202 + durable execution row, polled, reload-reconnect).
+- Imported candidates surface as playable Animatic Takes (real MP4 playback proof: metadata, seek) with `Keep / Another / Reject`; `Combine` stays visibly disabled until immutable candidate-bound ReviewAnnotation evidence exists — it records no intent meanwhile.
+- ReviewDecision is wired through the owner-visible UI with append-only decisions and server-owned `actor_role=owner`.
+- A real owner-host proof against the pinned video-skill executor passed locally (sanitized receipt; see `dev/browser-animatic-real-host-proof.js`).
+
+Honest remaining limitations:
+
+- The Takes list is not yet scoped to the active shot/sequence (global recent list).
+- Restored take cards show a generic label, not the source proposal's rhythm name; the server-side provenance summary is future work.
+- `Another` records the request and tells the artist, but does not yet guarantee a meaningfully different rhythm (structured open loop is future work).
+- A direction-note edit after preview makes proposal reconnect fail-safe 404 (the creative-state digest drifts); the durable execution row remains reachable by id.
 
 ## Still-unregistered production capabilities
 

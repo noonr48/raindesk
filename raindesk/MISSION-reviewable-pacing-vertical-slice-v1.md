@@ -1,5 +1,7 @@
 # Mission — Reviewable Pacing Vertical Slice v1
 
+> **STATUS: CANONICAL (2026-08-20)** for the animatic review loop. Where older mission files conflict (notably `MISSION-animatic-review-loop-v1.md` on Combine semantics), this document wins.
+
 Baseline: verified branch checkpoint `162bc51b6184a52a3c8ab7b2f8bf39d231bb9d0a` on `chatgpt/animatic-adapter-slice-v1`.
 
 ## Goal

@@ -16,7 +16,7 @@ map and `raindesk/BUILD_BRIEF.md` for the original mission contract.
 
 ```bash
 cd raindesk
-npm test                 # 231 assertions — run this after EVERY change
+npm test                 # full deterministic suite (live count printed) — run this after EVERY change
 node server.js           # serves 127.0.0.1:17600 by default
 ```
 

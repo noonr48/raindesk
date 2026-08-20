@@ -1,5 +1,7 @@
 # Mission — Animatic Review Loop v1
 
+> **STATUS: SUPERSEDED (2026-08-20)** by `MISSION-reviewable-pacing-vertical-slice-v1.md`, which is now canonical for the animatic review loop. In particular, the Combine wording below (“records intent but does not pretend a composite candidate exists”) is obsolete: Combine now stays **visibly disabled** until immutable candidate-bound `ReviewAnnotation` evidence exists, and records nothing meanwhile. Kept for history.
+
 Baseline: `chatgpt/animatic-adapter-slice-v1` after the bounded animatic execution/import slice.
 
 ## Goal
