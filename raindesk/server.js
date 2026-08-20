@@ -16,6 +16,7 @@ const characters = require('./lib/characters');
 const invocationLedger = require('./lib/partner-invocation-ledger');
 const shotDocuments = require('./lib/shot-documents');
 const animaticPreparation = require('./lib/animatic-preparation');
+const animaticSnapshots = require('./lib/animatic-snapshots');
 const animaticPacingContext = require('./lib/animatic-pacing-context');
 const animaticPacing = require('./lib/animatic-pacing-proposals');
 const animaticPacingAdvisor = require('./lib/animatic-pacing-advisor');
@@ -242,13 +243,22 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
   const pacingExecMatch = url.pathname.match(/^\/api\/animatic\/pacing-proposal\/([a-f0-9]{64})\/execution$/);
   if (req.method === 'GET' && pacingExecMatch) {
     // Reload reconnect: report the durable execution state for one stored
-    // proposal without re-preparing or re-approving anything. The child
-    // invocation is server-prepared and bound to this proposal's parent.
+    // proposal without re-preparing or re-approving anything. The child is
+    // resolved deterministically — sibling proposals share a parent, so the
+    // child id is sha256(parent|snapshotDigest) compiled from THIS proposal's
+    // frozen timing (snapshotInput reads the proposal's frozen revisions, so
+    // the digest is stable even after the source goes stale).
     const proposal = animaticPacing.readByDigest(pacingExecMatch[1]);
-    const children = invocationLedger.read().invocations
-      .filter((row) => row && row.origin === 'server_prepared' && row.parentRequestId === proposal.parentRequestId);
-    if (!children.length) throw new HttpError(404, 'no animatic execution for this proposal yet');
-    const row = animaticExecutionStore.latestForInvocation(children[children.length - 1].id);
+    if (!sourceRights) throw new HttpError(404, 'no animatic execution for this proposal yet');
+    let childId;
+    try {
+      childId = animaticPreparation.childId(
+        proposal.parentRequestId,
+        animaticSnapshots.compile({ ...animaticPacing.snapshotInput(proposal), sourceRights }).snapshot_digest,
+      );
+    } catch (_error) { throw new HttpError(404, 'no animatic execution for this proposal yet'); }
+    const child = invocationLedger.find(invocationLedger.read(), childId);
+    const row = child && child.origin === 'server_prepared' ? animaticExecutionStore.latestForInvocation(child.id) : null;
     if (!row) throw new HttpError(404, 'no animatic execution for this proposal yet');
     let candidate = null;
     if (row.candidateId) candidate = candidateView(animaticCandidates.read(row.candidateId));

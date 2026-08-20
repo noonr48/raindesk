@@ -109,6 +109,7 @@
         const execution = response && response.execution;
         const state = execution && execution.status;
         if (state === 'succeeded' && response.candidate) {
+          if (!document.body || !document.body.contains(status)) return; // surface gone mid-fetch
           status.textContent = 'rough cut ready';
           if (drawer && typeof drawer.addPartnerNote === 'function') {
             drawer.addPartnerNote('The rough cut is ready in Takes — react to the rhythm, not the polish.');

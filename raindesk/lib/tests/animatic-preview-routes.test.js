@@ -33,8 +33,7 @@ const snapshotFile = arg('--snapshot');
 const outDir = arg('--out-dir');
 const snapshot = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
 if (process.env.FAKE_COUNTER_FILE) fs.appendFileSync(process.env.FAKE_COUNTER_FILE, 'spawn\\n');
-const attemptId = 'att-preview';
-const candidateId = 'cand-preview';
+const attemptId='att-preview-'+snapshot.snapshot_digest.slice(0,8);const candidateId='cand-'+snapshot.snapshot_digest.slice(0,12);
 const runDir = path.join(outDir, attemptId);
 fs.mkdirSync(path.join(runDir, 'artifacts'), { recursive: true });
 fs.writeFileSync(path.join(runDir, 'source-snapshot.json'), JSON.stringify(snapshot, null, 2));
@@ -140,10 +139,11 @@ test('Preview this approves exact proposal, renders one immutable candidate, and
     }
     assert.equal(view.ok, true);
     assert.equal(view.execution.status, 'succeeded');
-    assert.equal(view.candidate.candidate.candidate_id, 'cand-preview');
+    const candidateId = view.candidate.candidate.candidate_id;
+    assert.match(candidateId, /^cand-[a-f0-9]{12}$/);
     assert.match(view.candidate.artifacts[0].url, /^\/api\/animatic\/artifact\/[a-f0-9]{64}$/);
     assert.equal(view.candidate.candidate.review_state, undefined);
-    assert.equal(review.list({ candidateId: 'cand-preview' }).length, 0, 'preview never auto-keeps a candidate');
+    assert.equal(review.list({ candidateId }).length, 0, 'preview never auto-keeps a candidate');
 
     const preparedRows = ledger.list({ shotId, limit: 100 }).filter((row) => row.origin === 'server_prepared');
     assert.equal(preparedRows.length, 1);
@@ -156,7 +156,7 @@ test('Preview this approves exact proposal, renders one immutable candidate, and
     assert.equal(res.status, 200);
     body = await res.json();
     assert.equal(body.execution.status, 'succeeded');
-    assert.equal(body.candidate.candidate.candidate_id, 'cand-preview');
+    assert.equal(body.candidate.candidate.candidate_id, candidateId);
     assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 1, 'same successful preview does not spawn twice');
 
     // Reload reconnect: the proposal-scoped route reports the same durable state.
@@ -165,7 +165,7 @@ test('Preview this approves exact proposal, renders one immutable candidate, and
     const reconnected = await res.json();
     assert.equal(reconnected.execution.executionId, executionId);
     assert.equal(reconnected.execution.status, 'succeeded');
-    assert.equal(reconnected.candidate.candidate.candidate_id, 'cand-preview');
+    assert.equal(reconnected.candidate.candidate.candidate_id, candidateId);
 
     res = await fetch(`${base}/api/animatic/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -173,6 +173,66 @@ test('Preview this approves exact proposal, renders one immutable candidate, and
     });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /only one stored proposalDigest/);
+  });
+});
+
+test('reconnect resolves the exact child for sibling proposals sharing one parent', async (t) => {
+  // Two rhythm proposals minted from ONE context share parentRequestId; the
+  // deterministic child id (sha256(parent|snapshotDigest)) must discriminate
+  // them — the earlier proposal's reconnect must never report the sibling's
+  // execution (the children[last] bug this test pins).
+  const suffix = crypto.randomBytes(4).toString('hex');
+  const shotId = `SIBLING_${suffix}`;
+  const parentId = `invoke_sibling_${suffix}`;
+  const asset = blobs.putPng(solidPng(60));
+  const revision = docs.save(shotId, {
+    schemaVersion: 1, shotId, canvas: { width: 8, height: 8 }, activeLayerId: 'L1',
+    layers: [{ id: 'L1', name: 'base', kind: 'base', visible: true, order: 0, strokes: [], assetSha: asset.sha }],
+  }, { reason: 'sibling reconnect fixture' });
+  direction.ensureLegacyShot(shotId, { title: `Sibling ${suffix}`, beat: 'hold, then cut' });
+  ledger.record({
+    id: parentId, requestId: parentId, origin: 'partner_server', turnId: `turn_sib_${suffix}`, shotId,
+    adapterId: 'animatic_timing_v1', capabilityId: 'animatic_timing', stageId: 'animatic_pass:2:animatic_timing', recipeId: 'animatic_pass',
+    invocationBoundary: 'external', disposition: 'proposal', reviewRequired: true, creativeMutation: true,
+    scope: { shotId, artRevisionId: revision.revisionId, selectionFingerprint: null, selectionStable: null },
+    requiredEvidence: ['shot_scope'], requiredInputs: ['SequenceSourceSnapshot@0.2.0'], expectedOutputs: ['SequenceCandidateManifest@0.2.0'],
+    preserves: ['accepted_sequence_until_review'], sideEffects: ['creates_animatic_candidate'], status: 'proposed',
+  });
+  const context = pacingContexts.create({ parentRequestId: parentId, env: { RAINDESK_ANIMATIC_FPS_NUM: '24', RAINDESK_ANIMATIC_FPS_DEN: '1' } }).context;
+  const make = (label, frames) => pacing.createFromContext({
+    contextDigest: context.contextDigest,
+    proposal: { label, rationale: 'sibling rhythm', fidelity: 'draft', shots: [{ shotId, durationFrames: frames, note: 'hold then cut' }] },
+  }).proposal;
+  const a = make('Restrained', 36);
+  const b = make('Tighter', 60);
+  await withServer(t, async (base) => {
+    const poll = async (executionId) => {
+      for (let i = 0; i < 40; i++) {
+        const view = await (await fetch(`${base}/api/animatic/execution/${executionId}`)).json();
+        if (view.execution && view.execution.status !== 'running') return view;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error('sibling execution did not reach a terminal state');
+    };
+    const startA = await (await fetch(`${base}/api/animatic/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposalDigest: a.proposalDigest }),
+    })).json();
+    const viewA = await poll(startA.execution.executionId);
+    const startB = await (await fetch(`${base}/api/animatic/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposalDigest: b.proposalDigest }),
+    })).json();
+    const viewB = await poll(startB.execution.executionId);
+    assert.equal(viewA.execution.status, 'succeeded');
+    assert.equal(viewB.execution.status, 'succeeded');
+    assert.notEqual(viewA.candidate.candidate.candidate_id, viewB.candidate.candidate.candidate_id, 'siblings produce distinct candidates');
+
+    // Reconnect each sibling: each must see ITS OWN execution, not the last sibling's.
+    const ra = await (await fetch(`${base}/api/animatic/pacing-proposal/${a.proposalDigest}/execution`)).json();
+    const rb = await (await fetch(`${base}/api/animatic/pacing-proposal/${b.proposalDigest}/execution`)).json();
+    assert.equal(ra.execution.executionId, viewA.execution.executionId, 'sibling A reconnects to A execution');
+    assert.equal(ra.candidate.candidate.candidate_id, viewA.candidate.candidate.candidate_id);
+    assert.equal(rb.execution.executionId, viewB.execution.executionId, 'sibling B reconnects to B execution');
+    assert.equal(rb.candidate.candidate.candidate_id, viewB.candidate.candidate.candidate_id);
   });
 });
 

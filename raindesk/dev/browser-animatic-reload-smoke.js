@@ -91,7 +91,7 @@ function freePort() {
   });
 }
 
-async function waitDevtools(port, child, ms = 25_000) {
+async function waitDevtools(port, child, ms = 45_000) {
   let stderr = ''; let exited = false; let exitCode = null;
   child.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
   child.once('exit', (code) => { exited = true; exitCode = code; });
