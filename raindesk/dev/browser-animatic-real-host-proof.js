@@ -275,7 +275,7 @@ async function main() {
       raindeskHead: headSha(),
       executor: {
         toolSha256: toolSha,
-        adapterId: cand.attempt_id ? undefined : undefined, // adapter identity comes from the attempt record:
+        // adapter identity comes from the attempt record:
         adapterIdFromAttempt: candidateRecord.attempt.adapter_id,
         adapterVersionFromAttempt: candidateRecord.attempt.adapter_version || null,
       },
