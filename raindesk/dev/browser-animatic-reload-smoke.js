@@ -212,13 +212,30 @@ async function main() {
   const sockets = new Set(); server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}/`;
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-chromium-reload-'));
-  const debugPort = await freePort();
-  const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${debugPort}`, '--window-size=1440,900', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let profile = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-chromium-reload-'));
+  let debugPort = await freePort();
+  const chromeArgs = () => ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${debugPort}`, '--window-size=1440,900', `--user-data-dir=${profile}`, 'about:blank'];
+  let chrome = spawn(CHROME, chromeArgs(), { stdio: ['ignore', 'ignore', 'pipe'] });
+  // Cold CI runners occasionally fail to bring the DevTools listener up
+  // (dbus noise, slow first launch). One bounded respawn on a fresh port and
+  // profile; a second failure surfaces unchanged. No product assertion is
+  // relaxed by this — the journey itself is untouched.
+  async function startDevtools() {
+    try {
+      return await waitDevtools(debugPort, chrome);
+    } catch (_firstError) {
+      if (chrome.exitCode == null) chrome.kill('SIGKILL');
+      try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_e) {}
+      profile = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-chromium-reload-'));
+      debugPort = await freePort();
+      chrome = spawn(CHROME, chromeArgs(), { stdio: ['ignore', 'ignore', 'pipe'] });
+      return await waitDevtools(debugPort, chrome);
+    }
+  }
   let page = null;
   try {
     try {
-    const browserWsUrl = await waitDevtools(debugPort, chrome);
+    const browserWsUrl = await startDevtools();
     page = await openPage(browserWsUrl, base);
     phase = 'first-boot';
     await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'Raindesk boot');
