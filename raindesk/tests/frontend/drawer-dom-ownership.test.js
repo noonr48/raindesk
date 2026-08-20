@@ -226,17 +226,24 @@ test('animatic takes never depend on localStorage', async () => {
     listTakes: async () => ({ takes: [] }),
     listAnimaticCandidates: async () => ({ candidates: [keptRecord] }),
   };
-  // Node ships a real global localStorage (v22+); record every access during
-  // the restore instead of assuming absence. The proof: restoration succeeds
-  // and the animatic path performs ZERO localStorage reads or writes.
+  // Node ships a real global localStorage (v22+); spy it with argument capture
+  // during the restore. The proof: restoration succeeds and the animatic path
+  // performs ZERO localStorage reads or writes of any raindesk key — the spy
+  // records method + key arguments, so the assertion is falsifiable.
   const accesses = [];
   const savedLS = global.localStorage;
   global.localStorage = new Proxy({}, {
     get(_t, prop) {
-      accesses.push(`get:${String(prop)}`);
+      accesses.push(`access:${String(prop)}`);
+      if (prop === 'getItem' || prop === 'setItem' || prop === 'removeItem' || prop === 'key') {
+        return (...args) => {
+          accesses.push(`${String(prop)}:${args.map((a) => String(a)).join(',')}`);
+          return null;
+        };
+      }
       return () => null;
     },
-    set(_t, prop) { accesses.push(`set:${String(prop)}`); return true; },
+    set(_t, prop) { accesses.push(`set-prop:${String(prop)}`); return true; },
   });
   try {
     const { drawer, animaticHost } = makeDrawer(api);
