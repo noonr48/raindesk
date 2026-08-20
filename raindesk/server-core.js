@@ -285,14 +285,22 @@ function hostAccepted(req) {
   if (localAddr === '127.0.0.1' || localAddr === '::1' || localAddr === 'localhost') {
     addHost('localhost'); addHost('127.0.0.1'); addHost('[::1]');
   }
+  // Owner-configured extra hostnames (comma-separated) — e.g. a LAN DNS
+  // name or hosts-file alias used to reach this desk. The rebinding defense
+  // is kept: an attacker controls the Host header, never this list.
+  for (const extra of String(process.env.RAINDESK_ALLOWED_HOSTS || '').split(',')) {
+    addHost(extra.trim().toLowerCase());
+  }
   return allowed.has(raw);
 }
 
 /**
- * Local mutation boundary for the JSON API: a loopback creative server can
- * still be targeted from an unrelated page in the user's browser. Mutating
- * requests must be JSON-shaped (or the multipart layer upload), and clearly
- * cross-origin/cross-site requests are refused before route logic runs.
+ * Local request boundary for the JSON API: a loopback creative server can
+ * still be targeted from an unrelated page in the user's browser. The
+ * content-type rule is method-gated (mutations must be JSON-shaped or the
+ * multipart layer upload); the origin / fetch-site / Host rules run for
+ * every /api/ request including reads — DNS-rebinding defense on read
+ * routes too.
  */
 function assertLocalMutationRequest(req, method) {
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {

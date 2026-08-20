@@ -88,6 +88,56 @@ test('rebound Host headers (same-port DNS rebinding) are refused (403)', async (
   });
 });
 
+test('owner-configured hostnames (RAINDESK_ALLOWED_HOSTS) pass the Host allowlist', async (t) => {
+  await withServer(t, async (base) => {
+    const { hostname, port } = new URL(base);
+    const saved = process.env.RAINDESK_ALLOWED_HOSTS;
+    process.env.RAINDESK_ALLOWED_HOSTS = 'desk.local,studio.lan';
+    const raw = await new Promise((resolve, reject) => {
+      const req = require('node:http').request({
+        host: hostname, port, method: 'POST', path: '/api/chat',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: `http://desk.local:${port}`,
+          Host: `desk.local:${port}`,
+          'Sec-Fetch-Site': 'same-origin',
+        },
+      }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ message: 'hi' }));
+    });
+    if (saved === undefined) delete process.env.RAINDESK_ALLOWED_HOSTS; else process.env.RAINDESK_ALLOWED_HOSTS = saved;
+    assert.equal(raw.status, 200, 'allowlisted hostname reaches route logic');
+    assert.match(raw.body, /echo: hi/);
+    // And an unlisted hostname is still refused.
+    process.env.RAINDESK_ALLOWED_HOSTS = 'desk.local';
+    const blocked = await new Promise((resolve, reject) => {
+      const req = require('node:http').request({
+        host: hostname, port, method: 'POST', path: '/api/chat',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: `http://other.example:${port}`,
+          Host: `other.example:${port}`,
+          'Sec-Fetch-Site': 'same-origin',
+        },
+      }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ message: 'hi' }));
+    });
+    if (saved === undefined) delete process.env.RAINDESK_ALLOWED_HOSTS; else process.env.RAINDESK_ALLOWED_HOSTS = saved;
+    assert.equal(blocked.status, 403);
+    assert.match(blocked.body, /served address/);
+  });
+});
+
 test('same-origin JSON mutations still reach route logic', async (t) => {
   await withServer(t, async (base) => {
     const host = new URL(base).host;

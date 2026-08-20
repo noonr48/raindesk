@@ -18,6 +18,17 @@ env:
 ```
 
 - The server refuses remote binds without a long token, and wildcards without
+  an explicit opt-in. In addition, every `/api/` request (reads included) is
+  checked against a Host allowlist derived from the bound interface — this is
+  DNS-rebinding defense. Access by hostname (DNS/mDNS/hosts-file alias)
+  requires declaring it:
+
+```
+  RAINDESK_ALLOWED_HOSTS=desk.local,studio.lan   # comma-separated extra hostnames
+```
+
+- Keyless mode is for carefully trusted private networks only — it is NOT the
+  normal production posture; prefer a token.
   the explicit opt-in (`server-core.js validateBindOptions`). Choose the mode
   that matches your network's trust level; the default is token-protected.
 - A restart without these env vars degrades to loopback-only (2026-08
