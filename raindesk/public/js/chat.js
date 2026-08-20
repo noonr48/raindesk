@@ -114,11 +114,11 @@
       tab = which === 'gens' ? 'gens' : 'agent';
       root.classList.add('open');
       sync();
-      listeners.open.forEach((f) => f());
+      listeners.open.forEach((f) => { try { f(); } catch (_e) { /* observer only */ } });
     }
     function close() {
       root.classList.remove('open');
-      listeners.close.forEach((f) => f());
+      listeners.close.forEach((f) => { try { f(); } catch (_e) { /* observer only */ } });
     }
     scrim.addEventListener('click', close);
     closeBtn.addEventListener('click', close);
@@ -130,7 +130,7 @@
       tabGens.classList.toggle('active', tab === 'gens');
       chatList.style.display = tab === 'agent' ? 'flex' : 'none';
       gensList.style.display = tab === 'gens' ? 'flex' : 'none';
-      listeners.tab.forEach((f) => f(tab));
+      listeners.tab.forEach((f) => { try { f(tab); } catch (_e) { /* observer only */ } });
       if (tab === 'gens') renderGens();
     }
 

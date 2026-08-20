@@ -286,8 +286,10 @@ async function main() {
     };
     if (RECEIPT) fs.writeFileSync(RECEIPT, JSON.stringify(receipt, null, 2) + '\n');
     console.log(JSON.stringify(receipt));
+    clearTimeout(watchdog); // capture is CDP-bounded; a mid-capture watchdog exit would discard both artifact and error
     await captureDiagnostics(page, null);
     } catch (journeyError) {
+    clearTimeout(watchdog);
     await captureDiagnostics(page, journeyError);
     throw journeyError;
     }

@@ -76,6 +76,6 @@ test('ordinary image-Take redraw cannot strand durable animatic review state', (
   assert.doesNotMatch(source, /keepSectionAttached/);
   assert.match(chatSource, /animatic-takes-host/);
   assert.match(chatSource, /image-takes-host/);
-  assert.match(chatSource, /listeners\.tab\.forEach\(\(f\) => f\(tab\)\)/);
+  assert.match(chatSource, /listeners\.tab\.forEach\(\(f\) => \{ try \{ f\(tab\); \} catch/);
   assert.match(source, /api\.listAnimaticCandidates\(\{ limit: 50 \}\)/);
 });

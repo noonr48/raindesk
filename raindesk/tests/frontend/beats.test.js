@@ -55,7 +55,7 @@ test('drawer broadcasts an explicit tab lifecycle channel', () => {
   // subscribe to (replaces per-feature tab-click hooks and DOM-repair
   // observers): sync() broadcasts every tab activation, including the
   // constructor-tail activation on a fresh page.
-  assert.match(chat, /listeners\.tab\.forEach\(\(f\) => f\(tab\)\)/);
+  assert.match(chat, /listeners\.tab\.forEach\(\(f\) => \{ try \{ f\(tab\); \} catch/);
   assert.match(chat, /tabAgent\.addEventListener\('click', \(\) => \{ tab = 'agent'; sync\(\); \}\)/);
   assert.match(chat, /tabGens\.addEventListener\('click', \(\) => \{ tab = 'gens'; sync\(\); \}\)/);
 });
