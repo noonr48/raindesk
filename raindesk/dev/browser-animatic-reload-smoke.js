@@ -178,15 +178,21 @@ async function captureDiagnostics(page, error) {
     const probe = (expression, awaitPromise = false) => page.send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true })
       .then((out) => (out.exceptionDetails ? `exception: ${String(out.exceptionDetails.exception && out.exceptionDetails.exception.description || out.exceptionDetails.text).slice(0, 300)}` : out.result && out.result.value))
       .catch((e) => `probe failed: ${e.message}`);
-    diag.dom = await probe(`(()=>{const g=document.querySelector('.gens-list');return JSON.stringify({hasGensList:!!g,animaticSection:!!document.querySelector('.animatic-takes-section'),takeCards:document.querySelectorAll('.animatic-take-card').length,takeStatus:(document.querySelector('.animatic-take-status')||{}).textContent||null,video:!!document.querySelector('.animatic-take-card video'),pacingCard:!!document.querySelector('.animatic-pacing-card'),activeTab:(document.querySelector('.drawer-tab.active')||{}).dataset?document.querySelector('.drawer-tab.active').dataset.tab:null,gensChildren:g?Array.from(g.children).map((c)=>c.className).slice(0,8):null})})()`);
+    diag.dom = await probe(`(()=>{const g=document.querySelector('.gens-list');return JSON.stringify({hasGensList:!!g,animaticSection:!!document.querySelector('.animatic-takes-section'),takeCards:document.querySelectorAll('.animatic-take-card').length,takeStatus:(document.querySelector('.animatic-take-status')||{}).textContent||null,video:!!document.querySelector('.animatic-take-card video'),pacingCard:!!document.querySelector('.animatic-pacing-card'),activeTab:(()=>{const t=document.querySelector('.dtab.active');return t?(t.dataset.tab||null):null})(),gensChildren:g?Array.from(g.children).map((c)=>c.className).slice(0,8):null})})()`);
     diag.gensHtmlHead = await probe(`String(document.querySelector('.gens-list')?.innerHTML||'').replace(/\\s+/g,' ').slice(0,1500)`);
     diag.animaticRequests = await probe(`performance.getEntriesByType('resource').filter((e)=>e.name.includes('/api/animatic/')).map((e)=>e.name.replace(location.origin,'')).join('\\n').slice(0,1500)`);
     diag.apiCandidates = await probe(`fetch('/api/animatic/candidates?limit=50').then(async (r)=>r.status+' '+(await r.text()).slice(0,1000))`, true);
     diag.apiReview = await probe(`fetch('/api/animatic/review?candidateId=cand-browser-reload').then(async (r)=>r.status+' '+(await r.text()).slice(0,600))`, true);
   }
-  fs.mkdirSync(path.dirname(DIAGNOSTICS), { recursive: true });
-  fs.writeFileSync(DIAGNOSTICS, JSON.stringify(diag, null, 2) + '\n');
-  console.error(`[animatic-reload] diagnostics written: ${DIAGNOSTICS} phase=${phase}`);
+  // Diagnostics must never mask the journey error: a write failure here is
+  // reported to stderr but the original error keeps propagating.
+  try {
+    fs.mkdirSync(path.dirname(DIAGNOSTICS), { recursive: true });
+    fs.writeFileSync(DIAGNOSTICS, JSON.stringify(diag, null, 2) + '\n');
+    console.error(`[animatic-reload] diagnostics written: ${DIAGNOSTICS} phase=${phase}`);
+  } catch (writeError) {
+    console.error(`[animatic-reload] diagnostics write failed: ${writeError && writeError.message}`);
+  }
 }
 
 async function main() {
