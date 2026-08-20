@@ -126,6 +126,7 @@ function animaticRoute(pathname) {
     pathname === '/api/animatic/pacing-proposal' ||
     pathname === '/api/animatic/pacing-proposals' ||
     new RegExp(`^/api/animatic/pacing-proposal/${DIGEST_SEGMENT}$`).test(pathname) ||
+    new RegExp(`^/api/animatic/pacing-proposal/${DIGEST_SEGMENT}/execution$`).test(pathname) ||
     pathname === '/api/animatic/prepare' || pathname === '/api/animatic/preview' || pathname === '/api/animatic/execute' ||
     pathname === '/api/animatic/candidates' || pathname === '/api/animatic/review' ||
     /^\/api\/animatic\/snapshot\/[a-f0-9]{64}$/.test(pathname) ||
@@ -237,6 +238,21 @@ async function handleAnimaticApi(req, res, url, { sourceRights = null, animaticE
   if (req.method === 'GET' && pacingMatch) {
     const proposal = animaticPacing.readByDigest(pacingMatch[1]);
     return core.sendJson(res, 200, { ok: true, proposal: animaticPacing.publicProposal(proposal) });
+  }
+  const pacingExecMatch = url.pathname.match(/^\/api\/animatic\/pacing-proposal\/([a-f0-9]{64})\/execution$/);
+  if (req.method === 'GET' && pacingExecMatch) {
+    // Reload reconnect: report the durable execution state for one stored
+    // proposal without re-preparing or re-approving anything. The child
+    // invocation is server-prepared and bound to this proposal's parent.
+    const proposal = animaticPacing.readByDigest(pacingExecMatch[1]);
+    const children = invocationLedger.read().invocations
+      .filter((row) => row && row.origin === 'server_prepared' && row.parentRequestId === proposal.parentRequestId);
+    if (!children.length) throw new HttpError(404, 'no animatic execution for this proposal yet');
+    const row = animaticExecutionStore.latestForInvocation(children[children.length - 1].id);
+    if (!row) throw new HttpError(404, 'no animatic execution for this proposal yet');
+    let candidate = null;
+    if (row.candidateId) candidate = candidateView(animaticCandidates.read(row.candidateId));
+    return core.sendJson(res, 200, { ok: true, execution: animaticExecutionStore.publicRow(row), candidate });
   }
   if (req.method === 'POST' && url.pathname === '/api/animatic/prepare') {
     if (!sourceRights) throw new HttpError(503, 'RAINDESK_SOURCE_RIGHTS is required before animatic preparation');

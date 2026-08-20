@@ -18,7 +18,7 @@ function harness({ previous = null, stale = false, childStatus = 'proposed' } = 
     preparationImpl: { prepare(args) { calls.push(['prepare', args]); return { invocation: child, snapshot: { snapshot_digest: 's'.repeat(64) } }; } },
     ledgerImpl: { setStatus(id, status) { calls.push(['status', id, status]); child.status = status; return child; } },
     executionStoreImpl: { latestForInvocation() { return previous; } },
-    executorImpl: { async execute(id, options) { calls.push(['execute', id, options]); return { execution: { status: 'succeeded' }, candidate: { candidate: { candidate_id: 'cand1' } } }; } },
+    executorImpl: { start(id, options) { calls.push(['execute', id, options]); return { started: true, execution: { status: 'succeeded' }, candidate: { candidate: { candidate_id: 'cand1' } } }; } },
   });
   return { service, calls, child };
 }

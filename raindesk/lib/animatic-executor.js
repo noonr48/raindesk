@@ -132,7 +132,9 @@ function publicResult(execution, candidateRecord = null) {
   };
 }
 
-async function executeOnce(invocationId, { retry = false, env = process.env } = {}) {
+/** Synchronous authority + idempotency + run-begin prefix, shared by the
+ *  awaited execute() and the detached start() paths. */
+function beginRun(invocationId, { retry = false, env = process.env } = {}) {
   const invocation = approvedInvocation(invocationId);
   const runtime = adapters.configuredAnimaticRuntime(env);
   if (!runtime) throw new HttpError(503, 'animatic runtime is not completely configured');
@@ -141,9 +143,9 @@ async function executeOnce(invocationId, { retry = false, env = process.env } = 
   if (existing) {
     if (existing.status === 'succeeded') {
       const candidate = existing.candidateId ? candidates.read(existing.candidateId) : null;
-      return publicResult(existing, candidate);
+      return { kind: 'done', result: publicResult(existing, candidate) };
     }
-    if (existing.status === 'running') return publicResult(existing);
+    if (existing.status === 'running') return { kind: 'done', result: publicResult(existing, null) };
     if (['failed', 'interrupted'].includes(existing.status) && !retry) {
       throw new HttpError(409, 'previous animatic execution failed or was interrupted; explicit retry=true is required');
     }
@@ -201,7 +203,13 @@ async function executeOnce(invocationId, { retry = false, env = process.env } = 
     if (env && env[key] != null) childEnv[key] = String(env[key]);
   }
   childEnv.SLOANE_VIDEO_ALLOWED_ROOTS = runtime.projectRoot;
+  return { kind: 'run', invocation, runtime, localAttempt, attemptRunRoot, args, childEnv };
+}
 
+/** Awaited external run + durable terminal recording on every path; shared
+ *  by execute() (awaited) and start() (background). */
+async function completeRun(run) {
+  const { invocation, runtime, localAttempt, attemptRunRoot, args, childEnv } = run;
   const processResult = await runProcess(runtime.executable, args, {
     env: childEnv,
     timeoutMs: runtime.timeoutMs,
@@ -269,6 +277,34 @@ async function executeOnce(invocationId, { retry = false, env = process.env } = 
   return publicResult(succeeded, imported);
 }
 
+async function executeOnce(invocationId, options = {}) {
+  const run = beginRun(invocationId, options);
+  if (run.kind === 'done') return run.result;
+  return completeRun(run);
+}
+
+/** Detached start for async preview: performs the authority prefix and the
+ *  durable run-begin synchronously, returns the running execution row
+ *  immediately, and completes the external run in the background (terminal
+ *  state is recorded durably on every path; the store is the source of
+ *  truth for polling). In-flight dedup matches execute(): a repeated start
+ *  returns the existing execution and never spawns twice. */
+function start(invocationId, { retry = false, env = process.env } = {}) {
+  const key = text(invocationId, 96);
+  if (!key) throw new HttpError(400, 'invocationId is required');
+  if (inFlight.has(key)) {
+    const row = executionStore.latestForInvocation(key);
+    return { execution: row ? executionStore.publicRow(row) : null, started: false };
+  }
+  const run = beginRun(key, { retry, env });
+  if (run.kind === 'done') return { execution: run.result.execution, candidate: run.result.candidate, started: false };
+  const background = completeRun(run)
+    .catch((error) => { console.error('[animatic] background execution failed:', error && error.message); }) // eslint-disable-line no-console
+    .finally(() => { inFlight.delete(key); });
+  inFlight.set(key, background);
+  return { execution: executionStore.publicRow(run.localAttempt), started: true };
+}
+
 function execute(invocationId, options = {}) {
   const key = text(invocationId, 96);
   if (!key) return Promise.reject(new HttpError(400, 'invocationId is required'));
@@ -280,5 +316,5 @@ function execute(invocationId, options = {}) {
 
 module.exports = {
   DATA_DIR, RUN_ROOT, MAX_STDIO_BYTES, inFlight,
-  approvedInvocation, parseResult, runProcess, publicResult, executeOnce, execute,
+  approvedInvocation, parseResult, runProcess, publicResult, beginRun, completeRun, executeOnce, execute, start,
 };

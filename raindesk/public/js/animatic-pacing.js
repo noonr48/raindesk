@@ -66,8 +66,9 @@
         const response = await api.previewAnimatic(proposal.proposalDigest);
         const candidate = response && response.candidate;
         if (!candidate) {
-          status.textContent = response && response.execution && response.execution.status === 'running'
-            ? 'rough cut is still rendering…' : 'preview started';
+          // Async preview: the render continues in the background. Poll the
+          // durable execution until a terminal state, with bounded backoff.
+          await pollExecution(proposal, button, status, response && response.execution && response.execution.executionId);
           return;
         }
         status.textContent = 'rough cut ready';
@@ -83,6 +84,70 @@
         button.disabled = false;
       } finally {
         busy = false;
+      }
+    }
+
+    async function pollExecution(proposal, button, status, executionId) {
+      const phaseLabel = (state) => ({
+        running: 'building rough cut…', succeeded: 'rough cut ready',
+        failed: 'preview could not be built — ask me for a fresh rhythm',
+        interrupted: 'preview was interrupted — try again',
+      }[state] || 'building rough cut…');
+      // Poll the durable execution: by id when we started it, by proposal
+      // digest otherwise (reload reconnect). Bounded backoff, stop when the
+      // surface is gone.
+      const started = Date.now();
+      let delay = 400;
+      for (;;) {
+        if (!document.body || !document.body.contains(status)) return; // surface gone
+        let response;
+        try {
+          response = (executionId && api.getAnimaticExecution)
+            ? await api.getAnimaticExecution(executionId)
+            : (api.getAnimaticPacingExecution ? await api.getAnimaticPacingExecution(proposal.proposalDigest) : null);
+        } catch (_error) { response = null; }
+        const execution = response && response.execution;
+        const state = execution && execution.status;
+        if (state === 'succeeded' && response.candidate) {
+          status.textContent = 'rough cut ready';
+          if (drawer && typeof drawer.addPartnerNote === 'function') {
+            drawer.addPartnerNote('The rough cut is ready in Takes — react to the rhythm, not the polish.');
+          }
+          if (drawer && typeof drawer.open === 'function') drawer.open('gens');
+          if (drawer && drawer.animaticTakes && typeof drawer.animaticTakes.render === 'function') {
+            await drawer.animaticTakes.render();
+          }
+          return;
+        }
+        if (state === 'failed' || state === 'interrupted') {
+          status.textContent = phaseLabel(state);
+          button.disabled = false; // retry stays free, same snapshot
+          return;
+        }
+        status.textContent = phaseLabel(state || 'running');
+        if (Date.now() - started > 30 * 60 * 1000) { // bounded: max render window
+          status.textContent = 'still rendering — check Takes in a moment';
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(2500, Math.round(delay * 1.5));
+      }
+    }
+
+    async function reconnect(proposal, button, status) {
+      // Reload reconnect: surface the durable state of an already-running or
+      // finished render without starting anything new.
+      if (!api || typeof api.getAnimaticPacingExecution !== 'function') return;
+      let response;
+      try { response = await api.getAnimaticPacingExecution(proposal.proposalDigest); } catch (_error) { return; }
+      const execution = response && response.execution;
+      if (!execution || !status) return;
+      if (execution.status === 'running') {
+        status.textContent = 'building rough cut…';
+        button.disabled = true;
+        await pollExecution(proposal, button, status, null);
+      } else if (execution.status === 'succeeded' && response.candidate) {
+        status.textContent = 'rough cut ready';
       }
     }
 
@@ -108,6 +173,9 @@
         if (!proposal.stale) preview.addEventListener('click', () => previewProposal(proposal, preview, status));
         controls.append(preview, status);
         card.appendChild(controls);
+        // After a reload, a render may already be running or finished: surface
+        // its durable state without starting anything new.
+        if (!proposal.stale && typeof reconnect === 'function') setTimeout(() => reconnect(proposal, preview, status), 0);
         wrap.appendChild(card);
       }
       if (wrap.childNodes.length <= 1) return null;

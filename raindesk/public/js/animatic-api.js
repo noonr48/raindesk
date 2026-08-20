@@ -40,6 +40,9 @@
   function previewAnimatic(proposalDigest) {
     return api().POST('/api/animatic/preview', { proposalDigest });
   }
+  function getAnimaticPacingExecution(proposalDigest) {
+    return api().GET(`/api/animatic/pacing-proposal/${encodeURIComponent(proposalDigest)}/execution`);
+  }
   function executeAnimatic(invocationId, { retry = false } = {}) {
     return api().POST('/api/animatic/execute', { invocationId, retry: retry === true });
   }
@@ -78,6 +81,7 @@
     previewAnimatic,
     executeAnimatic,
     getAnimaticExecution,
+    getAnimaticPacingExecution,
     listAnimaticCandidates,
     getAnimaticCandidate,
     reviewAnimaticCandidate,

@@ -118,30 +118,54 @@ async function withServer(t, fn) {
 test('Preview this approves exact proposal, renders one immutable candidate, and repeat is idempotent', async (t) => {
   const { proposal, shotId } = seedProposal();
   await withServer(t, async (base) => {
+    // Async preview: authority completes synchronously, the render runs in
+    // the background, the browser polls the durable execution row.
     let res = await fetch(`${base}/api/animatic/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposalDigest: proposal.proposalDigest }),
     });
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 202);
     let body = await res.json();
     assert.equal(body.ok, true);
     assert.equal(body.proposal.proposalDigest, proposal.proposalDigest);
-    assert.equal(body.execution.status, 'succeeded');
-    assert.equal(body.candidate.candidate.candidate_id, 'cand-preview');
-    assert.match(body.candidate.artifacts[0].url, /^\/api\/animatic\/artifact\/[a-f0-9]{64}$/);
-    assert.equal(body.candidate.candidate.review_state, undefined);
+    assert.equal(body.execution.status, 'running');
+    assert.equal(body.candidate, null);
+    const executionId = body.execution.executionId;
+
+    // Poll the durable execution to a terminal state.
+    let view;
+    for (let i = 0; i < 40; i++) {
+      view = await (await fetch(`${base}/api/animatic/execution/${executionId}`)).json();
+      if (view.execution && view.execution.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(view.ok, true);
+    assert.equal(view.execution.status, 'succeeded');
+    assert.equal(view.candidate.candidate.candidate_id, 'cand-preview');
+    assert.match(view.candidate.artifacts[0].url, /^\/api\/animatic\/artifact\/[a-f0-9]{64}$/);
+    assert.equal(view.candidate.candidate.review_state, undefined);
     assert.equal(review.list({ candidateId: 'cand-preview' }).length, 0, 'preview never auto-keeps a candidate');
 
     const preparedRows = ledger.list({ shotId, limit: 100 }).filter((row) => row.origin === 'server_prepared');
     assert.equal(preparedRows.length, 1);
     assert.equal(preparedRows[0].status, 'handed_off');
 
+    // Repeat click returns the finished execution with its candidate, never spawns twice.
     res = await fetch(`${base}/api/animatic/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposalDigest: proposal.proposalDigest }),
     });
     assert.equal(res.status, 200);
     body = await res.json();
+    assert.equal(body.execution.status, 'succeeded');
     assert.equal(body.candidate.candidate.candidate_id, 'cand-preview');
     assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 1, 'same successful preview does not spawn twice');
+
+    // Reload reconnect: the proposal-scoped route reports the same durable state.
+    res = await fetch(`${base}/api/animatic/pacing-proposal/${proposal.proposalDigest}/execution`);
+    assert.equal(res.status, 200);
+    const reconnected = await res.json();
+    assert.equal(reconnected.execution.executionId, executionId);
+    assert.equal(reconnected.execution.status, 'succeeded');
+    assert.equal(reconnected.candidate.candidate.candidate_id, 'cand-preview');
 
     res = await fetch(`${base}/api/animatic/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

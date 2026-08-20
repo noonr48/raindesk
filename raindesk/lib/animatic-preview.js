@@ -53,14 +53,19 @@ function createPreviewService({
 
       const previous = executionStoreImpl.latestForInvocation(invocation.id);
       const retry = Boolean(previous && ['failed', 'interrupted'].includes(previous.status));
-      const rendered = await executorImpl.execute(invocation.id, { retry, env });
+      // Async preview: the authority prefix and durable run-begin complete
+      // synchronously; the external render continues in the background. The
+      // browser polls GET /api/animatic/execution/:id; a repeated click
+      // returns the existing execution and never spawns twice.
+      const started = executorImpl.start(invocation.id, { retry, env });
       return {
         proposal: pacingImpl.publicProposal(proposal),
         snapshot: prepared.snapshot,
         invocation,
-        execution: rendered.execution,
-        candidate: rendered.candidate || null,
+        execution: started.execution,
+        candidate: started.candidate || null,
         retried: retry,
+        started: Boolean(started.started),
       };
     },
   };
