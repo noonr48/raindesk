@@ -14,7 +14,9 @@ const ledger = require('../partner-invocation-ledger');
 const { createServer } = require('../../server');
 
 function fakeMp4() {
-  return Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(48, 7)]);
+  // A genuinely valid, tiny MP4 (see fixtures/README.md): the artifact store
+  // now structurally validates containers, so header-only fakes are rejected.
+  return fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'animatic-tiny.mp4'));
 }
 
 async function withServer(t, fn) {
@@ -50,7 +52,7 @@ test('MP4 artifact endpoint supports HEAD, immutable full reads, byte ranges and
     assert.equal(res.headers.get('content-range'), `bytes 4-11/${item.bytes}`);
     assert.equal(Buffer.from(await res.arrayBuffer()).toString('ascii'), 'ftypisom');
 
-    res = await fetch(`${base}/api/animatic/artifact/${item.sha}`, { headers: { Range: 'bytes=999-1000' } });
+    res = await fetch(`${base}/api/animatic/artifact/${item.sha}`, { headers: { Range: `bytes=${item.bytes + 100}-${item.bytes + 200}` } });
     assert.equal(res.status, 416);
     assert.equal(res.headers.get('content-range'), `bytes */${item.bytes}`);
   });

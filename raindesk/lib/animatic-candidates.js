@@ -85,12 +85,13 @@ function validateAttempt(attempt, { digest, expectedAttemptId = null } = {}) {
   if (expectedAttemptId && attemptId !== expectedAttemptId) throw new HttpError(422, 'executor stdout attempt_id does not match ExecutionAttempt');
   if (assertSha(attempt.source_snapshot_digest, 'attempt source snapshot digest') !== digest) throw new HttpError(422, 'ExecutionAttempt source snapshot does not match approved snapshot');
   if (attempt.adapter_id !== 'animatic_timing_v1') throw new HttpError(422, 'ExecutionAttempt adapter identity mismatch');
+  if (attempt.adapter_version !== '0.2.0') throw new HttpError(422, 'ExecutionAttempt adapter version mismatch');
   if (attempt.lifecycle !== 'succeeded' || attempt.terminal_status !== 'succeeded') throw new HttpError(422, 'ExecutionAttempt is not a successful terminal attempt');
   if (!Array.isArray(attempt.candidate_refs) || !attempt.candidate_refs.length) throw new HttpError(422, 'ExecutionAttempt has no candidate reference');
   return attemptId;
 }
 
-function validateCandidate(candidate, { digest, attemptId, expectedCandidateId = null } = {}) {
+function validateCandidate(candidate, { digest, attemptId, expectedCandidateId = null, snapshot = null } = {}) {
   assertClosedObject(candidate, CANDIDATE_KEYS, 'SequenceCandidateManifest');
   if (candidate.schema_version !== '0.2.0') throw new HttpError(422, 'SequenceCandidateManifest schema version mismatch');
   const candidateId = assertId(candidate.candidate_id, 'candidate_id');
@@ -105,6 +106,26 @@ function validateCandidate(candidate, { digest, attemptId, expectedCandidateId =
   for (const forbidden of ['review_state', 'approval', 'approved', 'accepted', 'reviewDecision', 'review_decision']) {
     if (Object.prototype.hasOwnProperty.call(candidate, forbidden)) throw new HttpError(422, 'candidate manifest illegally carries review state');
   }
+  if (snapshot) {
+    // The external manifest must describe EXACTLY the approved snapshot: a
+    // worker cannot redeclare dimensions, frame rate, duration, fidelity or
+    // project/sequence identity — those are Raindesk-owned authority.
+    if (candidate.project_id !== snapshot.project_id) throw new HttpError(422, 'candidate project identity does not match approved snapshot');
+    if (candidate.sequence_id !== snapshot.sequence_id) throw new HttpError(422, 'candidate sequence identity does not match approved snapshot');
+    if (candidate.fidelity.level !== snapshot.fidelity) throw new HttpError(422, 'candidate fidelity does not match approved snapshot');
+    const media = candidate.media;
+    for (const field of ['width', 'height', 'fps_num', 'fps_den']) {
+      if (!Number.isSafeInteger(media[field])) throw new HttpError(422, `candidate media ${field} is not a finite integer`);
+    }
+    if (media.width !== snapshot.width || media.height !== snapshot.height) throw new HttpError(422, 'candidate media dimensions do not match approved snapshot');
+    if (media.fps_num !== snapshot.fps_num || media.fps_den !== snapshot.fps_den) throw new HttpError(422, 'candidate media frame rate does not match approved snapshot');
+    const duration = media.duration;
+    if (!duration || typeof duration !== 'object' || !Number.isSafeInteger(duration.num) || !Number.isSafeInteger(duration.den)) throw new HttpError(422, 'candidate media duration is not an exact rational');
+    const frames = snapshot.shots.reduce((sum, shot) => sum + shot.duration_frames, 0);
+    if (duration.num !== frames * snapshot.fps_den || duration.den !== snapshot.fps_num) {
+      throw new HttpError(422, 'candidate media duration does not equal the approved snapshot frame total');
+    }
+  }
   return candidateId;
 }
 
@@ -114,11 +135,12 @@ function resolveManifestArtifact(runDir, fileSpec) {
   const relative = typeof fileSpec.path === 'string' ? fileSpec.path.trim() : '';
   if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]+/).includes('..')) throw new HttpError(422, 'candidate file path is unsafe');
   const file = realContained(runDir, path.resolve(runDir, relative), { regularFile: true });
-  const bytes = fs.readFileSync(file);
   const expectedSha = assertSha(fileSpec.sha256, 'candidate file sha256');
   const expectedBytes = Number(fileSpec.bytes);
   if (!Number.isInteger(expectedBytes) || expectedBytes < 0) throw new HttpError(422, 'candidate file byte count is invalid');
-  const mirrored = videoArtifacts.putMp4(bytes, { expectedSha, expectedBytes });
+  // Bounded-memory import: lstat + size ceiling BEFORE any read, structural
+  // box validation via positioned reads, streaming hash + streaming copy.
+  const mirrored = videoArtifacts.streamMp4(file, { expectedSha, expectedBytes });
   return mirrored;
 }
 
@@ -157,11 +179,8 @@ function importExternal({ runRoot, runDir, invocationId, snapshotDigest, expecte
   const attempt = readJsonFile(safeRun, 'execution-attempt.json');
   const attemptId = validateAttempt(attempt, { digest, expectedAttemptId });
   const candidate = readJsonFile(safeRun, 'sequence-candidate.json');
-  const candidateId = validateCandidate(candidate, { digest, attemptId, expectedCandidateId });
+  const candidateId = validateCandidate(candidate, { digest, attemptId, expectedCandidateId, snapshot: internalSnapshot });
   if (!attempt.candidate_refs.includes(candidateId)) throw new HttpError(422, 'ExecutionAttempt does not reference the returned candidate');
-  if (candidate.sequence_id !== internalSnapshot.sequence_id || (candidate.project_id && candidate.project_id !== internalSnapshot.project_id)) {
-    throw new HttpError(422, 'candidate project/sequence identity does not match approved snapshot');
-  }
 
   const artifact = resolveManifestArtifact(safeRun, candidate.files[0]);
   const record = {

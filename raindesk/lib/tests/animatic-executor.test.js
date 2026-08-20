@@ -21,6 +21,8 @@ const executor = require('../animatic-executor');
 
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-video-projects-'));
 const fakeExecutor = path.join(scratch, 'fake-animatic-executor');
+const FIXTURE_MP4 = fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'animatic-tiny.mp4'));
+const FIXTURE_B64 = FIXTURE_MP4.toString('base64');
 
 fs.writeFileSync(fakeExecutor, `#!/usr/bin/env node
 const crypto = require('node:crypto');
@@ -44,7 +46,7 @@ const run = () => {
   const copied = JSON.parse(JSON.stringify(snap));
   if (mode === 'copy-drift') copied.fidelity = copied.fidelity === 'draft' ? 'preview' : 'draft';
   fs.writeFileSync(path.join(runDir, 'source-snapshot.json'), JSON.stringify(copied, null, 2));
-  const mp4 = Buffer.concat([Buffer.from([0,0,0,24]), Buffer.from('ftypisom'), Buffer.alloc(32, 1)]);
+  const mp4 = (mode === 'ftyp-only') ? Buffer.concat([Buffer.from([0,0,0,24]), Buffer.from('ftypisom'), Buffer.alloc(48, 3)]) : Buffer.from('${FIXTURE_B64}','base64');
   const mp4Path = path.join(runDir, 'artifacts', 'animatic.mp4');
   fs.writeFileSync(mp4Path, mp4);
   const sha = crypto.createHash('sha256').update(mp4).digest('hex');
@@ -60,7 +62,7 @@ const run = () => {
     fidelity: { level: snap.fidelity, note: 'fake CI animatic' },
     files: [{ path: 'artifacts/animatic.mp4', sha256: mode === 'bad-hash' ? '0'.repeat(64) : sha, bytes: mp4.length, mime_type: 'video/mp4' }],
     media: { width: snap.width, height: snap.height, fps_num: snap.fps_num, fps_den: snap.fps_den,
-      duration: { num: snap.shots.reduce((n, s) => n + s.duration_frames, 0), den: snap.fps_num,
+      duration: { num: snap.shots.reduce((n, s) => n + s.duration_frames, 0) * snap.fps_den, den: snap.fps_num,
         timebase: { num: snap.fps_num, den: 1 }, conversion_policy: 'exact' }, alpha: false },
     provenance: { created_at: new Date().toISOString(), tool: 'fake-animatic' },
     rights: { license: 'internal', owner: 'test', source_rights: 'test-rights' }, extensions: {}
@@ -168,7 +170,7 @@ test('non-zero worker failure is durable and retry requires explicit opt-in', as
 });
 
 test('malformed, escaping, hash-mismatched and review-state outputs fail closed', async () => {
-  for (const mode of ['malformed', 'escape', 'bad-hash', 'review-state', 'copy-drift']) {
+  for (const mode of ['malformed', 'escape', 'bad-hash', 'review-state', 'copy-drift', 'ftyp-only']) {
     const prepared = approvedInvocation(mode.replace('-', '_'));
     await assert.rejects(
       executor.execute(prepared.id, { env: env({ FAKE_MODE: mode }) }),
