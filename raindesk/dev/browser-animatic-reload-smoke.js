@@ -116,10 +116,10 @@ class CDP {
       if (msg.error) pending.reject(new Error(msg.error.message)); else pending.resolve(msg.result || {});
     });
   }
-  send(method, params = {}) {
+  send(method, params = {}, timeoutMs = 12_000) {
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 12_000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer }); this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -135,14 +135,17 @@ async function openPage(browserWsUrl, url) {
   return new CDP(ws);
 }
 
-async function value(cdp, expression, awaitPromise = false) {
-  const out = await cdp.send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true, userGesture: true });
+async function value(cdp, expression, awaitPromise = false, timeoutMs = 12_000) {
+  const out = await cdp.send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true, userGesture: true }, timeoutMs);
   if (out.exceptionDetails) throw new Error(`browser expression failed: ${JSON.stringify(out.exceptionDetails)}`);
   return out.result && out.result.value;
 }
 
 /** Real playability proof: metadata loaded, no media error, finite positive duration. */
 async function playbackProof(cdp, label) {
+  // The in-page metadata wait can legally run up to 12s on a slow runner; the
+  // CDP call needs headroom beyond that (CI failure at f8f34ce was the fixed
+  // 12s CDP timer winning the race at phase=first-playback).
   const raw = await value(cdp, `(async () => {
     const video = document.querySelector('.animatic-take-card video');
     if (!video) return JSON.stringify({ ok: false, reason: 'no video element' });
@@ -158,7 +161,7 @@ async function playbackProof(cdp, label) {
       readyState: video.readyState,
       duration: Number.isFinite(video.duration) ? video.duration : null,
     });
-  })()`, true);
+  })()`, true, 25_000);
   const proof = JSON.parse(raw);
   if (!proof.ok) throw new Error(`${label} playback proof failed: ${JSON.stringify(proof)}`);
   return proof;
