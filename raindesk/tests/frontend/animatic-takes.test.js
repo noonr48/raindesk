@@ -66,8 +66,16 @@ test('animatic take cards use native video and keep review choices honest', () =
 
 test('ordinary image-Take redraw cannot strand durable animatic review state', () => {
   const source = fs.readFileSync(path.join(ROOT, 'public', 'js', 'animatic-takes.js'), 'utf8');
-  assert.match(source, /new MutationObserver/);
-  assert.match(source, /if \(!gensList\.contains\(section\)\)/);
-  assert.match(source, /keepSectionAttached\(\);\s*queueRender\(\);/);
+  const chatSource = fs.readFileSync(path.join(ROOT, 'public', 'js', 'chat.js'), 'utf8');
+  // One stable host per surface replaces the old MutationObserver repair
+  // loop: the animatic surface renders only into its drawer-owned host, so
+  // image-Take redraws physically cannot remove it. Behavioral interleaving
+  // proofs live in tests/frontend/drawer-dom-ownership.test.js; the native
+  // acceptance journey is dev/browser-animatic-reload-smoke.js.
+  assert.doesNotMatch(source, /new MutationObserver/);
+  assert.doesNotMatch(source, /keepSectionAttached/);
+  assert.match(chatSource, /animatic-takes-host/);
+  assert.match(chatSource, /image-takes-host/);
+  assert.match(chatSource, /listeners\.tab\.forEach\(\(f\) => f\(tab\)\)/);
   assert.match(source, /api\.listAnimaticCandidates\(\{ limit: 50 \}\)/);
 });

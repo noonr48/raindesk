@@ -45,9 +45,19 @@ test('Beat Trail is loaded as a minimizable creative panel with start/end and ke
 });
 
 test('ordinary Partner turns can refresh a visible Beat Trail', () => {
-  assert.match(chat, /listeners = \{ open: \[\], close: \[\], turn: \[\], action: \[\] \}/);
+  assert.match(chat, /listeners = \{ open: \[\], close: \[\], turn: \[\], action: \[\], tab: \[\] \}/);
   assert.match(chat, /listeners\.turn\.forEach/);
   assert.match(app, /state\.drawer\.on\(['"]turn['"]/);
+});
+
+test('drawer broadcasts an explicit tab lifecycle channel', () => {
+  // The tab channel is the single lifecycle surface drawer extensions
+  // subscribe to (replaces per-feature tab-click hooks and DOM-repair
+  // observers): sync() broadcasts every tab activation, including the
+  // constructor-tail activation on a fresh page.
+  assert.match(chat, /listeners\.tab\.forEach\(\(f\) => f\(tab\)\)/);
+  assert.match(chat, /tabAgent\.addEventListener\('click', \(\) => \{ tab = 'agent'; sync\(\); \}\)/);
+  assert.match(chat, /tabGens\.addEventListener\('click', \(\) => \{ tab = 'gens'; sync\(\); \}\)/);
 });
 
 test('Beat Trail pins raw artist wording before Partner enrichment and reuses that beat id', () => {
