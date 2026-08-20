@@ -42,9 +42,12 @@ if (!REAL_TOOL || !path.isAbsolute(REAL_TOOL)) {
 }
 const toolSha = crypto.createHash('sha256').update(fs.readFileSync(REAL_TOOL)).digest('hex');
 // Executable wrapper: the pinned tool itself stays untouched (mode 644 in its
-// own repo); the wrapper only re-execs python3 over it.
+// own repo); the wrapper only re-execs python3 over it. The tool path is
+// embedded shell-safely: single-quoted with '\'' escaping, so metacharacters
+// ($, backtick, spaces, glob) can never expand in the /bin/sh context.
+const toolSh = REAL_TOOL.replace(/'/g, `'\\''`);
 const wrapper = path.join(WRAPPER_DIR, 'animatic-executor');
-fs.writeFileSync(wrapper, `#!/bin/sh\nexec python3 ${JSON.stringify(REAL_TOOL).slice(1, -1)} "$@"\n`, { mode: 0o755 });
+fs.writeFileSync(wrapper, `#!/bin/sh\nexec python3 '${toolSh}' "$@"\n`, { mode: 0o755 });
 fs.chmodSync(wrapper, 0o755);
 
 const Canvas = require('../public/js/canvas');
@@ -294,12 +297,18 @@ async function main() {
     };
     if (RECEIPT) fs.writeFileSync(RECEIPT, JSON.stringify(receipt, null, 2) + '\n');
     console.log(JSON.stringify(receipt));
-    clearTimeout(watchdog);
   } finally {
+    // Defuse the watchdog on EVERY exit path: a failing step must surface its
+    // real error promptly (exit 1) instead of being masked by a 10-minute
+    // watchdog kill that also orphans Chrome.
+    clearTimeout(watchdog);
     try { if (page && page.ws) page.ws.close(); } catch (_e) {}
     if (chrome.exitCode == null) chrome.kill('SIGKILL');
     for (const socket of sockets) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
+    // DATA_DIR and PROJECT_ROOT are deliberately RETAINED on failure (and on
+    // success) for post-mortem inspection of the real render outputs; only the
+    // scratch wrapper directory and browser profile are transient.
     for (const dir of [profile, WRAPPER_DIR]) try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_e) {}
   }
 }

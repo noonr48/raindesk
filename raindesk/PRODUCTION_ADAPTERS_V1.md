@@ -76,7 +76,7 @@ The branch now contains more than registration. The bounded path currently inclu
 6. no-shell external execution with bounded stdio/timeout;
 7. validation and import of external attempt/candidate records;
 8. SHA-backed Raindesk MP4 mirroring and Range serving;
-9. an append-only ReviewDecision scaffold that remains separate from immutable candidates.
+9. an append-only ReviewDecision log — owner decisions as events about immutable candidates, surfaced through the owner-visible review UI.
 
 Frames plus rational frame rate are the timing authority. Pacing proposals and snapshots share one validation envelope (`lib/animatic-contract.js`) so proposal content cannot be accepted under looser limits than the snapshot compiler.
 
