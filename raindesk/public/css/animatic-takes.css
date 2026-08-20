@@ -1,0 +1,15 @@
+.animatic-takes-section{display:flex;flex-direction:column;gap:.65rem;padding:.75rem;border-bottom:1px solid rgba(243,234,216,.12)}
+.animatic-takes-title{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+.animatic-takes-empty{font-size:.82rem;line-height:1.35;opacity:.65;padding:.4rem 0}
+.animatic-take-card{display:flex;flex-direction:column;gap:.55rem;padding:.7rem;border:1px solid rgba(243,234,216,.14);border-radius:12px;background:rgba(9,18,22,.48)}
+.animatic-take-head{display:flex;align-items:baseline;justify-content:space-between;gap:.65rem}
+.animatic-take-head strong{font-size:.86rem;font-weight:650}
+.animatic-take-status{font-size:.7rem;opacity:.65;text-align:right}
+.animatic-take-video{display:block;width:100%;max-height:15rem;border-radius:9px;background:#081014;object-fit:contain}
+.animatic-take-missing{font-size:.75rem;opacity:.55;padding:1rem;text-align:center;border-radius:9px;background:rgba(0,0,0,.18)}
+.animatic-take-actions{display:flex;flex-wrap:wrap;gap:.4rem}
+.animatic-review-btn{border:1px solid rgba(243,234,216,.18);border-radius:999px;background:rgba(243,234,216,.07);color:inherit;padding:.38rem .7rem;font:inherit;font-size:.72rem;cursor:pointer}
+.animatic-review-btn.keep{background:rgba(232,176,75,.16);border-color:rgba(232,176,75,.34)}
+.animatic-review-btn.reject{opacity:.72}
+.animatic-review-btn:disabled{cursor:not-allowed;opacity:.38}
+.animatic-review-btn:not(:disabled):hover{background:rgba(243,234,216,.13)}

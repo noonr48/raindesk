@@ -11,6 +11,8 @@
 <link rel="stylesheet" href="css/reference-board.css">
 <link rel="stylesheet" href="css/surface-handoff.css">
 <link rel="stylesheet" href="css/character-anchors.css">
+<link rel="stylesheet" href="css/animatic-pacing.css">
+<link rel="stylesheet" href="css/animatic-takes.css">
 </head>
 <body>
 <div id="app">
@@ -21,7 +23,6 @@
 
   <nav id="creativeTabs" class="creative-tabs" aria-label="creative canvases"></nav>
 
-  <!-- top bar: lane chip · shot title · undo -->
   <header class="topbar">
     <button id="laneChip" class="tb-btn" title="board lanes" aria-label="board lanes">◧</button>
     <div id="shotTitle" class="tb-title">raindesk</div>
@@ -30,12 +31,10 @@
 
   <div id="hint" class="hint" aria-live="polite">board: … 👀</div>
 
-  <!-- three-line drawer handle -->
   <button id="drawerHandle" class="drawer-handle" aria-label="open agent drawer">
     <i></i><i></i><i></i>
   </button>
 
-  <!-- right rail -->
   <nav class="toolbar">
     <button class="tool" data-tool="select" title="select / lasso"><span>≻</span><small>SELECT</small></button>
     <button class="tool active" data-tool="pen" title="pen"><span>✒️</span><small>PEN</small></button>
@@ -44,7 +43,6 @@
     <button class="tool" data-tool="layers" title="layers"><span>≡</span><small>LAYERS</small></button>
   </nav>
 
-  <!-- pen popover -->
   <div id="penpop" class="penpop">
     <div class="row">
       <button class="swatch on" data-color="#e07856" style="background:#e07856" aria-label="coral"></button>
@@ -58,10 +56,8 @@
     </div>
   </div>
 
-  <!-- take chip floats over the region -->
   <div id="takeChip" class="take-chip"></div>
 
-  <!-- direction pen caption: appears at the end of a drawn camera/action arrow -->
   <div id="directionCaption" class="direction-caption" aria-hidden="true">
     <input id="directionCaptionInput" type="text" maxlength="500"
            placeholder="what does this movement / camera do?" autocomplete="off">
@@ -69,7 +65,6 @@
     <button id="directionCaptionCancel" class="direction-caption-cancel" type="button" aria-label="cancel">&times;</button>
   </div>
 
-  <!-- gen bar -->
   <div class="genbar-wrap">
     <div id="dock" class="commit-dock">
       <button id="discardBtn" class="x-btn" title="discard take" aria-label="discard take">✕</button>
@@ -85,25 +80,20 @@
     </div>
   </div>
 
-  <!-- lightweight micro-action trail: Partner fills this from normal direction/chat -->
   <div id="beatTrail" aria-hidden="true"></div>
 
-  <!-- scenes / shot strip: desktop workspace panel, minimisable to the shelf -->
   <div id="scenesPanel" class="workspace-scenes-panel" aria-hidden="true">
     <div class="workspace-panel-head"><strong>Scenes</strong><button id="scenesClose" type="button" aria-label="close scenes">×</button></div>
     <div id="sceneRows" class="workspace-scene-rows"></div>
   </div>
 
-  <!-- panel shelf behaves like lightweight removable tabs for the current desk -->
   <nav id="panelShelf" class="workspace-panel-shelf" aria-label="workspace panels"></nav>
 
-  <!-- layers panel -->
   <div id="layersPanel" class="panel">
     <h4 id="panelTitle">Layers</h4>
     <div id="layerRows"></div>
   </div>
 
-  <!-- lanes sheet -->
   <div id="sheetScrim" class="sheet">
     <div class="sheet-card" role="dialog" aria-label="board lanes">
       <div class="sheet-head">
@@ -114,17 +104,18 @@
     </div>
   </div>
 
-  <!-- agent drawer (chat + my gens) -->
   <div id="drawer"></div>
-
   <div id="toasts" class="toasts" aria-live="polite"></div>
 </div>
 
 <script src="js/canvas.js"></script>
 <script src="js/api.js"></script>
+<script src="js/animatic-api.js"></script>
 <script src="js/character-api.js"></script>
 <script src="js/sheet-sync.js"></script>
 <script src="js/chat.js"></script>
+<script src="js/animatic-pacing.js"></script>
+<script src="js/animatic-takes.js"></script>
 <script src="js/surface-handoff.js"></script>
 <script src="js/direction.js"></script>
 <script src="js/beats.js"></script>

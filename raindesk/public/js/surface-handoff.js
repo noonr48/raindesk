@@ -1,4 +1,4 @@
-/* Raindesk Surface Hand-off v1 — approved Partner requests prepare existing UI only. */
+/* Raindesk Surface Hand-off v2 — approved Partner requests retain exact authority. */
 (function (root, factory) {
   const mod = factory();
   if (typeof module === 'object' && module.exports) module.exports = mod;
@@ -39,21 +39,12 @@
     return !expected || !current ? false : expected === current;
   }
 
-  // Live-surface fingerprints: the request froze approval-time creative scope;
-  // preparing must refuse when the surface has since changed (criterion 6 —
-  // stale revision or selection fails closed instead of silently editing new state).
-  // The live values come from app.js's own partner context via a single seam:
-  // window.RaindeskSurfaceState.liveScope() (installed by app.js at boot) —
-  // never a parallel copy of app state here.
   function liveScope(root) {
     const seam = root && root.RaindeskSurfaceState;
     if (!seam || typeof seam.liveScope !== 'function') return null;
     try { return seam.liveScope(); } catch (_e) { return null; }
   }
 
-  // Byte-parity mirror of the server's stableSelection (lib/adapter-invocations.js):
-  // identical field order (type, region, points, geometry) so frozen canonical
-  // forms compare structurally — JSON.stringify equality across both sides.
   function stableSelection(selection) {
     if (!selection || typeof selection !== 'object' || Array.isArray(selection)) return null;
     const out = { type: text(selection.type, 64) || 'selection' };
@@ -79,21 +70,24 @@
     return out;
   }
 
-  // Structural comparison against the frozen canonical form (scope.selectionStable).
-  // No digests: plain http means no SubtleCrypto on the client, so hash equality
-  // across contexts is unprovable — comparing the bounded canonical form is exact.
   function sameScope(request, root, document) {
     if (!sameShot(request, document)) return false;
     const scope = request && request.scope;
-    if (!scope) return false;
+    if (!scope || typeof scope !== 'object') return false;
     const expectedRevision = text(scope.artRevisionId, 160) || null;
+    const selectionFingerprint = text(scope.selectionFingerprint, 96) || null;
     const frozenSelection = scope.selectionStable && typeof scope.selectionStable === 'object'
       ? scope.selectionStable : null;
+    if (selectionFingerprint && !frozenSelection) return false;
     const live = liveScope(root);
-    if (expectedRevision && live && live.artRevisionId && expectedRevision !== live.artRevisionId) return false;
-    if (frozenSelection && live && live.selection) {
+    if (expectedRevision) {
+      const actualRevision = live && text(live.artRevisionId, 160);
+      if (!actualRevision || expectedRevision !== actualRevision) return false;
+    }
+    if (frozenSelection) {
+      if (!live || !live.selection) return false;
       const mirror = stableSelection(live.selection);
-      if (mirror && JSON.stringify(mirror) !== JSON.stringify(frozenSelection)) return false;
+      if (!mirror || JSON.stringify(mirror) !== JSON.stringify(frozenSelection)) return false;
     }
     return true;
   }
@@ -103,6 +97,58 @@
     if (cls) node.className = cls;
     if (copy != null) node.textContent = copy;
     return node;
+  }
+
+  function approvalRecord(request) {
+    if (!request || typeof request !== 'object') return null;
+    const scope = request.scope && typeof request.scope === 'object' ? request.scope : null;
+    return {
+      id: request.id,
+      requestId: request.id,
+      turnId: request.turnId || null,
+      shotId: scope && scope.shotId ? scope.shotId : null,
+      adapterId: request.adapterId || null,
+      capabilityId: request.capabilityId || null,
+      stageId: request.stageId || null,
+      recipeId: request.recipeId || null,
+      invocationBoundary: request.invocationBoundary || null,
+      disposition: request.disposition || null,
+      reviewRequired: request.reviewRequired === true,
+      creativeMutation: request.creativeMutation === true,
+      scope,
+      requiredEvidence: Array.isArray(request.requiredEvidence) ? request.requiredEvidence : [],
+      requiredInputs: Array.isArray(request.requiredInputs) ? request.requiredInputs : [],
+      expectedOutputs: Array.isArray(request.expectedOutputs) ? request.expectedOutputs : [],
+      preserves: Array.isArray(request.preserves) ? request.preserves : [],
+      sideEffects: Array.isArray(request.sideEffects) ? request.sideEffects : [],
+      status: 'approved',
+      supersede: true,
+    };
+  }
+
+  function requestFromLedger(row) {
+    if (!row || row.adapterId !== 'bounded_image_region_v1' || row.capabilityId !== 'local_image_take') return null;
+    if (!row.scope || row.reviewRequired !== true || row.creativeMutation !== true) return null;
+    return {
+      schemaVersion: 1,
+      id: row.id,
+      turnId: row.turnId || null,
+      stageId: row.stageId || null,
+      recipeId: row.recipeId || null,
+      adapterId: row.adapterId,
+      capabilityId: row.capabilityId,
+      invocationBoundary: row.invocationBoundary || 'surface',
+      status: 'awaiting_approval',
+      disposition: row.disposition || 'proposal',
+      reviewRequired: true,
+      creativeMutation: true,
+      scope: row.scope,
+      requiredEvidence: Array.isArray(row.requiredEvidence) ? row.requiredEvidence : [],
+      requiredInputs: Array.isArray(row.requiredInputs) ? row.requiredInputs : [],
+      expectedOutputs: Array.isArray(row.expectedOutputs) ? row.expectedOutputs : [],
+      preserves: Array.isArray(row.preserves) ? row.preserves : [],
+      sideEffects: Array.isArray(row.sideEffects) ? row.sideEffects : [],
+    };
   }
 
   function SurfaceHandoff({ root, document } = {}) {
@@ -118,76 +164,63 @@
       pending = null;
     }
 
-    // Durable approval ledger (server: /api/invocations). Approval records a
-  // proposal durably so a reload can restore it; a GEN click marks handed_off;
-  // failures never block the artist (ledger is persistence, not permission).
-  function recordApproval(root, request) {
-    if (!root || !root.fetch || !request) return;
-    const scope = request.scope || {};
-    root.fetch('/api/invocations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: request.id, requestId: request.id, turnId: request.turnId || null,
-        shotId: scope.shotId || null, adapterId: request.adapterId || null,
-        capabilityId: request.capabilityId || null, status: 'approved', supersede: true,
-        requestId_: undefined,
-      }),
-    }).catch(() => { /* approval is still valid in-page if the ledger is down */ });
-  }
+    function recordApproval(request) {
+      if (!root || !root.fetch || !request || !request.id) return;
+      // The server already minted and durably recorded this exact request before
+      // it was exposed to the browser. Approval changes only lifecycle; the
+      // browser never POSTs a new authority record.
+      root.fetch('/api/invocations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: request.id, status: 'approved' }),
+      }).catch(() => { /* local surface hand-off may still continue offline */ });
+    }
 
-  function markHandedOff(root, invocationId) {
-    if (!root || !root.fetch || !invocationId) return;
-    root.fetch('/api/invocations', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: invocationId, status: 'handed_off' }),
-    }).catch(() => { /* the artist pressed GEN; the ledger catches up or the entry stays approved */ });
-  }
+    function markHandedOff(invocationId) {
+      if (!root || !root.fetch || !invocationId) return;
+      root.fetch('/api/invocations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: invocationId, status: 'handed_off' }),
+      }).catch(() => { /* ledger can catch up later */ });
+    }
 
-  function restorePendingApproval(root, document) {
-    if (!root || !root.fetch || !document) return;
-    root.fetch('/api/invocations?status=approved').then((res) => res.ok ? res.json() : null)
-      .then((body) => {
-        const rows = body && Array.isArray(body.invocations) ? body.invocations : [];
-        const shotId = currentShotId(document);
-        const match = rows.find((row) => row && row.shotId && row.shotId === shotId && row.adapterId === 'bounded_image_region_v1');
-        if (!match) return;
-        // Only restore as an in-page chip; the artist re-approves by pressing set up GEN again.
-        const list = document.querySelector && document.querySelector('.chat-list');
-        if (!list || list.querySelector('.surface-handoff-proposal')) return;
-        const row = createElement(document, 'div', 'surface-handoff-proposal');
-        row.dataset.invocationId = match.id;
-        row.appendChild(createElement(document, 'span', 'surface-handoff-copy', 'you approved a local edit here before the reload — set it up again?'));
-        const approve = createElement(document, 'button', 'surface-handoff-btn', 'set up GEN');
-        approve.type = 'button';
-        const decline = createElement(document, 'button', 'surface-handoff-btn quiet', 'not now');
-        decline.type = 'button';
-        approve.addEventListener('click', () => {
-          const request = {
-            schemaVersion: 1, id: match.id, turnId: match.turnId,
-            adapterId: 'bounded_image_region_v1', capabilityId: 'local_image_take',
-            invocationBoundary: 'surface', status: 'awaiting_approval', disposition: 'proposal',
-            reviewRequired: true, creativeMutation: true, scope: { shotId: match.shotId },
-          };
-          prepare(request, row);
-        });
-        decline.addEventListener('click', () => {
-          row.remove();
-          markHandedOff(root, match.id);
-        });
-        row.append(approve, decline);
-        list.appendChild(row);
-      })
-      .catch(() => { /* offline/down ledger: no restore, no error */ });
-  }
+    function restorePendingApproval() {
+      if (!root || !root.fetch || !document) return;
+      root.fetch('/api/invocations?status=approved').then((res) => res.ok ? res.json() : null)
+        .then((body) => {
+          const rows = body && Array.isArray(body.invocations) ? body.invocations : [];
+          const shotId = currentShotId(document);
+          const match = rows.find((row) => row && row.shotId === shotId && requestFromLedger(row));
+          if (!match) return;
+          const restoredRequest = requestFromLedger(match);
+          if (!restoredRequest) return;
+          const list = document.querySelector && document.querySelector('.chat-list');
+          if (!list || list.querySelector('.surface-handoff-proposal')) return;
+          const row = createElement(document, 'div', 'surface-handoff-proposal');
+          row.dataset.invocationId = match.id;
+          row.appendChild(createElement(document, 'span', 'surface-handoff-copy', 'you approved a local edit here before the reload — set it up again?'));
+          const approve = createElement(document, 'button', 'surface-handoff-btn', 'set up GEN');
+          approve.type = 'button';
+          const decline = createElement(document, 'button', 'surface-handoff-btn quiet', 'not now');
+          decline.type = 'button';
+          approve.addEventListener('click', () => prepare(restoredRequest, row));
+          decline.addEventListener('click', () => {
+            row.remove();
+            markHandedOff(match.id);
+          });
+          row.append(approve, decline);
+          list.appendChild(row);
+        })
+        .catch(() => { /* offline/down ledger: no restore, no error */ });
+    }
 
-  function prepare(request, row) {
+    function prepare(request, row) {
       if (!isSupportedRequest(request)) return false;
       if (!sameScope(request, root, document)) {
         row.classList.add('stale');
         row.innerHTML = '';
-        row.appendChild(createElement(document, 'span', 'surface-handoff-copy', 'that request belongs to another shot — ask me again here'));
+        row.appendChild(createElement(document, 'span', 'surface-handoff-copy', 'that approval no longer matches this exact edit — ask me again here'));
         return false;
       }
       const wrap = document.querySelector('.genbar-wrap');
@@ -196,7 +229,7 @@
       if (!wrap || !prompt || !gen) return false;
       clearPrepared();
       pending = request;
-      recordApproval(root, request);
+      recordApproval(request);
       wrap.classList.add('surface-handoff-ready');
       wrap.dataset.invocationId = request.id;
       if (!prompt.value.trim()) prompt.placeholder = 'describe this approved local change, then press GEN';
@@ -241,16 +274,14 @@
     if (document && document.addEventListener) {
       document.addEventListener('click', (event) => {
         if (event.target && event.target.id === 'genBtn') {
-          if (pending) markHandedOff(root, pending.id);
+          if (pending) markHandedOff(pending.id);
           clearPrepared();
         }
       }, true);
     }
-    if (root && root.addEventListener) {
-      root.addEventListener('raindesk:shot-change', clearPrepared);
-    }
+    if (root && root.addEventListener) root.addEventListener('raindesk:shot-change', clearPrepared);
     if (document) {
-      try { restorePendingApproval(root, document); } catch (_e) { /* restore is best-effort */ }
+      try { restorePendingApproval(); } catch (_e) { /* restore is best-effort */ }
     }
 
     return { handleTurn, renderRequest, prepare, clearPrepared, pending: () => pending };
@@ -271,5 +302,8 @@
     return true;
   }
 
-  return { currentShotId, isSupportedRequest, sameShot, sameScope, stableSelection, SurfaceHandoff, install };
+  return {
+    currentShotId, isSupportedRequest, sameShot, sameScope, stableSelection,
+    approvalRecord, requestFromLedger, SurfaceHandoff, install,
+  };
 });

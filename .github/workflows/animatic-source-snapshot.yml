@@ -1,0 +1,103 @@
+name: Animatic Vertical Slice Authority Gates
+
+on:
+  push:
+    branches:
+      - 'chatgpt/animatic-adapter-slice-v1'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  animatic-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check animatic vertical slice
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          node --check lib/animatic-contract.js
+          node --check lib/animatic-pacing-context.js
+          node --check lib/animatic-pacing-proposals.js
+          node --check lib/animatic-pacing-index.js
+          node --check lib/animatic-pacing-advisor.js
+          node --check lib/animatic-partner-pacing.js
+          node --check lib/animatic-preview.js
+          node --check lib/shot-projection.js
+          node --check lib/animatic-snapshots.js
+          node --check lib/animatic-preparation.js
+          node --check lib/animatic-review-decisions.js
+          node --check lib/production-adapters.js
+          node --check lib/partner-invocation-ledger.js
+          node --check lib/animatic-execution-store.js
+          node --check lib/animatic-candidates.js
+          node --check lib/animatic-executor.js
+          node --check lib/video-artifacts.js
+          node --check public/js/animatic-api.js
+          node --check public/js/animatic-pacing.js
+          node --check public/js/animatic-takes.js
+          node --check public/js/surface-handoff.js
+          node --check dev/browser-animatic-pacing-smoke.js
+          node --check dev/browser-animatic-review-smoke.js
+          node --check dev/browser-animatic-reload-smoke.js
+          node --check server.js
+          node --check lib/tests/animatic-contract.test.js
+          node --check lib/tests/animatic-pacing-context.test.js
+          node --check lib/tests/animatic-pacing-proposals.test.js
+          node --check lib/tests/animatic-pacing-advisor.test.js
+          node --check lib/tests/animatic-partner-pacing.test.js
+          node --check lib/tests/animatic-preview.test.js
+          node --check lib/tests/animatic-preview-routes.test.js
+          node --check lib/tests/animatic-review-decisions.test.js
+          node --check lib/tests/animatic-snapshots.test.js
+          node --check lib/tests/animatic-preparation.test.js
+          node --check lib/tests/animatic-preparation-routes.test.js
+          node --check lib/tests/animatic-adapter-registration.test.js
+          node --check lib/tests/animatic-executor.test.js
+          node --check lib/tests/animatic-artifact-routes.test.js
+          node --check lib/tests/invocation-ledger-v2.test.js
+          node --check lib/tests/server-authoritative-context.test.js
+          node --check lib/tests/server-proposal-authority.test.js
+          node --check lib/tests/server-pacing-advice.test.js
+          node --check lib/tests/surface-handoff.test.js
+          node --check tests/frontend/animatic-api.test.js
+          node --check tests/frontend/animatic-pacing.test.js
+          node --check tests/frontend/animatic-takes.test.js
+
+      - name: Run complete Raindesk deterministic suite
+        working-directory: raindesk
+        run: npm test
+
+      - name: Run native pacing preview review journey
+        working-directory: raindesk
+        run: |
+          set -euo pipefail
+          BROWSER="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
+          if [ -z "$BROWSER" ]; then
+            echo "Chromium/Chrome not available" >&2
+            exit 1
+          fi
+          mkdir -p artifacts/animatic
+          CHROME_BIN="$BROWSER" \
+          ANIMATIC_PACING_SCREENSHOT="$(pwd)/artifacts/animatic/pacing-review.png" \
+          ANIMATIC_PACING_RECEIPT="$(pwd)/artifacts/animatic/pacing-review-receipt.json" \
+          node dev/browser-animatic-reload-smoke.js
+
+      - name: Upload animatic browser proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raindesk-animatic-browser-proof
+          path: raindesk/artifacts/animatic/*
+          if-no-files-found: warn
+          retention-days: 7

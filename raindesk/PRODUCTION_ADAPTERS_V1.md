@@ -8,86 +8,97 @@ Production Adapter Registry v1 is the tool-selection boundary underneath Capabil
 
 The artist and the Partner do not choose model names, engines, node graphs, endpoints or vendors. Capability Planner asks the registry whether a suitable adapter actually exists; only the registry may upgrade an adapter-driven capability from its fallback state.
 
-## Why descriptor-first
+## Descriptor and execution boundary
 
-V1 registers data-only adapter descriptors rather than arbitrary executable callbacks. Before execution is allowed, each adapter must declare:
+Adapters declare data-only descriptors:
 
-- stable adapter ID;
-- stable capability ID;
-- availability (`available`, `degraded`, `disabled`);
-- invocation boundary (`server`, `surface`, `external`);
-- priority for deterministic selection;
-- whether it mutates creative content;
-- whether review is mandatory;
+- stable adapter ID and capability ID;
+- availability (`available | degraded | disabled`);
+- invocation boundary (`server | surface | external`);
+- deterministic priority;
+- creative-mutation and mandatory-review flags;
 - required evidence;
-- input/output contract;
-- preservation guarantees;
-- side effects;
-- private implementation reference.
+- input/output contracts;
+- preservation guarantees and side effects;
+- a private implementation reference that is never exposed through public descriptors or Partner plans.
 
-This lets Raindesk compare and route adapters without letting tool-specific details leak upward into recipes.
+Any adapter with `creativeMutation=true` must also declare `reviewRequired=true`.
 
-## Safety invariant
-
-Any adapter declaring `creativeMutation=true` must also declare `reviewRequired=true`.
-
-Registration rejects descriptors that violate this invariant. Act mode therefore cannot gain an auto-accepting creative adapter by configuration accident.
+The registry exposes `getImplementationRef()` only for bounded server-side bridges. Public `get`, `list`, `resolve`, Partner execution plans and invocation requests omit the implementation pointer.
 
 ## Deterministic resolution
 
-A registry may contain multiple adapters for one capability. Resolution:
+Resolution excludes disabled adapters, accepts available adapters (and degraded adapters when allowed), sorts by descending priority, then breaks ties by adapter ID. Missing production adapters leave capabilities honestly `planning_only` or `unavailable`.
 
-1. excludes disabled adapters;
-2. accepts available adapters and, by default, degraded adapters;
-3. sorts by descending priority;
-4. breaks equal priority deterministically by adapter ID.
+## Registered adapters
 
-Candidate selection is therefore reproducible and testable.
+### `bounded_image_region_v1`
 
-## Capability Planner composition
-
-The previous Capability Planner is preserved byte-for-byte as `capability-planner-core.js`.
-
-The new `capability-planner.js` façade treats specialist production capabilities as adapter-driven:
-
-- if a suitable adapter resolves, adapter review requirements determine `operational` vs `review_take`;
-- if no adapter resolves, the capability falls back to `planning_only` (or `unavailable` for visual inspection);
-- adapter evidence requirements are unioned with recipe evidence requirements;
-- surface/external adapters are not mislabeled as server executors;
-- private `implementationRef` values are never copied into the Partner `executionPlan`.
-
-## First real registered adapter
-
-`bounded_image_region_v1` describes the existing bounded image-generation route:
+The existing reviewable local image-edit path:
 
 - capability: `local_image_take`;
-- availability: `available`;
-- invocation boundary: `surface`;
+- boundary: `surface`;
+- evidence: exact shot scope + edit region;
+- input: shot/base revision, region PNG, mask PNG, prompt;
+- output: immutable candidate take;
+- accepted artwork remains unchanged until an explicit review/commit action.
+
+### `animatic_timing_v1`
+
+The video-skill static-panel animatic adapter is registered only when the complete runtime is explicitly configured and validated:
+
+- `RAINDESK_ANIMATIC_EXECUTOR`: absolute executable file;
+- `RAINDESK_ANIMATIC_PROJECT_ROOT`: absolute writable/executable project directory;
+- `RAINDESK_SOURCE_RIGHTS`: server-owned source-rights assertion;
+- optional bounded execution timeout.
+
+The adapter contract is:
+
+- capability: `animatic_timing`;
+- boundary: `external`;
 - creative mutation: yes;
 - review required: yes;
-- evidence: shot scope + explicit edit region;
-- inputs include shot/base revision, region PNG, mask PNG and prompt;
-- output is an immutable candidate take;
-- accepted artwork remains unchanged until commit.
+- input: `SequenceSourceSnapshot@0.2.0` bound to `animatic_timing_v1` / contract `0.2.0`;
+- output: `ExecutionAttempt@0.2.0`, `SequenceCandidateManifest@0.2.0`, immutable MP4 artifact;
+- accepted artwork and review state remain outside the candidate manifest.
 
-Its implementation reference remains registry-internal.
+Without complete runtime configuration, `animatic_pass` remains `planning_only`.
 
-## Intentionally unregistered production capabilities
+## Current animatic vertical slice
 
-No adapters are registered yet for:
+The branch now contains more than registration. The bounded path currently includes:
 
-- camera previs;
-- pose/blocking;
-- performance motion;
-- contact geometry;
-- multi-actor blocking;
-- environment construction;
-- comic layout;
-- animatic timing;
-- automatic visual inspection.
+1. a coarse server-minted Partner invocation;
+2. server-owned artwork revision binding;
+3. immutable pacing proposals whose creative timing is model-suggested but whose source revisions are server-resolved;
+4. exact `SequenceSourceSnapshot@0.2.0` compilation with content-addressed panel projection;
+5. a separately approved server-prepared child invocation bound to the snapshot digest;
+6. no-shell external execution with bounded stdio/timeout;
+7. validation and import of external attempt/candidate records;
+8. SHA-backed Raindesk MP4 mirroring and Range serving;
+9. an append-only ReviewDecision log — owner decisions as events about immutable candidates, surfaced through the owner-visible review UI.
 
-Those capabilities therefore remain honestly `planning_only`/`unavailable` until a later slice registers a real adapter.
+Frames plus rational frame rate are the timing authority. Pacing proposals and snapshots share one validation envelope (`lib/animatic-contract.js`) so proposal content cannot be accepted under looser limits than the snapshot compiler.
 
-## Scope
+## Vertical-loop status (2026-08-20 closeout)
 
-V1 does not execute arbitrary adapter callbacks. The next execution slice can bind validated descriptors to bounded invocation functions/connector calls while retaining the same capability IDs, evidence gates, review policy and deterministic selection rules.
+The artist-facing vertical loop is complete and browser-proven:
+
+- Preparation is **stored-proposal-only**: `/api/animatic/prepare` and Preview accept exactly one immutable proposal digest; the server derives order, revisions and durations internally. The reviewer-facing browser API (`public/js/animatic-api.js`) exposes digest reads, Preview, execution polling, candidate listing and review only — context/proposal creation stay behind the server-side Partner boundary, and raw prepare/execute are no longer browser powers.
+- Pacing proposals render as reviewer-first Partner cards with Preview this; preview is asynchronous (202 + durable execution row, polled, reload-reconnect).
+- Imported candidates surface as playable Animatic Takes (real MP4 playback proof: metadata, seek) with `Keep / Another / Reject`; `Combine` stays visibly disabled until immutable candidate-bound ReviewAnnotation evidence exists — it records no intent meanwhile.
+- ReviewDecision is wired through the owner-visible UI with append-only decisions and server-owned `actor_role=owner`.
+- A real owner-host proof against the pinned video-skill executor passed locally (sanitized receipt; see `dev/browser-animatic-real-host-proof.js`).
+
+Honest remaining limitations:
+
+- The Takes list is not yet scoped to the active shot/sequence (global recent list).
+- Restored take cards show a generic label, not the source proposal's rhythm name; the server-side provenance summary is future work.
+- `Another` records the request and tells the artist, but does not yet guarantee a meaningfully different rhythm (structured open loop is future work).
+- A direction-note edit after preview makes proposal reconnect fail-safe 404 (the creative-state digest drifts); the durable execution row remains reachable by id.
+
+## Still-unregistered production capabilities
+
+No production adapters are registered yet for camera previs, pose/blocking, performance motion, contact geometry, multi-actor blocking, environment construction, comic layout or automatic visual inspection.
+
+Those remain `planning_only`/`unavailable`. Broad Editorial / Composition / Motion / Audio IR work stays deferred until the Raindesk animatic loop proves the shared authority/review pattern end to end.

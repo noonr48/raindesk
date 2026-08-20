@@ -46,9 +46,10 @@
     const api = opts.api;
     const shotLabel = opts.shotLabel || (() => 'shot');
     const contextProvider = typeof opts.contextProvider === 'function' ? opts.contextProvider : null;
-    const listeners = { open: [], close: [], turn: [], action: [] };
+    const listeners = { open: [], close: [], turn: [], action: [], tab: [] };
     let tab = 'agent';
     let busy = false;
+    let gensEpoch = 0;
 
     root.classList.add('chat-drawer');
     root.innerHTML = '';
@@ -63,6 +64,12 @@
     const tabGens = el('div', 'dtab', 'takes');
     tabAgent.dataset.tab = 'agent';
     tabGens.dataset.tab = 'gens';
+    // The tab row doubles as the desktop workspace drag handle. Tabs are
+    // interactive controls, not drag surfaces: exempt them so pointerdown
+    // never enters drag mode, which would capture the pointer and swallow the
+    // tab-switch click.
+    tabAgent.dataset.noDrag = '';
+    tabGens.dataset.noDrag = '';
     tabs.append(tabAgent, tabGens);
 
     const closeBtn = el('button', 'chat-close', '✕');
@@ -71,6 +78,13 @@
 
     const chatList = el('div', 'chat-list');
     const gensList = el('div', 'gens-list');
+    // Stable hosts inside the gens tab: the animatic surface renders only into
+    // its host, ordinary image Takes only into theirs. Neither renderer ever
+    // wipes the container or the other surface's subtree.
+    const animaticHost = el('section', 'animatic-takes-section animatic-takes-host');
+    animaticHost.setAttribute('aria-label', 'animatic takes');
+    const imageHost = el('div', 'image-takes-host');
+    gensList.append(animaticHost, imageHost);
 
     const typing = el('div', 'typing');
     typing.appendChild(el('i'));
@@ -100,11 +114,11 @@
       tab = which === 'gens' ? 'gens' : 'agent';
       root.classList.add('open');
       sync();
-      listeners.open.forEach((f) => f());
+      listeners.open.forEach((f) => { try { f(); } catch (_e) { /* observer only */ } });
     }
     function close() {
       root.classList.remove('open');
-      listeners.close.forEach((f) => f());
+      listeners.close.forEach((f) => { try { f(); } catch (_e) { /* observer only */ } });
     }
     scrim.addEventListener('click', close);
     closeBtn.addEventListener('click', close);
@@ -116,6 +130,7 @@
       tabGens.classList.toggle('active', tab === 'gens');
       chatList.style.display = tab === 'agent' ? 'flex' : 'none';
       gensList.style.display = tab === 'gens' ? 'flex' : 'none';
+      listeners.tab.forEach((f) => { try { f(tab); } catch (_e) { /* observer only */ } });
       if (tab === 'gens') renderGens();
     }
 
@@ -293,9 +308,9 @@
     /* ------------------------------------------------- my gens history */
 
     function renderTakeRows(gens) {
-      gensList.innerHTML = '';
+      imageHost.innerHTML = '';
       if (!gens.length) {
-        gensList.appendChild(el('div', 'gens-empty',
+        imageHost.appendChild(el('div', 'gens-empty',
           'nothing here yet — rough takes will collect here as you explore'));
         return;
       }
@@ -318,23 +333,26 @@
           img.addEventListener('error', () => { img.remove(); });
           row.appendChild(img);
         }
-        gensList.appendChild(row);
+        imageHost.appendChild(row);
       }
     }
 
     async function renderGens() {
-      gensList.innerHTML = '';
-      gensList.appendChild(el('div', 'gens-empty', 'gathering takes…'));
+      const epoch = ++gensEpoch;
+      imageHost.innerHTML = '';
+      imageHost.appendChild(el('div', 'gens-empty', 'gathering takes…'));
       if (api.listTakes) {
         try {
           const ctx = partnerContext();
           const shotId = ctx && ctx.legacyShotId ? ctx.legacyShotId : null;
           const response = await api.listTakes({ shotId, limit: MAX_GENS });
+          if (epoch !== gensEpoch) return; // a newer redraw superseded this response
           if (response && Array.isArray(response.takes)) {
             renderTakeRows(response.takes);
             return;
           }
         } catch (_e) { /* fall through to legacy/offline cache */ }
+        if (epoch !== gensEpoch) return;
       }
       renderTakeRows(loadGens());
     }

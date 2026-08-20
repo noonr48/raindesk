@@ -627,7 +627,26 @@ test('completed generation receipt remains pollable after queue memory is gone',
 });
 
 test('generation API exposes persistent phases and only cancels work that is still queued', async (t) => {
-  await withServer(t, { comfyImpl: fakeComfy(100), agentImpl: agentEcho }, async (base) => {
+  // Deterministic started-gate (pattern of 27d2875): the fake comfy blocks
+  // until the test releases it, so phase 'generating' is stable and cannot be
+  // missed by polling on a slow runner — the cancel-under-run assertion no
+  // longer races the 100 ms job lifetime.
+  let releaseGated;
+  const gated = new Promise((r) => { releaseGated = r; });
+  const gatedComfy = {
+    async runInpaint(params) {
+      await gated;
+      assert.ok(Buffer.isBuffer(params.imageBuffer));
+      assert.ok(Buffer.isBuffer(params.maskBuffer));
+      return {
+        promptId: 'pid-test', seed: 1,
+        images: [{ filename: 'out.png', subfolder: '', type: 'output' }],
+        imageUrl: 'http://127.0.0.1:8188/view?filename=out.png&subfolder=&type=output',
+      };
+    },
+    async fetchImageBytes() { return PNG; },
+  };
+  await withServer(t, { comfyImpl: gatedComfy, agentImpl: agentEcho }, async (base) => {
     const payload = JSON.stringify({
       shotId: 'JOBSHOT', prompt: 'rough frame',
       regionPng: PNG.toString('base64'), maskPng: PNG.toString('base64'),
@@ -645,15 +664,26 @@ test('generation API exposes persistent phases and only cancels work that is sti
     const listed = await res.json();
     assert.ok(listed.jobs.some((j) => j.id === second.jobId && j.status === 'cancelled'));
 
-    // Once the first is actually running, cancellation must not pretend it stopped GPU work.
+    // While the first is actually running (gated open-ended), cancellation
+    // must not pretend it stopped GPU work.
+    let sawGenerating = false;
     for (let i = 0; i < 30; i++) {
       const view = await (await fetch(`${base}/api/gen/${first.jobId}`)).json();
-      if (view.phase === 'generating') break;
+      if (view.phase === 'generating') { sawGenerating = true; break; }
       await delay(5);
     }
+    assert.ok(sawGenerating, 'gated job must expose the generating phase');
     res = await fetch(`${base}/api/gen/${first.jobId}/cancel`, { method: 'POST' });
     assert.equal(res.status, 409);
     assert.match((await res.json()).error, /cannot be safely cancelled/i);
+
+    // Release the gate and let the queued generation finish cleanly.
+    releaseGated();
+    for (let i = 0; i < 60; i++) {
+      const view = await (await fetch(`${base}/api/gen/${first.jobId}`)).json();
+      if (view.status === 'done') break;
+      await delay(5);
+    }
   });
 });
 

@@ -1,0 +1,74 @@
+/* Raindesk animatic API extension — reviewer-facing calls only. */
+(function (root, factory) {
+  const ext = factory(root);
+  if (typeof module === 'object' && module.exports) module.exports = ext;
+  else if (root.RaindeskAPI) Object.assign(root.RaindeskAPI, ext);
+})(typeof self !== 'undefined' ? self : this, function (root) {
+  'use strict';
+
+  function api() {
+    const value = root && root.RaindeskAPI;
+    if (!value || typeof value.GET !== 'function' || typeof value.POST !== 'function') {
+      throw new Error('RaindeskAPI must load before animatic-api.js');
+    }
+    return value;
+  }
+
+  function getAnimaticPacingContext(contextDigest) {
+    return api().GET(`/api/animatic/pacing-context/${encodeURIComponent(contextDigest)}`);
+  }
+  function getAnimaticPacingProposal(proposalDigest) {
+    return api().GET(`/api/animatic/pacing-proposal/${encodeURIComponent(proposalDigest)}`);
+  }
+  function listAnimaticPacingProposals({ shotId = null, sequenceId = null, contextDigest = null, limit = 20 } = {}) {
+    const qs = new URLSearchParams();
+    if (shotId) qs.set('shotId', shotId);
+    if (sequenceId) qs.set('sequenceId', sequenceId);
+    if (contextDigest) qs.set('contextDigest', contextDigest);
+    qs.set('limit', String(limit));
+    return api().GET(`/api/animatic/pacing-proposals?${qs.toString()}`);
+  }
+  function previewAnimatic(proposalDigest) {
+    return api().POST('/api/animatic/preview', { proposalDigest });
+  }
+  function getAnimaticPacingExecution(proposalDigest) {
+    return api().GET(`/api/animatic/pacing-proposal/${encodeURIComponent(proposalDigest)}/execution`);
+  }
+  function getAnimaticExecution(executionId) {
+    return api().GET(`/api/animatic/execution/${encodeURIComponent(executionId)}`);
+  }
+  function listAnimaticCandidates({ sequenceId = null, projectId = null, limit = 100 } = {}) {
+    const qs = new URLSearchParams();
+    if (sequenceId) qs.set('sequenceId', sequenceId);
+    if (projectId) qs.set('projectId', projectId);
+    qs.set('limit', String(limit));
+    return api().GET(`/api/animatic/candidates?${qs.toString()}`);
+  }
+  function getAnimaticCandidate(candidateId) {
+    return api().GET(`/api/animatic/candidate/${encodeURIComponent(candidateId)}`);
+  }
+  function reviewAnimaticCandidate(candidateId, decision, { note = null, idempotencyKey } = {}) {
+    if (!idempotencyKey) return Promise.reject(new Error('idempotencyKey is required for animatic review'));
+    return api().POST('/api/animatic/review', { candidateId, decision, note, idempotencyKey });
+  }
+  function getAnimaticReview({ candidateId = null, sequenceId = null } = {}) {
+    const qs = new URLSearchParams();
+    if (candidateId) qs.set('candidateId', candidateId);
+    else if (sequenceId) qs.set('sequenceId', sequenceId);
+    else return Promise.reject(new Error('candidateId or sequenceId is required'));
+    return api().GET(`/api/animatic/review?${qs.toString()}`);
+  }
+
+  return {
+    getAnimaticPacingContext,
+    getAnimaticPacingProposal,
+    listAnimaticPacingProposals,
+    previewAnimatic,
+    getAnimaticExecution,
+    getAnimaticPacingExecution,
+    listAnimaticCandidates,
+    getAnimaticCandidate,
+    reviewAnimaticCandidate,
+    getAnimaticReview,
+  };
+});

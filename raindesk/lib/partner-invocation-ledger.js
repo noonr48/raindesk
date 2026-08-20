@@ -1,15 +1,12 @@
 'use strict';
 
 /**
- * Durable Invocation Ledger — Surface Hand-off v1 hardening.
+ * Durable Invocation Ledger v2.
  *
- * Invocation requests are ephemeral by birth (a Partner turn); this ledger
- * gives the APPROVAL side a durable, bounded lifecycle so a page reload can
- * restore pending approvals and a newer same-scope request marks the prior
- * one stale. It never executes anything and never stores artwork — only the
- * bounded request record and its lifecycle stamps.
- *
- * Pattern-cloned from partner-actions.js (atomic write, cap, strict shapes).
+ * Approval is authority, not merely UI state. The ledger preserves the bounded
+ * immutable request facts that were proposed/approved, records where authority
+ * was minted, and enforces a one-way lifecycle so reload/retry or a later
+ * process cannot silently broaden or resurrect a request.
  */
 
 const fs = require('fs');
@@ -20,17 +17,221 @@ const DATA_DIR = process.env.RAINDESK_DATA_DIR
   ? path.resolve(process.env.RAINDESK_DATA_DIR)
   : path.join(__dirname, '..', 'data');
 const LEDGER_PATH = path.join(DATA_DIR, 'invocation-ledger.json');
+const STORE_SCHEMA_VERSION = 2;
 const MAX_ENTRIES = 500;
+const MAX_RECORD_BYTES = 64 * 1024;
+const DIGEST_RE = /^[a-f0-9]{64}$/;
 const STATUSES = new Set(['proposed', 'approved', 'stale', 'handed_off', 'cancelled']);
+const ORIGINS = new Set(['legacy', 'http_legacy', 'partner_server', 'server_prepared']);
+const STATUS_TRANSITIONS = Object.freeze({
+  proposed: Object.freeze(['approved', 'stale', 'cancelled']),
+  approved: Object.freeze(['handed_off', 'stale', 'cancelled']),
+  handed_off: Object.freeze([]),
+  stale: Object.freeze([]),
+  cancelled: Object.freeze([]),
+});
 
 function now() { return new Date().toISOString(); }
-function emptyStore() { return { schemaVersion: 1, invocations: [], createdAt: now(), updatedAt: now() }; }
+function emptyStore() { return { schemaVersion: STORE_SCHEMA_VERSION, invocations: [], createdAt: now(), updatedAt: now() }; }
 
 function atomicWrite(value) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmp = `${LEDGER_PATH}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, LEDGER_PATH);
+}
+
+function text(value, max = 256) {
+  const out = value == null ? '' : String(value).trim();
+  return out.length > max ? out.slice(0, max) : out;
+}
+
+function textList(value, maxItems = 64, maxLen = 240) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    const clean = text(item, maxLen);
+    if (clean && !out.includes(clean)) out.push(clean);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if (value[key] !== undefined) out[key] = canonicalValue(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function canonicalJson(value) { return JSON.stringify(canonicalValue(value)); }
+
+function boundedObject(value, what, maxBytes = 32 * 1024) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, `${what} must be an object`);
+  let raw;
+  try { raw = JSON.stringify(value); } catch (_e) { throw new HttpError(400, `${what} is not serializable`); }
+  if (Buffer.byteLength(raw, 'utf8') > maxBytes) throw new HttpError(413, `${what} is too large`);
+  try { return JSON.parse(raw); } catch (_e) { throw new HttpError(400, `${what} is malformed`); }
+}
+
+function cleanDigest(value, what = 'snapshot digest') {
+  if (value == null || value === '') return null;
+  const digest = text(value, 64);
+  if (!DIGEST_RE.test(digest)) throw new HttpError(400, `${what} must be a 64-character lowercase sha256`);
+  return digest;
+}
+
+function cleanOrigin(value) {
+  const origin = text(value, 32);
+  return ORIGINS.has(origin) ? origin : 'legacy';
+}
+
+function cleanScope(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invocation scope must be an object');
+  const scope = {
+    shotId: text(value.shotId, 96) || null,
+    artRevisionId: text(value.artRevisionId, 160) || null,
+    selectionFingerprint: text(value.selectionFingerprint, 96) || null,
+    selectionStable: boundedObject(value.selectionStable, 'frozen selection'),
+  };
+  if (Buffer.byteLength(JSON.stringify(scope), 'utf8') > 40 * 1024) throw new HttpError(413, 'invocation scope is too large');
+  return scope;
+}
+
+function cleanInvocation(input = {}, { preserveTimestamps = false } = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invocation record is required');
+  const id = text(input.id, 96);
+  if (!id) throw new HttpError(400, 'invocation id is required');
+  const scope = cleanScope(input.scope);
+  const shotId = text(input.shotId, 96) || (scope && scope.shotId) || null;
+  if (scope && scope.shotId && shotId && scope.shotId !== shotId) throw new HttpError(400, 'invocation shotId conflicts with frozen scope');
+  const entry = {
+    schemaVersion: STORE_SCHEMA_VERSION,
+    id,
+    requestId: text(input.requestId, 96) || id,
+    origin: cleanOrigin(input.origin),
+    parentRequestId: text(input.parentRequestId, 96) || null,
+    sourceSnapshotDigest: cleanDigest(input.sourceSnapshotDigest),
+    turnId: text(input.turnId, 128) || null,
+    shotId,
+    adapterId: text(input.adapterId, 96) || null,
+    capabilityId: text(input.capabilityId, 96) || null,
+    stageId: text(input.stageId, 256) || null,
+    recipeId: text(input.recipeId, 96) || null,
+    invocationBoundary: text(input.invocationBoundary, 32) || null,
+    disposition: text(input.disposition, 32) || null,
+    reviewRequired: typeof input.reviewRequired === 'boolean' ? input.reviewRequired : null,
+    creativeMutation: typeof input.creativeMutation === 'boolean' ? input.creativeMutation : null,
+    scope,
+    requiredEvidence: textList(input.requiredEvidence, 64, 160),
+    requiredInputs: textList(input.requiredInputs, 64, 200),
+    expectedOutputs: textList(input.expectedOutputs, 64, 200),
+    preserves: textList(input.preserves, 64, 240),
+    sideEffects: textList(input.sideEffects, 32, 240),
+    status: STATUSES.has(input.status) ? input.status : 'proposed',
+    approvedAt: preserveTimestamps ? (text(input.approvedAt, 64) || null) : null,
+    staleAt: preserveTimestamps ? (text(input.staleAt, 64) || null) : null,
+    handedOffAt: preserveTimestamps ? (text(input.handedOffAt, 64) || null) : null,
+    cancelledAt: preserveTimestamps ? (text(input.cancelledAt, 64) || null) : null,
+    recordedAt: preserveTimestamps ? (text(input.recordedAt, 64) || null) : now(),
+  };
+  if (Buffer.byteLength(JSON.stringify(entry), 'utf8') > MAX_RECORD_BYTES) throw new HttpError(413, 'invocation record too large');
+  return entry;
+}
+
+function immutableShape(entry) {
+  return {
+    requestId: entry.requestId,
+    origin: entry.origin || 'legacy',
+    parentRequestId: entry.parentRequestId || null,
+    sourceSnapshotDigest: entry.sourceSnapshotDigest || null,
+    turnId: entry.turnId,
+    shotId: entry.shotId,
+    adapterId: entry.adapterId,
+    capabilityId: entry.capabilityId,
+    stageId: entry.stageId,
+    recipeId: entry.recipeId,
+    invocationBoundary: entry.invocationBoundary,
+    disposition: entry.disposition,
+    reviewRequired: entry.reviewRequired,
+    creativeMutation: entry.creativeMutation,
+    scope: entry.scope,
+    requiredEvidence: entry.requiredEvidence,
+    requiredInputs: entry.requiredInputs,
+    expectedOutputs: entry.expectedOutputs,
+    preserves: entry.preserves,
+    sideEffects: entry.sideEffects,
+  };
+}
+
+function inputFromRequest(request, extras = {}) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) throw new HttpError(400, 'invocation request is required');
+  return {
+    id: request.id,
+    requestId: request.id,
+    turnId: request.turnId || null,
+    shotId: request.scope && request.scope.shotId ? request.scope.shotId : null,
+    adapterId: request.adapterId || null,
+    capabilityId: request.capabilityId || null,
+    stageId: request.stageId || null,
+    recipeId: request.recipeId || null,
+    invocationBoundary: request.invocationBoundary || null,
+    disposition: request.disposition || null,
+    reviewRequired: request.reviewRequired,
+    creativeMutation: request.creativeMutation,
+    scope: request.scope || null,
+    requiredEvidence: request.requiredEvidence,
+    requiredInputs: request.requiredInputs,
+    expectedOutputs: request.expectedOutputs,
+    preserves: request.preserves,
+    sideEffects: request.sideEffects,
+    status: 'proposed',
+    ...extras,
+    origin: 'partner_server',
+  };
+}
+
+function migrateV1(store) {
+  if (!store || store.schemaVersion !== 1 || !Array.isArray(store.invocations)) {
+    throw new HttpError(500, 'Invocation ledger is malformed');
+  }
+  let invocations;
+  try { invocations = store.invocations.map((item) => cleanInvocation({ ...item, origin: 'legacy' }, { preserveTimestamps: true })); }
+  catch (_error) { throw new HttpError(500, 'Invocation ledger v1 contains a malformed record'); }
+  return {
+    schemaVersion: STORE_SCHEMA_VERSION,
+    invocations,
+    createdAt: text(store.createdAt, 64) || now(),
+    updatedAt: now(),
+  };
+}
+
+function normalizeV2(store) {
+  if (!store || store.schemaVersion !== STORE_SCHEMA_VERSION || !Array.isArray(store.invocations)) {
+    throw new HttpError(500, 'Invocation ledger is malformed');
+  }
+  const needsUpgrade = store.invocations.some((item) => !item || !ORIGINS.has(item.origin) ||
+    !Object.prototype.hasOwnProperty.call(item, 'parentRequestId') ||
+    !Object.prototype.hasOwnProperty.call(item, 'sourceSnapshotDigest'));
+  if (!needsUpgrade) return store;
+  let invocations;
+  try { invocations = store.invocations.map((item) => cleanInvocation({ ...item, origin: ORIGINS.has(item && item.origin) ? item.origin : 'legacy' }, { preserveTimestamps: true })); }
+  catch (_error) { throw new HttpError(500, 'Invocation ledger v2 contains a malformed legacy record'); }
+  const upgraded = {
+    schemaVersion: STORE_SCHEMA_VERSION,
+    invocations,
+    createdAt: text(store.createdAt, 64) || now(),
+    updatedAt: now(),
+  };
+  atomicWrite(upgraded);
+  return upgraded;
 }
 
 function read() {
@@ -42,44 +243,22 @@ function read() {
   }
   let store;
   try { store = JSON.parse(raw); } catch (_e) { throw new HttpError(500, 'Invocation ledger is corrupt'); }
-  if (!store || store.schemaVersion !== 1 || !Array.isArray(store.invocations)) {
-    throw new HttpError(500, 'Invocation ledger is malformed');
+  if (store && store.schemaVersion === 1) {
+    const migrated = migrateV1(store);
+    atomicWrite(migrated);
+    return migrated;
   }
-  return store;
+  return normalizeV2(store);
 }
 
 function write(store) {
+  if (!store || store.schemaVersion !== STORE_SCHEMA_VERSION || !Array.isArray(store.invocations)) {
+    throw new HttpError(500, 'Invocation ledger write shape is invalid');
+  }
   store.updatedAt = now();
   if (store.invocations.length > MAX_ENTRIES) store.invocations.splice(0, store.invocations.length - MAX_ENTRIES);
   atomicWrite(store);
   return store;
-}
-
-function text(value, max = 256) {
-  const out = value == null ? '' : String(value).trim();
-  return out.length > max ? out.slice(0, max) : out;
-}
-
-function cleanInvocation(input = {}) {
-  if (!input || typeof input !== 'object') throw new HttpError(400, 'invocation record is required');
-  const id = text(input.id, 96);
-  if (!id) throw new HttpError(400, 'invocation id is required');
-  const entry = {
-    id,
-    requestId: text(input.requestId, 96) || id,
-    turnId: text(input.turnId, 128) || null,
-    shotId: text(input.shotId, 96) || null,
-    adapterId: text(input.adapterId, 96) || null,
-    capabilityId: text(input.capabilityId, 96) || null,
-    status: STATUSES.has(input.status) ? input.status : 'proposed',
-    approvedAt: text(input.approvedAt, 64) || null,
-    staleAt: text(input.staleAt, 64) || null,
-    handedOffAt: text(input.handedOffAt, 64) || null,
-    recordedAt: input.recordedAt || now(),
-  };
-  const raw = JSON.stringify(entry);
-  if (raw.length > 8000) throw new HttpError(413, 'invocation record too large');
-  return entry;
 }
 
 function find(store, id) {
@@ -88,21 +267,51 @@ function find(store, id) {
 
 function record(input) {
   const store = read();
+  const id = text(input && input.id, 96);
+  if (!id) throw new HttpError(400, 'invocation id is required');
+  const existing = find(store, id);
+  if (existing) {
+    const candidate = cleanInvocation({ ...existing, ...input }, { preserveTimestamps: true });
+    if (canonicalJson(immutableShape(candidate)) !== canonicalJson(immutableShape(existing))) {
+      throw new HttpError(409, `invocation ${id} already exists with different immutable request authority`);
+    }
+    return { entry: existing, created: false };
+  }
   const entry = cleanInvocation(input);
-  const existing = find(store, entry.id);
-  if (existing) return { entry: existing, created: false };
+  const stamp = now();
+  if (entry.status === 'approved') entry.approvedAt = stamp;
+  if (entry.status === 'stale') entry.staleAt = stamp;
+  if (entry.status === 'handed_off') entry.handedOffAt = stamp;
+  if (entry.status === 'cancelled') entry.cancelledAt = stamp;
   store.invocations.push(entry);
   write(store);
   return { entry, created: true };
 }
 
-function setStatus(id, status, stamp = status === 'approved' ? 'approvedAt' : status === 'stale' ? 'staleAt' : status === 'handed_off' ? 'handedOffAt' : null) {
+function recordFromRequest(request, extras = {}) {
+  return record(inputFromRequest(request, extras));
+}
+
+function canTransition(from, to) {
+  if (from === to) return true;
+  return Boolean(STATUS_TRANSITIONS[from] && STATUS_TRANSITIONS[from].includes(to));
+}
+
+function setStatus(id, status) {
   const store = read();
   const entry = find(store, text(id, 96));
   if (!entry) return null;
   if (!STATUSES.has(status)) throw new HttpError(400, 'unknown invocation status');
+  if (!canTransition(entry.status, status)) {
+    throw new HttpError(409, `invocation lifecycle cannot move from ${entry.status} to ${status}`);
+  }
+  if (entry.status === status) return entry;
   entry.status = status;
-  if (stamp) entry[stamp] = now();
+  const stamp = now();
+  if (status === 'approved') entry.approvedAt = stamp;
+  if (status === 'stale') entry.staleAt = stamp;
+  if (status === 'handed_off') entry.handedOffAt = stamp;
+  if (status === 'cancelled') entry.cancelledAt = stamp;
   write(store);
   return entry;
 }
@@ -114,14 +323,16 @@ function pendingForShot(shotId) {
     (item.status === 'proposed' || item.status === 'approved'));
 }
 
-/** A newer approved/proposed request for the same shot + adapter marks prior ones stale. */
-function markStaleSuperseded({ shotId, requestId }) {
+/** A newer request supersedes only pending requests for the same shot+adapter. */
+function markStaleSuperseded({ shotId, requestId, adapterId = null }) {
   const store = read();
   const key = text(shotId, 96);
   const rid = text(requestId, 96);
+  const adapterKey = text(adapterId, 96) || null;
   let marked = 0;
   for (const item of store.invocations) {
-    if (item && item.shotId === key && item.requestId !== rid &&
+    const sameAdapter = adapterKey ? item.adapterId === adapterKey : true;
+    if (item && item.shotId === key && sameAdapter && item.requestId !== rid &&
       (item.status === 'proposed' || item.status === 'approved')) {
       item.status = 'stale';
       item.staleAt = now();
@@ -141,6 +352,10 @@ function list({ shotId = null, status = null, limit = 100 } = {}) {
 }
 
 module.exports = {
-  STATUSES, MAX_ENTRIES,
-  read, write, record, find, setStatus, pendingForShot, markStaleSuperseded, list,
+  DATA_DIR, LEDGER_PATH, STORE_SCHEMA_VERSION, STATUSES, ORIGINS, STATUS_TRANSITIONS,
+  MAX_ENTRIES, MAX_RECORD_BYTES, DIGEST_RE,
+  canonicalValue, canonicalJson, cleanDigest, cleanOrigin, cleanScope, cleanInvocation,
+  immutableShape, inputFromRequest, migrateV1, normalizeV2,
+  read, write, record, recordFromRequest, find, canTransition, setStatus,
+  pendingForShot, markStaleSuperseded, list,
 };
