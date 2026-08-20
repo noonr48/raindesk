@@ -176,6 +176,15 @@ test('Preview this approves exact proposal, renders one immutable candidate, and
   });
 });
 
+test('proposal reconnect 404s cleanly before anything was previewed', async (t) => {
+  const { proposal } = seedProposal();
+  await withServer(t, async (base) => {
+    const res = await fetch(`${base}/api/animatic/pacing-proposal/${proposal.proposalDigest}/execution`);
+    assert.equal(res.status, 404);
+    assert.match((await res.json()).error, /no animatic execution for this proposal yet/);
+  });
+});
+
 test('reconnect resolves the exact child for sibling proposals sharing one parent', async (t) => {
   // Two rhythm proposals minted from ONE context share parentRequestId; the
   // deterministic child id (sha256(parent|snapshotDigest)) must discriminate
