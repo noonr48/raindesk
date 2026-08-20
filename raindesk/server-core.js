@@ -98,6 +98,7 @@ function sendJson(res, status, obj) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
   });
   res.end(body);
 }
@@ -262,6 +263,32 @@ function requestAuthorized(req, authToken) {
   return timingSafeTextEqual(cookies.raindesk_auth, authCookieValue(authToken));
 }
 
+/**
+ * Local mutation boundary for the JSON API: a loopback creative server can
+ * still be targeted from an unrelated page in the user's browser. Mutating
+ * requests must be JSON-shaped (or the multipart layer upload), and clearly
+ * cross-origin/cross-site requests are refused before route logic runs.
+ */
+function assertLocalMutationRequest(req, method) {
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    const rawType = String(req.headers['content-type'] || '').trim().toLowerCase();
+    if (rawType && !rawType.startsWith('application/json') && !rawType.startsWith('multipart/form-data')) {
+      throw new HttpError(415, 'JSON APIs accept application/json bodies only');
+    }
+  }
+  const origin = String(req.headers.origin || '').trim();
+  if (origin) {
+    let parsed;
+    try { parsed = new URL(origin); } catch (_e) { throw new HttpError(403, 'bad Origin header'); }
+    const host = String(req.headers.host || '');
+    if (!host || parsed.host !== host) throw new HttpError(403, 'cross-origin API mutations are not accepted');
+  }
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+  if (fetchSite === 'cross-site') {
+    throw new HttpError(403, 'cross-site API mutations are not accepted');
+  }
+}
+
 function sendUnlockPage(res, status = 401, bad = false) {
   const body = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Raindesk · unlock</title><style>body{font:16px system-ui;background:#111b20;color:#f3ead8;display:grid;place-items:center;min-height:100vh;margin:0}form{width:min(28rem,85vw);padding:2rem;border:1px solid #34505c;border-radius:18px;background:#17262d}input,button{box-sizing:border-box;width:100%;padding:.8rem 1rem;margin-top:.8rem;border-radius:10px;border:1px solid #45616c;background:#0f1b20;color:#f3ead8}button{cursor:pointer;background:#e8b04b;color:#182126;border:0;font-weight:700}.bad{color:#e07856}</style><form method="post" action="/__unlock"><h1>Raindesk</h1><p>This remote desk is private.</p>${bad ? '<p class="bad">That key did not match.</p>' : ''}<input type="password" name="token" autocomplete="current-password" placeholder="access key" required><button>open the desk</button></form>`;
   res.writeHead(status, {
@@ -308,6 +335,7 @@ async function handleApi(req, res, url, deps) {
   const { queue, comfyImpl, agentImpl, partnerImpl } = deps;
   const route = url.pathname;
   const method = req.method;
+  assertLocalMutationRequest(req, method);
 
   if (method === 'GET' && route === '/api/board') {
     return sendJson(res, 200, board.readBoard());

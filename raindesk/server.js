@@ -183,6 +183,14 @@ async function handleInvocationApi(req, res, url) {
     if (!id) throw new HttpError(400, 'id is required');
     const status = body && typeof body.status === 'string' ? body.status.trim() : '';
     if (!invocationLedger.STATUSES.has(status)) throw new HttpError(400, 'unknown invocation status');
+    // Capability-specific approval authority: a server-prepared animatic
+    // child is approved only through its own capability path (Preview this on
+    // a stored proposal digest). The generic ledger endpoint must not become
+    // an alternate approval route for exact server-prepared invocations.
+    const existing = invocationLedger.find(invocationLedger.read(), id);
+    if (existing && existing.origin === 'server_prepared' && status === 'approved') {
+      throw new HttpError(409, 'server-prepared invocations are approved only through their capability path');
+    }
     const entry = invocationLedger.setStatus(id, status);
     if (!entry) throw new HttpError(404, 'no such invocation');
     return core.sendJson(res, 200, { ok: true, invocation: entry });
@@ -344,6 +352,25 @@ function createServer(deps = {}) {
     const composed = characterRoute(url.pathname) || invocationRoute(url.pathname) || animaticRoute(url.pathname);
     if (!composed) return inherited(req, res);
     if (authToken && !core.requestAuthorized(req, authToken)) return inherited(req, res);
+    // Same mutation boundary as the core API: composed animatic/character/
+    // invocation routes accept only JSON mutations from this origin.
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+      const rawType = String(req.headers['content-type'] || '').trim().toLowerCase();
+      if (rawType && !rawType.startsWith('application/json')) {
+        return core.sendJson(res, 415, { error: 'JSON APIs accept application/json bodies only' });
+      }
+    }
+    const originHeader = String(req.headers.origin || '').trim();
+    if (originHeader) {
+      let originParsed;
+      try { originParsed = new URL(originHeader); } catch (_e) { originParsed = null; }
+      if (!originParsed || originParsed.host !== String(req.headers.host || '')) {
+        return core.sendJson(res, 403, { error: 'cross-origin API mutations are not accepted' });
+      }
+    }
+    if (String(req.headers['sec-fetch-site'] || '').trim().toLowerCase() === 'cross-site') {
+      return core.sendJson(res, 403, { error: 'cross-site API mutations are not accepted' });
+    }
     let promise;
     if (animaticRoute(url.pathname)) promise = handleAnimaticApi(req, res, url, { sourceRights, animaticEnv });
     else if (invocationRoute(url.pathname)) promise = handleInvocationApi(req, res, url);
