@@ -31,6 +31,9 @@ const { createServer } = require('../server');
 const CHROME = process.env.CHROME_BIN || process.env.BROWSER || 'chromium';
 const SCREENSHOT = process.env.ANIMATIC_PACING_SCREENSHOT || '';
 const RECEIPT = process.env.ANIMATIC_PACING_RECEIPT || '';
+const DIAGNOSTICS = process.env.ANIMATIC_PACING_DIAGNOSTICS
+  || (RECEIPT ? path.join(path.dirname(RECEIPT), 'pacing-review-diagnostics.json') : '');
+let phase = 'startup';
 const fakeExecutor = path.join(DATA_DIR, 'fake-animatic-reload-executor');
 const spawnCounter = path.join(DATA_DIR, 'executor-spawns.txt');
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -158,6 +161,34 @@ async function nativeClick(cdp, selector) {
   await delay(250);
 }
 
+async function captureDiagnostics(page, error) {
+  if (!DIAGNOSTICS) return;
+  const diag = {
+    ok: !error,
+    phase,
+    gitSha: (() => { try { return require('node:child_process').execSync('git rev-parse HEAD', { cwd: path.join(__dirname, '..', '..'), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch (_e) { return null; } })(),
+    error: error ? String(error && error.stack || error) : null,
+  };
+  if (page) {
+    try {
+      const shot = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+      if (SCREENSHOT) fs.writeFileSync(SCREENSHOT, Buffer.from(shot.data, 'base64'));
+      diag.screenshot = true;
+    } catch (_e) { diag.screenshot = `failed: ${_e.message}`; }
+    const probe = (expression, awaitPromise = false) => page.send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true })
+      .then((out) => (out.exceptionDetails ? `exception: ${String(out.exceptionDetails.exception && out.exceptionDetails.exception.description || out.exceptionDetails.text).slice(0, 300)}` : out.result && out.result.value))
+      .catch((e) => `probe failed: ${e.message}`);
+    diag.dom = await probe(`(()=>{const g=document.querySelector('.gens-list');return JSON.stringify({hasGensList:!!g,animaticSection:!!document.querySelector('.animatic-takes-section'),takeCards:document.querySelectorAll('.animatic-take-card').length,takeStatus:(document.querySelector('.animatic-take-status')||{}).textContent||null,video:!!document.querySelector('.animatic-take-card video'),pacingCard:!!document.querySelector('.animatic-pacing-card'),activeTab:(document.querySelector('.drawer-tab.active')||{}).dataset?document.querySelector('.drawer-tab.active').dataset.tab:null,gensChildren:g?Array.from(g.children).map((c)=>c.className).slice(0,8):null})})()`);
+    diag.gensHtmlHead = await probe(`String(document.querySelector('.gens-list')?.innerHTML||'').replace(/\\s+/g,' ').slice(0,1500)`);
+    diag.animaticRequests = await probe(`performance.getEntriesByType('resource').filter((e)=>e.name.includes('/api/animatic/')).map((e)=>e.name.replace(location.origin,'')).join('\\n').slice(0,1500)`);
+    diag.apiCandidates = await probe(`fetch('/api/animatic/candidates?limit=50').then(async (r)=>r.status+' '+(await r.text()).slice(0,1000))`, true);
+    diag.apiReview = await probe(`fetch('/api/animatic/review?candidateId=cand-browser-reload').then(async (r)=>r.status+' '+(await r.text()).slice(0,600))`, true);
+  }
+  fs.mkdirSync(path.dirname(DIAGNOSTICS), { recursive: true });
+  fs.writeFileSync(DIAGNOSTICS, JSON.stringify(diag, null, 2) + '\n');
+  console.error(`[animatic-reload] diagnostics written: ${DIAGNOSTICS} phase=${phase}`);
+}
+
 async function main() {
   const watchdog = setTimeout(() => { console.error('[animatic-reload] watchdog expired'); process.exit(124); }, 100_000);
   const proposal = seedProposal();
@@ -180,18 +211,23 @@ async function main() {
   const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars', '--no-proxy-server', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${debugPort}`, '--window-size=1440,900', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let page = null;
   try {
+    try {
     const browserWsUrl = await waitDevtools(debugPort, chrome);
     page = await openPage(browserWsUrl, base);
+    phase = 'first-boot';
     await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'Raindesk boot');
     await waitFor(page, `!!document.querySelector('.animatic-pacing-card')`, 'restored pacing card');
     if (!(await value(page, `document.querySelector('.animatic-pacing-card')?.textContent?.includes('Restrained')`))) throw new Error('Restrained pacing card missing');
 
+    phase = 'first-preview';
     await nativeClick(page, '.animatic-preview-btn');
     await waitFor(page, `!!document.querySelector('.animatic-take-card video')`, 'playable animatic Take', 25_000);
     await waitFor(page, `document.querySelector('.animatic-take-card video')?.getAttribute('src')?.startsWith('/api/animatic/artifact/')`, 'same-origin MP4');
+    phase = 'first-keep';
     await nativeClick(page, '.animatic-take-card .animatic-review-btn.keep');
     await waitFor(page, `document.querySelector('.animatic-take-status')?.textContent?.includes('kept')`, 'Keep state');
 
+    phase = 'durable-keep-check';
     const decisions = review.list({ candidateId: 'cand-browser-reload' });
     if (decisions.length !== 1 || decisions[0].decision !== 'keep' || decisions[0].actor_role !== 'owner') throw new Error('durable owner Keep missing');
     if (fs.readFileSync(spawnCounter, 'utf8').trim().split('\n').length !== 1) throw new Error('executor spawned more than once');
@@ -200,13 +236,19 @@ async function main() {
     // process. No page object or DOM state is reused.
     try { page.ws.close(); } catch (_e) {}
     page = null;
+    phase = 'fresh-page-open';
     const reloaded = await openPage(browserWsUrl, `${base}?reload-proof=1`);
     page = reloaded;
+    phase = 'fresh-boot';
     await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'fresh-page reload boot');
+    phase = 'fresh-pacing';
     await waitFor(page, `!!document.querySelector('.animatic-pacing-card')`, 'pacing after reload');
     await waitFor(page, `!!document.querySelector('[data-tab="gens"]')`, 'Takes tab after reload');
+    phase = 'fresh-tab';
     await nativeClick(page, '[data-tab="gens"]');
+    phase = 'fresh-keep';
     await waitFor(page, `document.querySelector('.animatic-take-status')?.textContent?.includes('kept')`, 'Keep after reload');
+    phase = 'fresh-take';
     await waitFor(page, `!!document.querySelector('.animatic-take-card video')`, 'Take after reload');
 
     if (SCREENSHOT) { const image = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true }); fs.writeFileSync(SCREENSHOT, Buffer.from(image.data, 'base64')); }
@@ -221,6 +263,11 @@ async function main() {
     };
     if (RECEIPT) fs.writeFileSync(RECEIPT, JSON.stringify(receipt, null, 2) + '\n');
     console.log(JSON.stringify(receipt));
+    await captureDiagnostics(page, null);
+    } catch (journeyError) {
+    await captureDiagnostics(page, journeyError);
+    throw journeyError;
+    }
   } finally {
     if (page && page.ws) try { page.ws.close(); } catch (_e) {}
     if (chrome.exitCode == null) chrome.kill('SIGKILL');
