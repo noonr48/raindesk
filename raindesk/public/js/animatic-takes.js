@@ -46,24 +46,21 @@
     return `animatic:${candidate}:${decision}:${nonce}`.slice(0, 160);
   }
 
-  function AnimaticTakes({ root: windowRoot, document, api, drawer, gensList } = {}) {
-    const section = el(document, 'section', 'animatic-takes-section');
-    section.setAttribute('aria-label', 'animatic takes');
+  function AnimaticTakes({ root: windowRoot, document, api, drawer, gensList, host } = {}) {
+    // The drawer builds one stable host per surface (chat.js owns the DOM):
+    // animatic takes render only into their host, image takes only into
+    // theirs. No component repairs another component's subtree.
+    const section = host
+      || (gensList && gensList.querySelector ? gensList.querySelector('.animatic-takes-host') : null)
+      || el(document, 'section', 'animatic-takes-section');
+    try { section.setAttribute('aria-label', 'animatic takes'); } catch (_e) {}
     const reviewKeys = new Map();
-    let loading = false;
-    let rerenderQueued = false;
-
-    function keepSectionAttached() {
-      if (gensList && !gensList.contains(section)) gensList.prepend(section);
-    }
+    let renderEpoch = 0;
+    let destroyed = false;
 
     function queueRender() {
-      if (rerenderQueued) return;
-      rerenderQueued = true;
-      setTimeout(() => {
-        rerenderQueued = false;
-        render().catch(() => {});
-      }, 0);
+      if (destroyed) return;
+      setTimeout(() => { render().catch(() => {}); }, 0);
     }
 
     async function submitDecision(record, decision, button) {
@@ -128,13 +125,13 @@
     }
 
     async function render() {
-      if (loading || !api || typeof api.listAnimaticCandidates !== 'function') return;
-      loading = true;
-      keepSectionAttached();
+      if (destroyed || !api || typeof api.listAnimaticCandidates !== 'function') return;
+      const epoch = ++renderEpoch;
       section.innerHTML = '';
       section.appendChild(el(document, 'div', 'animatic-takes-title', 'Animatic takes'));
       try {
         const response = await api.listAnimaticCandidates({ limit: 50 });
+        if (destroyed || epoch !== renderEpoch) return; // superseded by a newer render
         const rows = response && Array.isArray(response.candidates) ? response.candidates.slice().reverse() : [];
         if (!rows.length) {
           section.appendChild(el(document, 'div', 'animatic-takes-empty', 'rough cuts will collect here when you preview a pacing idea'));
@@ -142,26 +139,19 @@
           for (const record of rows) section.appendChild(renderCard(record));
         }
       } catch (_error) {
-        section.appendChild(el(document, 'div', 'animatic-takes-empty', 'animatic takes are temporarily unavailable'));
-      } finally {
-        loading = false;
-        keepSectionAttached();
+        if (epoch === renderEpoch) section.appendChild(el(document, 'div', 'animatic-takes-empty', 'animatic takes are temporarily unavailable'));
       }
     }
 
-    const observer = typeof MutationObserver !== 'undefined' && gensList
-      ? new MutationObserver(() => {
-        // chat.js owns the ordinary image-Take list and legitimately redraws
-        // the whole host container after its async list request. Reattach and
-        // re-query durable animatic state whenever that host redraw removes us.
-        if (!gensList.contains(section)) {
-          keepSectionAttached();
-          queueRender();
-        }
-      }) : null;
-    if (observer) observer.observe(gensList, { childList: true });
-    keepSectionAttached();
-    return { section, render, renderCard, submitDecision, queueRender, destroy: () => observer && observer.disconnect() };
+    // Lifecycle: the drawer broadcasts every tab activation on the 'tab'
+    // channel. Rendering rides that single lifecycle surface — no tab-node
+    // click hooks, no open() wrappers, no DOM-repair observers.
+    if (drawer && typeof drawer.on === 'function') {
+      drawer.on('tab', (activeTab) => {
+        if (activeTab === 'gens') queueRender();
+      });
+    }
+    return { section, render, renderCard, submitDecision, queueRender, destroy: () => { destroyed = true; } };
   }
 
   function install(windowRoot) {
@@ -171,18 +161,10 @@
     chat.ChatDrawer = function patchedChatDrawer(drawerRoot, opts) {
       const drawer = Original(drawerRoot, opts);
       const document = windowRoot.document;
-      const gensList = drawerRoot && drawerRoot.querySelector ? drawerRoot.querySelector('.gens-list') : null;
-      const controller = AnimaticTakes({ root: windowRoot, document, api: opts && opts.api || windowRoot.RaindeskAPI, drawer, gensList });
-      const takesTab = drawerRoot && drawerRoot.querySelector ? drawerRoot.querySelector('[data-tab="gens"]') : null;
-      if (takesTab) takesTab.addEventListener('click', () => setTimeout(() => controller.render(), 0));
-      if (drawer && typeof drawer.open === 'function') {
-        const open = drawer.open;
-        drawer.open = function openWithAnimatics(which) {
-          const result = open.call(drawer, which);
-          if (which === 'gens') setTimeout(() => controller.render(), 0);
-          return result;
-        };
-      }
+      const host = drawerRoot && drawerRoot.querySelector
+        ? (drawerRoot.querySelector('.animatic-takes-host') || drawerRoot.querySelector('.animatic-takes-section'))
+        : null;
+      const controller = AnimaticTakes({ root: windowRoot, document, api: opts && opts.api || windowRoot.RaindeskAPI, drawer, host });
       if (drawer) drawer.animaticTakes = controller;
       return drawer;
     };
