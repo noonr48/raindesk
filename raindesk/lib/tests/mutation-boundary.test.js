@@ -61,6 +61,33 @@ test('clearly cross-site Sec-Fetch-Site mutations are refused (403)', async (t) 
   });
 });
 
+test('rebound Host headers (same-port DNS rebinding) are refused (403)', async (t) => {
+  await withServer(t, async (base) => {
+    // fetch() cannot set a forged Host (forbidden header, silently rewritten),
+    // so drive the socket directly — exactly what a rebound browser does.
+    const { hostname, port } = new URL(base);
+    const raw = await new Promise((resolve, reject) => {
+      const req = require('node:http').request({
+        host: hostname, port, method: 'POST', path: '/api/chat',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: `http://evil.example:${port}`,
+          Host: `evil.example:${port}`,
+          'Sec-Fetch-Site': 'same-origin',
+        },
+      }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ message: 'hi' }));
+    });
+    assert.equal(raw.status, 403);
+    assert.match(raw.body, /served address/);
+  });
+});
+
 test('same-origin JSON mutations still reach route logic', async (t) => {
   await withServer(t, async (base) => {
     const host = new URL(base).host;

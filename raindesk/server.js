@@ -371,6 +371,11 @@ function createServer(deps = {}) {
     if (String(req.headers['sec-fetch-site'] || '').trim().toLowerCase() === 'cross-site') {
       return core.sendJson(res, 403, { error: 'cross-site API mutations are not accepted' });
     }
+    if (!core.hostAccepted(req)) {
+      return core.sendJson(res, 403, { error: 'Host header does not name a served address' });
+    }
+    // Composed routes are deliberately JSON-only (no multipart endpoint lives
+    // here); multipart uploads are served by the core API.
     let promise;
     if (animaticRoute(url.pathname)) promise = handleAnimaticApi(req, res, url, { sourceRights, animaticEnv });
     else if (invocationRoute(url.pathname)) promise = handleInvocationApi(req, res, url);

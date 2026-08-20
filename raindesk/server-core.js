@@ -264,6 +264,31 @@ function requestAuthorized(req, authToken) {
 }
 
 /**
+ * Host allowlist for mutations: the Host header must name an address this
+ * server actually serves on (derived from the socket's own local address and
+ * port, so loopback, LAN and wildcard deployments all work). This closes the
+ * same-port DNS-rebinding class: a rebound hostname with a self-consistent
+ * Origin still fails because evil.example is not a bound address.
+ */
+function hostAccepted(req) {
+  const raw = String(req.headers.host || '').trim().toLowerCase();
+  if (!raw) return false;
+  const localPort = req.socket && Number(req.socket.localPort) || null;
+  const localAddr = String((req.socket && req.socket.localAddress) || '').replace(/^::ffff:/i, '').toLowerCase();
+  const allowed = new Set();
+  const addHost = (h) => {
+    if (!h) return;
+    allowed.add(h);
+    if (localPort) allowed.add(`${h}:${localPort}`);
+  };
+  addHost(localAddr);
+  if (localAddr === '127.0.0.1' || localAddr === '::1' || localAddr === 'localhost') {
+    addHost('localhost'); addHost('127.0.0.1'); addHost('[::1]');
+  }
+  return allowed.has(raw);
+}
+
+/**
  * Local mutation boundary for the JSON API: a loopback creative server can
  * still be targeted from an unrelated page in the user's browser. Mutating
  * requests must be JSON-shaped (or the multipart layer upload), and clearly
@@ -286,6 +311,9 @@ function assertLocalMutationRequest(req, method) {
   const fetchSite = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
   if (fetchSite === 'cross-site') {
     throw new HttpError(403, 'cross-site API mutations are not accepted');
+  }
+  if (!hostAccepted(req)) {
+    throw new HttpError(403, 'Host header does not name a served address');
   }
 }
 
@@ -913,5 +941,5 @@ if (require.main === module) {
 
 module.exports = {
   createServer, start, HOST, PORT, PUBLIC_DIR, parseMultipart, safePublicPath, sendJson,
-  isLoopbackHost, isWildcardHost, validateBindOptions, authCookieValue, requestAuthorized,
+  isLoopbackHost, isWildcardHost, validateBindOptions, authCookieValue, requestAuthorized, hostAccepted,
 };
