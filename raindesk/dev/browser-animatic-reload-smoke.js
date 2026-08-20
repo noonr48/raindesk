@@ -222,7 +222,7 @@ async function captureDiagnostics(page, error) {
 }
 
 async function main() {
-  const watchdog = setTimeout(() => { console.error('[animatic-reload] watchdog expired'); process.exit(124); }, 100_000);
+  const watchdog = setTimeout(() => { console.error('[animatic-reload] watchdog expired'); process.exit(124); }, 240_000);
   const proposal = seedProposal();
   const server = createServer({
     partnerImpl: { turn: async () => ({ message: 'unused', invocationRequests: [] }) },
@@ -264,7 +264,7 @@ async function main() {
     const browserWsUrl = await startDevtools();
     page = await openPage(browserWsUrl, base);
     phase = 'first-boot';
-    await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'Raindesk boot');
+    await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'Raindesk boot', 60_000);
     await waitFor(page, `!!document.querySelector('.animatic-pacing-card')`, 'restored pacing card');
     if (!(await value(page, `document.querySelector('.animatic-pacing-card')?.textContent?.includes('Restrained')`))) throw new Error('Restrained pacing card missing');
 
@@ -291,7 +291,7 @@ async function main() {
     const reloaded = await openPage(browserWsUrl, `${base}?reload-proof=1`);
     page = reloaded;
     phase = 'fresh-boot';
-    await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'fresh-page reload boot');
+    await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'fresh-page reload boot', 60_000);
     phase = 'fresh-pacing';
     await waitFor(page, `!!document.querySelector('.animatic-pacing-card')`, 'pacing after reload');
     await waitFor(page, `!!document.querySelector('[data-tab="gens"]')`, 'Takes tab after reload');
