@@ -205,15 +205,17 @@ test('tab lifecycle channel restores server-owned Keep state on a fresh drawer',
     listAnimaticCandidates: async () => ({ candidates: [keptRecord] }),
   };
   // A brand-new ChatDrawer instance — the fresh-page scenario.
-  const { drawer, animaticHost } = makeDrawer(api);
+  const { root, drawer, animaticHost } = makeDrawer(api);
   takes.AnimaticTakes({ document: fakeDocument, api, drawer, host: animaticHost });
   drawer.open('agent');         // constructor/open default tab — must not render takes
   await tick();
   assert.equal(findAll(animaticHost, 'animatic-take-card').length, 0, 'agent tab does not fetch candidates');
-  // The drawer emits the tab lifecycle on tab activation — no tab-node hooks.
-  const gensTab = findAll(drawer.root || animaticHost, 'dtab')[1] || null;
-  if (gensTab) { gensTab.dispatch('click'); await tick(); }
-  else { drawer.open('gens'); await tick(); }
+  // The drawer's own tab node dispatches through chat.js's real click
+  // handler -> sync() -> tab broadcast (no per-feature hooks involved).
+  const gensTab = findAll(root, 'dtab').find((n) => n.dataset && n.dataset.tab === 'gens');
+  assert.ok(gensTab, 'gens tab node exists in the drawer DOM');
+  gensTab.dispatch('click');
+  await tick();
   const status = findAll(animaticHost, 'animatic-take-status')[0];
   assert.ok(status, 'take status rendered');
   assert.match(status.textContent, /kept/, 'server-owned Keep state restored');

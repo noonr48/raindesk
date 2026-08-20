@@ -129,9 +129,12 @@
       const epoch = ++renderEpoch;
       section.innerHTML = '';
       section.appendChild(el(document, 'div', 'animatic-takes-title', 'Animatic takes'));
+      section.appendChild(el(document, 'div', 'animatic-takes-empty', 'gathering rough cuts…'));
       try {
         const response = await api.listAnimaticCandidates({ limit: 50 });
         if (destroyed || epoch !== renderEpoch) return; // superseded by a newer render
+        section.innerHTML = '';
+        section.appendChild(el(document, 'div', 'animatic-takes-title', 'Animatic takes'));
         const rows = response && Array.isArray(response.candidates) ? response.candidates.slice().reverse() : [];
         if (!rows.length) {
           section.appendChild(el(document, 'div', 'animatic-takes-empty', 'rough cuts will collect here when you preview a pacing idea'));
