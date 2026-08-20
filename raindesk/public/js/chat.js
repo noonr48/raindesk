@@ -63,6 +63,12 @@
     const tabGens = el('div', 'dtab', 'takes');
     tabAgent.dataset.tab = 'agent';
     tabGens.dataset.tab = 'gens';
+    // The tab row doubles as the desktop workspace drag handle. Tabs are
+    // interactive controls, not drag surfaces: exempt them so pointerdown
+    // never enters drag mode, which would capture the pointer and swallow the
+    // tab-switch click.
+    tabAgent.dataset.noDrag = '';
+    tabGens.dataset.noDrag = '';
     tabs.append(tabAgent, tabGens);
 
     const closeBtn = el('button', 'chat-close', '✕');
