@@ -36,6 +36,12 @@ if (process.env.FAKE_COUNTER_FILE) fs.appendFileSync(process.env.FAKE_COUNTER_FI
 const sleep = Number(process.env.FAKE_SLEEP_MS || 0);
 const run = () => {
   if (mode === 'exit') { console.error('fake failure'); process.exit(7); }
+  if (mode === 'env-dump') {
+    // Leak-proof witness: dump the child's environment keys so the test can
+    // prove the allowlist blocks secrets and passes declared keys.
+    fs.writeFileSync(path.join(outDir, 'env-keys.txt'), Object.keys(process.env).sort().join('\\n'));
+    console.log('not terminal json'); return;
+  }
   if (mode === 'malformed') { console.log('not terminal json'); return; }
   const snap = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
   const attemptId = 'att-fake-' + crypto.randomBytes(4).toString('hex');
@@ -179,6 +185,22 @@ test('malformed, escaping, hash-mismatched and review-state outputs fail closed'
     );
     assert.equal(executionStore.latestForInvocation(prepared.id).status, 'failed');
   }
+});
+
+test('child environment is a declared allowlist — secrets never reach the executor', async () => {
+  const prepared = approvedInvocation('envprobe');
+  await assert.rejects(
+    executor.execute(prepared.id, { env: env({ FAKE_MODE: 'env-dump', GITHUB_TOKEN: 'ghp_secret123', AWS_SECRET_ACCESS_KEY: 'aws_secret123', SSH_AUTH_SOCK: '/tmp/agent.sock', RAINDESK_REMOTE_TOKEN: 'remote_secret' }) }),
+    () => true, // env-dump writes no candidate; the run fails — we only need the dump file
+  );
+  const dumpFile = path.join(scratch, 'animatic', 'external-runs', executionStore.latestForInvocation(prepared.id).executionId, 'env-keys.txt');
+  assert.ok(fs.existsSync(dumpFile), 'env dump witness written');
+  const keys = new Set(fs.readFileSync(dumpFile, 'utf8').split('\n'));
+  for (const secret of ['GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'SSH_AUTH_SOCK', 'RAINDESK_REMOTE_TOKEN']) {
+    assert.equal(keys.has(secret), false, `secret ${secret} leaked into the executor environment`);
+  }
+  assert.ok(keys.has('SLOANE_VIDEO_ALLOWED_ROOTS'), 'declared video-skill root passed');
+  assert.ok(keys.has('PATH'), 'universal PATH passed');
 });
 
 test('restart recovery converts orphaned running attempts to interrupted', () => {

@@ -176,11 +176,31 @@ async function executeOnce(invocationId, { retry = false, env = process.env } = 
     '--project-root', projectRoot,
     '--out-dir', attemptRunRoot,
   ];
-  const childEnv = {
-    ...process.env,
-    ...env,
-    SLOANE_VIDEO_ALLOWED_ROOTS: runtime.projectRoot,
-  };
+  // Least-privilege child environment: a deliberate allowlist, never the
+  // whole parent environment — tokens, credentials and unrelated application
+  // configuration must not reach an external executor process. Universal
+  // process keys (PATH/HOME/TMPDIR/locale) come from the parent only when the
+  // configured runtime env does not carry them; every other key must be a
+  // declared Raindesk/video-skill variable or an explicitly declared test fake.
+  const UNIVERSAL_KEYS = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL'];
+  const DECLARED_KEYS = [
+    'RAINDESK_ANIMATIC_EXECUTOR', 'RAINDESK_ANIMATIC_PROJECT_ROOT',
+    'RAINDESK_SOURCE_RIGHTS', 'RAINDESK_ANIMATIC_TIMEOUT_MS',
+    'RAINDESK_ANIMATIC_FPS_NUM', 'RAINDESK_ANIMATIC_FPS_DEN',
+    'SLOANE_VIDEO_ALLOWED_ROOTS',
+    // Test fakes declared by the animatic test harness (executor tests +
+    // browser smokes). Production never sets these.
+    'FAKE_MODE', 'FAKE_SLEEP_MS', 'FAKE_COUNTER_FILE',
+  ];
+  const childEnv = {};
+  for (const key of UNIVERSAL_KEYS) {
+    if (env && env[key] != null) childEnv[key] = String(env[key]);
+    else if (process.env[key] != null) childEnv[key] = String(process.env[key]);
+  }
+  for (const key of DECLARED_KEYS) {
+    if (env && env[key] != null) childEnv[key] = String(env[key]);
+  }
+  childEnv.SLOANE_VIDEO_ALLOWED_ROOTS = runtime.projectRoot;
 
   const processResult = await runProcess(runtime.executable, args, {
     env: childEnv,
