@@ -37,7 +37,7 @@ if(process.env.FAKE_COUNTER_FILE)fs.appendFileSync(process.env.FAKE_COUNTER_FILE
 const attemptId='att-browser-v2',candidateId='cand-browser-v2',runDir=path.join(out,attemptId);
 fs.mkdirSync(path.join(runDir,'artifacts'),{recursive:true});
 fs.writeFileSync(path.join(runDir,'source-snapshot.json'),JSON.stringify(snapshot,null,2));
-const mp4=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(48,11)]);
+const mp4=Buffer.from('${fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'animatic-tiny.mp4')).toString('base64')}','base64');
 const mp4Path=path.join(runDir,'artifacts','animatic.mp4');fs.writeFileSync(mp4Path,mp4);
 const sha=crypto.createHash('sha256').update(mp4).digest('hex');
 const attempt={schema_version:'0.2.0',attempt_id:attemptId,source_snapshot_digest:snapshot.snapshot_digest,adapter_id:'animatic_timing_v1',adapter_version:'0.2.0',engine:{engine_id:'fake-browser-v2'},lifecycle:'succeeded',terminal_status:'succeeded',started_at:new Date().toISOString(),ended_at:new Date().toISOString(),error:null,candidate_refs:[candidateId],extensions:{}};

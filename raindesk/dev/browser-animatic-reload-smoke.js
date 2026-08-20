@@ -46,7 +46,7 @@ if(process.env.FAKE_COUNTER_FILE)fs.appendFileSync(process.env.FAKE_COUNTER_FILE
 const attemptId='att-browser-reload',candidateId='cand-browser-reload',runDir=path.join(out,attemptId);
 fs.mkdirSync(path.join(runDir,'artifacts'),{recursive:true});
 fs.writeFileSync(path.join(runDir,'source-snapshot.json'),JSON.stringify(snapshot,null,2));
-const mp4=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(48,13)]);
+const mp4=Buffer.from('${fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'animatic-tiny.mp4')).toString('base64')}','base64');
 const mp4Path=path.join(runDir,'artifacts','animatic.mp4');fs.writeFileSync(mp4Path,mp4);
 const sha=crypto.createHash('sha256').update(mp4).digest('hex');
 const attempt={schema_version:'0.2.0',attempt_id:attemptId,source_snapshot_digest:snapshot.snapshot_digest,adapter_id:'animatic_timing_v1',adapter_version:'0.2.0',engine:{engine_id:'fake-browser-reload'},lifecycle:'succeeded',terminal_status:'succeeded',started_at:new Date().toISOString(),ended_at:new Date().toISOString(),error:null,candidate_refs:[candidateId],extensions:{}};
@@ -135,10 +135,33 @@ async function openPage(browserWsUrl, url) {
   return new CDP(ws);
 }
 
-async function value(cdp, expression) {
-  const out = await cdp.send('Runtime.evaluate', { expression, awaitPromise: false, returnByValue: true, userGesture: true });
+async function value(cdp, expression, awaitPromise = false) {
+  const out = await cdp.send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true, userGesture: true });
   if (out.exceptionDetails) throw new Error(`browser expression failed: ${JSON.stringify(out.exceptionDetails)}`);
   return out.result && out.result.value;
+}
+
+/** Real playability proof: metadata loaded, no media error, finite positive duration. */
+async function playbackProof(cdp, label) {
+  const raw = await value(cdp, `(async () => {
+    const video = document.querySelector('.animatic-take-card video');
+    if (!video) return JSON.stringify({ ok: false, reason: 'no video element' });
+    if (!video.error && video.readyState < 1) {
+      await new Promise((resolve) => {
+        video.addEventListener('loadedmetadata', resolve, { once: true });
+        setTimeout(resolve, 12000);
+      });
+    }
+    return JSON.stringify({
+      ok: !video.error && video.readyState >= 1 && Number.isFinite(video.duration) && video.duration > 0,
+      error: video.error ? String(video.error.code) : null,
+      readyState: video.readyState,
+      duration: Number.isFinite(video.duration) ? video.duration : null,
+    });
+  })()`, true);
+  const proof = JSON.parse(raw);
+  if (!proof.ok) throw new Error(`${label} playback proof failed: ${JSON.stringify(proof)}`);
+  return proof;
 }
 
 async function waitFor(cdp, expression, label, ms = 30_000) {
@@ -246,6 +269,8 @@ async function main() {
     await nativeClick(page, '.animatic-preview-btn');
     await waitFor(page, `!!document.querySelector('.animatic-take-card video')`, 'playable animatic Take', 25_000);
     await waitFor(page, `document.querySelector('.animatic-take-card video')?.getAttribute('src')?.startsWith('/api/animatic/artifact/')`, 'same-origin MP4');
+    phase = 'first-playback';
+    const firstPlayback = await playbackProof(page, 'first-page Take');
     phase = 'first-keep';
     await nativeClick(page, '.animatic-take-card .animatic-review-btn.keep');
     await waitFor(page, `document.querySelector('.animatic-take-status')?.textContent?.includes('kept')`, 'Keep state');
@@ -273,6 +298,10 @@ async function main() {
     await waitFor(page, `document.querySelector('.animatic-take-status')?.textContent?.includes('kept')`, 'Keep after reload');
     phase = 'fresh-take';
     await waitFor(page, `!!document.querySelector('.animatic-take-card video')`, 'Take after reload');
+    phase = 'fresh-playback';
+    const freshPlayback = await playbackProof(page, 'fresh-page Take');
+    await value(page, `(()=>{const v=document.querySelector('.animatic-take-card video'); if(v) v.currentTime=0.1; return true;})()`);
+    await waitFor(page, `(()=>{const v=document.querySelector('.animatic-take-card video');return !!(v && v.currentTime>0 && !v.error)})()`, 'seek advances without media error', 8_000);
 
     if (SCREENSHOT) { const image = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true }); fs.writeFileSync(SCREENSHOT, Buffer.from(image.data, 'base64')); }
     const receipt = {
@@ -283,6 +312,7 @@ async function main() {
       executorSpawns: 1,
       reloadRestored: true,
       reloadMode: 'fresh_page_same_browser',
+      playback: { first: firstPlayback, fresh: freshPlayback, seekAdvanced: true },
     };
     if (RECEIPT) fs.writeFileSync(RECEIPT, JSON.stringify(receipt, null, 2) + '\n');
     console.log(JSON.stringify(receipt));

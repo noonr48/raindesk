@@ -45,7 +45,7 @@ const candidateId = 'cand-browser-preview';
 const runDir = path.join(outDir, attemptId);
 fs.mkdirSync(path.join(runDir, 'artifacts'), { recursive: true });
 fs.writeFileSync(path.join(runDir, 'source-snapshot.json'), JSON.stringify(snapshot, null, 2));
-const mp4 = Buffer.concat([Buffer.from([0,0,0,24]), Buffer.from('ftypisom'), Buffer.alloc(48, 9)]);
+const mp4 = Buffer.from('${fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'animatic-tiny.mp4')).toString('base64')}','base64');
 const mp4Path = path.join(runDir, 'artifacts', 'animatic.mp4');
 fs.writeFileSync(mp4Path, mp4);
 const sha = crypto.createHash('sha256').update(mp4).digest('hex');
