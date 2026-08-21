@@ -24,6 +24,12 @@ const path = require('node:path');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-freeform-smoke-'));
 process.env.RAINDESK_DATA_DIR = DATA_DIR;
 
+// Empty-project mode: suppress the S01-S07 board seed so the journey boots a
+// genuinely fresh project (acceptance steps 1-2: no stock artwork, no seeded
+// sheets, calm blank desk).
+const EMPTY_MODE = process.argv.includes('--empty');
+if (EMPTY_MODE) process.env.RAINDESK_SEED_BOARD = '0';
+
 const { createServer } = require('../server');
 
 const CHROME = process.env.CHROME_BIN || process.env.BROWSER || 'chromium';
@@ -171,9 +177,36 @@ async function main() {
   let page = null;
   try {
     try {
+      const browserWsUrl = await startDevtools();
+
+      if (EMPTY_MODE) {
+        // ---- Empty journey: calm blank desk, alive with utility windows ----
+        phase = 'empty-boot';
+        page = await openPage(browserWsUrl, `${base}?freeform=1`);
+        await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'empty freeform boot', 60_000);
+        await delay(900);
+        const sheets = await value(page, `document.querySelectorAll('.creative-sheet').length`);
+        if (sheets !== 0) throw new Error(`empty project seeded ${sheets} stock creative sheets`);
+        const shotTab = await value(page, `Array.from(document.querySelectorAll('#creativeTabs .creative-tab')).some((b)=>/world_shot_/.test(b.dataset.creativeTarget||''))`);
+        if (shotTab) throw new Error('empty project opened a seeded shot tab');
+        // Blank-canvas witness INSIDE the art rect: the canvas element spans the
+        // full stage, so corners sample the app backdrop — probe points derived
+        // from the published --art-x/-w/-b CSS vars (the visible shot rect).
+        const blankRaw = await value(page, `(()=>{const c=document.getElementById('canvas');if(!c)return JSON.stringify({ok:false,reason:'no canvas'});const app=document.getElementById('app');const cs=getComputedStyle(app);const ax=parseFloat(cs.getPropertyValue('--art-x'))||0;const aw=parseFloat(cs.getPropertyValue('--art-w'))||c.clientWidth;const ab=parseFloat(cs.getPropertyValue('--art-b'))||c.clientHeight;const ay=ab-aw*(1024/1024);const x=c.getContext('2d');const cx=[ax+aw*0.15,ax+aw*0.5,ax+aw*0.85];const cy=[ay+ (ab-ay)*0.15,ay+(ab-ay)*0.5,ay+(ab-ay)*0.85];const pts=[[cx[0],cy[0]],[cx[2],cy[0]],[cx[1],cy[1]],[cx[0],cy[2]],[cx[2],cy[2]]];const samples=pts.map((pt)=>{const d=x.getImageData(Math.round(pt[0]),Math.round(pt[1]),1,1).data;return [d[0],d[1],d[2],d[3]];});let min=255,max=0;for(const s of samples){const l=(s[0]+s[1]+s[2])/3;min=Math.min(min,l);max=Math.max(max,l);}return JSON.stringify({ok:true,min,max,samples,artRect:{ax,aw,ab}});})()`);
+        const probe = JSON.parse(blankRaw);
+        if (!probe.ok || (probe.max - probe.min) > 8) throw new Error(`canvas is not a calm blank base: ${blankRaw}`);
+        // Alive: the freeform utility windows still mount over the blank desk.
+        await waitFor(page, `document.querySelectorAll('.freeform-window').length >= 2`, 'empty boot freeform windows', 20_000);
+        if (page.consoleErrors.length) throw new Error(`empty boot console errors: ${page.consoleErrors.slice(0, 5).join(' | ')}`);
+        if (SCREENSHOT) { const shot = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true }); fs.mkdirSync(path.dirname(SCREENSHOT), { recursive: true }); fs.writeFileSync(SCREENSHOT, Buffer.from(shot.data, 'base64')); }
+        clearTimeout(watchdog);
+        console.log(JSON.stringify({ ok: true, mode: 'empty', phases: ['empty-boot'], blankProbe: probe }));
+        await captureDiagnostics(page, null);
+        return; // finally still performs cleanup
+      }
+
       // ---- Step 1: default boot mounts nothing (flag gate) ----
       phase = 'default-boot';
-      const browserWsUrl = await startDevtools();
       page = await openPage(browserWsUrl, base);
       await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'default boot', 60_000);
       await delay(600);

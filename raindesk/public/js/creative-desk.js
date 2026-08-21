@@ -103,6 +103,7 @@
     const stage = opts.stage;
     const world = opts.world;
     const tabs = opts.tabs;
+    const seedBuiltinSheets = opts.seedBuiltinSheets !== false;
     const getMetrics = opts.getMetrics || (() => ({ width: stage ? stage.clientWidth : 1, height: stage ? stage.clientHeight : 1 }));
     const onViewportChange = opts.onViewportChange || (() => {});
     const onContextChange = opts.onContextChange || (() => {});
@@ -179,7 +180,9 @@
       return installState(revision || localRevision(seed));
     }
     async function loadSheets() {
-      for (const builtin of BUILTIN_SHEETS) await ensureRemoteSheet(builtin);
+      // Empty projects do not seed the stock Character/References sheets —
+      // the desk opens calm and blank; sheets are created on demand.
+      if (seedBuiltinSheets) for (const builtin of BUILTIN_SHEETS) await ensureRemoteSheet(builtin);
       if (api && api.listSheets && api.getSheet) {
         try {
           const result = await api.listSheets();

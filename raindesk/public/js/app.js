@@ -324,6 +324,11 @@
         }
       } catch (_e) { /* fall through to painted base */ }
       if (!loaded) paintLocalBase();
+    } else if (!shot && !state.offline) {
+      // Empty project: no stock artwork, no fake storyboard. A calm blank
+      // paper base the artist can draw over immediately (acceptance journey
+      // steps 1-2).
+      paintBlankBase();
     } else {
       paintLocalBase();
       if (state.offline) toast('offline — demo mode 🌧️ gen needs the server');
@@ -455,6 +460,7 @@
       stage: $('stage'),
       world: $('creativeWorld'),
       tabs: $('creativeTabs'),
+      seedBuiltinSheets: Boolean(state.shot),
       getMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
       onViewportChange: () => markDirty(),
       onContextChange: () => {},
@@ -539,6 +545,17 @@
     const got = t2.getImageData(0, 0, CANVAS_W, CANVAS_H);
     core.setLayerBuffer(base.id, new Uint8ClampedArray(got.data));
     t2.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  }
+
+  function paintBlankBase() {
+    // Calm blank paper base for empty projects — the desk ivory tone so the
+    // untouched desk reads as an open page, never as missing artwork.
+    const base = core.ensureBase('base · blank page');
+    const rgba = new Uint8ClampedArray(CANVAS_W * CANVAS_H * 4);
+    for (let i = 0; i < rgba.length; i += 4) {
+      rgba[i] = 246; rgba[i + 1] = 242; rgba[i + 2] = 232; rgba[i + 3] = 255;
+    }
+    core.setLayerBuffer(base.id, rgba);
   }
 
   function updateTitle() {
