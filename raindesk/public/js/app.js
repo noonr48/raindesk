@@ -517,7 +517,14 @@
                 await API.mutatePartnerAction(id, 'execute');
                 await API.mutatePartnerAction(id, 'accept');
                 await loadProposals();
-              } catch (_e) { toast('proposal needs the local server'); }
+              } catch (_e) {
+                // Partial failure must not strand the action invisible:
+                // cancel recovers proposed/approved states (a completed
+                // action keeps its inverse for artist-owned revert).
+                try { await API.mutatePartnerAction(id, 'cancel'); } catch (_e2) { /* already final */ }
+                await loadProposals();
+                toast('proposal needs the local server');
+              }
             },
             cancelProposal: async (id) => {
               if (!API.mutatePartnerAction) return;

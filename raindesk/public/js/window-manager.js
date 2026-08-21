@@ -102,6 +102,11 @@
     let lastRevision = null;          // optimistic-concurrency token for structural writes
     let groupsWarned = false; // per-route: a shelf conflict must not silence the groups self-heal
     let shelfWarned = false;
+    // Single serialization chain for ALL workspace writes: object upserts,
+    // shelf and groups can never interleave on the wire, so an upsert landing
+    // between a gated write's send and server-handle (invalidating its
+    // adopted revision mid-retry) is impossible by construction.
+    let writeChain = Promise.resolve();
 
     root.classList.add('freeform-desk-windows');
 
@@ -134,8 +139,7 @@
 
     function persist(model) {
       if (!api || typeof api.upsertWorkspaceObject !== 'function') return Promise.resolve(model);
-      const prev = saves.get(model.windowId) || Promise.resolve();
-      const next = prev.then(() => api.upsertWorkspaceObject({
+      const next = writeChain.then(() => api.upsertWorkspaceObject({
         windowId: model.windowId,
         type: model.entityType,
         entityRef: model.entityRef || undefined,
@@ -163,6 +167,7 @@
         }
         return model;
       });
+      writeChain = next.catch(() => {});
       saves.set(model.windowId, next);
       return next;
     }
@@ -548,21 +553,27 @@
       const ids = [...windows.values()].filter((m) => m.state === 'minimised').map((m) => m.windowId);
       const attempt = (baseRevision) => api.setWorkspaceShelf(ids, { baseRevision }).then((res) => {
         const ws = res && res.workspace;
-        if (ws && Number.isFinite(ws.revision)) lastRevision = ws.revision;
+        if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision, ws.revision);
         shelfWarned = false;
       }).catch((error) => {
         const ws = error && error.workspace;
-        if (ws && Number.isFinite(ws.revision) && baseRevision !== null && !shelfWarned) {
+        if (!ws || !Number.isFinite(ws.revision)) {
+          if (!shelfWarned) {
+            shelfWarned = true;
+            console.warn('[freeform] shelf is not persisting:', error && error.message || error);
+          }
+          return;
+        }
+        // Same adoption-on-conflict as groups: stale tokens die here.
+        lastRevision = Math.max(lastRevision, ws.revision);
+        if (baseRevision !== null && !shelfWarned) {
           shelfWarned = true;
-          lastRevision = ws.revision;
           return attempt(ws.revision);
         }
-        if (!shelfWarned) {
-          shelfWarned = true;
-          console.warn('[freeform] shelf is not persisting:', error && error.message || error);
-        }
       });
-      return attempt(lastRevision);
+      // Serialized behind every pending workspace write.
+      writeChain = writeChain.then(() => attempt(lastRevision), () => attempt(lastRevision));
+      return writeChain;
     }
     function maximise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
@@ -922,22 +933,28 @@
         { baseRevision },
       ).then((res) => {
         const ws = res && res.workspace;
-        if (ws && Number.isFinite(ws.revision)) lastRevision = ws.revision;
+        if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision, ws.revision);
         groupsWarned = false;
       }).catch((error) => {
         const ws = error && error.workspace;
-        if (ws && Number.isFinite(ws.revision) && baseRevision !== null && !groupsWarned) {
-          // Adopt the server's revision and retry once; further conflicts warn.
+        if (!ws || !Number.isFinite(ws.revision)) {
+          if (!groupsWarned) {
+            groupsWarned = true;
+            console.warn('[freeform] window groups are not persisting:', error && error.message || error);
+          }
+          return;
+        }
+        // Adopt even when the retry is latched off: a stale token must never
+        // outlive a conflict we chose not to retry.
+        lastRevision = Math.max(lastRevision, ws.revision);
+        if (baseRevision !== null && !groupsWarned) {
           groupsWarned = true;
-          lastRevision = ws.revision;
           return attempt(ws.revision);
         }
-        if (!groupsWarned) {
-          groupsWarned = true;
-          console.warn('[freeform] window groups are not persisting:', error && error.message || error);
-        }
       });
-      return attempt(lastRevision);
+      // Serialized behind every pending workspace write.
+      writeChain = writeChain.then(() => attempt(lastRevision), () => attempt(lastRevision));
+      return writeChain;
     }
 
     return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll,

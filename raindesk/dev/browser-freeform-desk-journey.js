@@ -102,13 +102,17 @@ async function value(cdp, expression, awaitPromise = false, timeoutMs = 12_000) 
   return out.result && out.result.value;
 }
 
-async function waitFor(cdp, expression, label, ms = 15_000) {
+async function waitFor(cdp, expression, label, ms = 15_000, awaitPromise = false) {
   const deadline = Date.now() + ms;
   let wedged = 0;
   while (Date.now() < deadline) {
-    try { if (await value(cdp, expression, false, 2_500)) return; }
+    try { if (await value(cdp, expression, awaitPromise, 2_500)) return; }
     catch (error) {
-      if (/CDP timeout: Runtime\.evaluate/.test(String(error && error.message))) { wedged += 1; continue; }
+      const msg = String(error && error.message);
+      if (/CDP timeout: Runtime\.evaluate/.test(msg)) { wedged += 1; continue; }
+      // Polled page promises (fetch witnesses) reject transiently under
+      // connection churn — keep polling; the deadline bounds us.
+      if (awaitPromise && /Failed to fetch|NetworkError/i.test(msg)) { wedged += 1; continue; }
       throw error;
     }
     await delay(120);
@@ -276,10 +280,10 @@ async function main() {
     step(17, 'drop-to-group rejoins');
     await value(page, `window.raindeskFreeform.joinGroup('window_layers', 'window_scenes')`);
     await waitFor(page, `window.raindeskFreeform.groups()[0].windowIds.length===2`, 'group has both', 8_000);
-    await delay(700);
-    // Write-path witness: read the SERVER's persisted workspace (not the
-    // client model) so a restore failure can never masquerade as a write
-    // failure or vice versa.
+    await delay(300);
+    // Poll the SERVER until the group lands (a fixed delay flakes on slow
+    // runners: persistStructure may adopt-and-retry past any single delay).
+    await waitFor(page, `fetch('/api/workspace').then((r)=>r.json()).then((w)=>(w.groups||[]).some((g)=>Array.isArray(g.windowIds)&&g.windowIds.length===2))`, 'group persisted server-side', 10_000, true);
     const serverWs = await value(page, `fetch('/api/workspace').then((r)=>r.json()).then((w)=>JSON.stringify({rev:w.revision,groups:(w.groups||[]).map((g)=>({id:g.groupId,n:g.windowIds.length}))}))`, true);
     console.error(`[journey] step 17 server workspace: ${serverWs}`);
     if (!JSON.parse(serverWs).groups.length) throw new Error(`group never reached the server: ${serverWs}`);
@@ -321,10 +325,14 @@ async function main() {
     await value(page, `window.raindeskFreeform.open('notes')`);
     await waitFor(page, `document.querySelector('.freeform-window[data-window-id="window_notes"] .freeform-notes-area').value==='hold on Lena longer'`, 'notes restored', 10_000);
 
-    // 24. Snap preview never appears for non-docking surfaces (visual honesty).
+    // 24. Snap preview never appears for non-docking surfaces — probed AT
+    // the edge, where a wrongly-offered dock would actually show a ghost.
     step(24, 'no snap preview for non-docking surfaces');
-    await dragWindow(page, 'window_notes', 60, 40);
-    if (await value(page, `document.querySelectorAll('.freeform-snap-preview').length`) !== 0) throw new Error('snap preview shown for a non-docking surface');
+    const notesRect = await windowRect(page, 'window_notes');
+    const notesLeft = parseInt(notesRect.left, 10) || 0;
+    await dragWindow(page, 'window_notes', -(notesLeft + 40), 0);
+    if (await value(page, `document.querySelectorAll('.freeform-snap-preview').length`) !== 0) throw new Error('snap preview shown for a non-docking surface at the edge');
+    await waitFor(page, `window.raindeskFreeform.state('window_notes').state==='floating'`, 'notes stay floating at the edge', 5_000);
 
     // 25. Zero console errors across the whole journey.
     step(25, 'zero console errors');
