@@ -328,7 +328,10 @@ async function handleApi(req, res, url, deps) {
   }
   if (method === 'POST' && route === '/api/workspace/object') {
     const body = await readJson(req, 256 * 1024);
-    return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body) });
+    // Revision rides along so freeform clients keep lastRevision in sync with
+    // ungated upserts (each upsert bumps it; without adoption every later
+    // gated structural write 409s).
+    return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body), revision: workspace.read().revision });
   }
   if (method === 'POST' && route === '/api/workspace/viewport') {
     const body = await readJson(req, 64 * 1024);

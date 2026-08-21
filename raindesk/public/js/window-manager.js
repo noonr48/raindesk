@@ -100,7 +100,8 @@
     let zTop = 100;
     let focusedId = null;
     let lastRevision = null;          // optimistic-concurrency token for structural writes
-    let structuralWarned = false;
+    let groupsWarned = false; // per-route: a shelf conflict must not silence the groups self-heal
+    let shelfWarned = false;
 
     root.classList.add('freeform-desk-windows');
 
@@ -145,7 +146,14 @@
         collapsed: model.collapsed,
         pinned: model.pinned,
         locked: model.locked,
-      })).then(() => { model.persistFailed = false; return model; }).catch((error) => {
+      })).then((res) => {
+        // Ungated upserts still bump the server revision; adopt it (monotonic —
+        // an older response arriving late must never move it backward) so
+        // gated structural writes (groups/shelf) do not fire stale.
+        const rev = res && res.revision;
+        if (Number.isFinite(rev)) lastRevision = Math.max(lastRevision, rev);
+        model.persistFailed = false; return model;
+      }).catch((error) => {
         // Bounded failure signal: persistence must not break the creative
         // flow, but a window that never reaches disk deserves one visible
         // warning per window, not silence (adversarial-review repair).
@@ -376,6 +384,10 @@
 
     function snapPlace(model, disableSnap) {
       if (disableSnap) return null;
+      // Registry honesty: only surfaces that declare `docked` may dock —
+      // offering a dock to a non-docking surface would throw on apply.
+      const surface = surfaceFor(model);
+      if (!surface || !surface.supportedStates.has('docked')) return null;
       const m = metrics();
       const rect = { ...model.rect, width: model.rect.width, height: model.rect.height };
       if (geo.edgeSnap) {
@@ -527,19 +539,30 @@
       });
     }
 
-    /** Shelf membership persists through the revision-gated shelf route. */
+    /** Shelf membership persists through the revision-gated shelf route,
+     * with the same adopt-and-retry-once on 409 as the groups path: a stale
+     * baseRevision (drag upserts bump the server revision) adopts the
+     * server's revision and retries rather than warning and dropping. */
     function persistShelfMembership() {
       if (!api || typeof api.setWorkspaceShelf !== 'function') return Promise.resolve();
       const ids = [...windows.values()].filter((m) => m.state === 'minimised').map((m) => m.windowId);
-      return api.setWorkspaceShelf(ids, { baseRevision: lastRevision }).then((res) => {
+      const attempt = (baseRevision) => api.setWorkspaceShelf(ids, { baseRevision }).then((res) => {
         const ws = res && res.workspace;
         if (ws && Number.isFinite(ws.revision)) lastRevision = ws.revision;
+        shelfWarned = false;
       }).catch((error) => {
-        if (!structuralWarned) {
-          structuralWarned = true;
+        const ws = error && error.workspace;
+        if (ws && Number.isFinite(ws.revision) && baseRevision !== null && !shelfWarned) {
+          shelfWarned = true;
+          lastRevision = ws.revision;
+          return attempt(ws.revision);
+        }
+        if (!shelfWarned) {
+          shelfWarned = true;
           console.warn('[freeform] shelf is not persisting:', error && error.message || error);
         }
       });
+      return attempt(lastRevision);
     }
     function maximise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
@@ -900,17 +923,17 @@
       ).then((res) => {
         const ws = res && res.workspace;
         if (ws && Number.isFinite(ws.revision)) lastRevision = ws.revision;
-        structuralWarned = false;
+        groupsWarned = false;
       }).catch((error) => {
         const ws = error && error.workspace;
-        if (ws && Number.isFinite(ws.revision) && baseRevision !== null && !structuralWarned) {
+        if (ws && Number.isFinite(ws.revision) && baseRevision !== null && !groupsWarned) {
           // Adopt the server's revision and retry once; further conflicts warn.
-          structuralWarned = true;
+          groupsWarned = true;
           lastRevision = ws.revision;
           return attempt(ws.revision);
         }
-        if (!structuralWarned) {
-          structuralWarned = true;
+        if (!groupsWarned) {
+          groupsWarned = true;
           console.warn('[freeform] window groups are not persisting:', error && error.message || error);
         }
       });

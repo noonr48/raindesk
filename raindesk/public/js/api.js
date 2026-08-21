@@ -26,12 +26,13 @@
   const GEN_MAX_ATTEMPTS = 6;     // consecutive transport failures tolerated
 
   class ApiError extends Error {
-    constructor(message, { status = 0, cause = null, friendly = '' } = {}) {
+    constructor(message, { status = 0, cause = null, friendly = '', workspace = null } = {}) {
       super(message);
       this.name = 'ApiError';
       this.status = status;
       this.cause = cause;
       this.friendly = friendly || friendlyFor(status, message);
+      this.workspace = workspace || null;
     }
   }
 
@@ -58,7 +59,9 @@
     } catch (_e) { /* non-JSON (never happens for /api) */ }
     if (!res.ok) {
       const msg = body && body.error ? body.error : `HTTP ${res.status}`;
-      throw new ApiError(msg, { status: res.status });
+      // Structural 409s carry the current workspace for adopt-and-retry;
+      // keep it on the error or the client's self-heal never sees it.
+      throw new ApiError(msg, { status: res.status, workspace: (body && body.workspace) || null });
     }
     return body;
   }

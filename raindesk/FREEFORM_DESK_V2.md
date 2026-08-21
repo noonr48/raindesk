@@ -158,3 +158,36 @@ emptiness honestly.
    visually dominant).
 6. **Acceptance + hardening** (25-step journey green across viewports,
    mobile evidence, recording/sequential screenshots, honest limitations).
+
+## 9. Phase status (2026-08-21)
+
+Phases 1–6 landed on `chatgpt/freeform-desk-v2`, each phase verified by
+the deterministic suite plus real-Chrome native runs before commit:
+
+1. Registry + window frame + schema v3 + empty-mode (`cec9105`, suite 231).
+2. Tear-off tabs + grouping + shelf semantics (`9285e30`…`72f1098`, battery 23).
+3. Takes / Characters / Notes surfaces migrated onto the registry
+   (`5b5ea6f`, `fafbb78`, `1ba7cb4`, suite 269). Bespoke retirement stays
+   deferred until replacements are journey-proven per §5.
+4. Contextual tools strips + Partner proposals surface — reversible chain
+   approve→execute→accept only; authority model untouched (`391e1b6`,
+   `ff11406`, suite 272).
+5. Paper-desk visual language: ivory tokens, sheet materials, focus shadow
+   tiers, live snap preview (docked surfaces only), reduced-motion
+   (`7d2aa2c`, suite 274).
+6. 25-step native acceptance journey (`dev/browser-freeform-desk-journey.js`)
+   green end-to-end on empty-project mode, including drag→minimise→restore→
+   group→tear→rejoin→reload survival, surface checks (takes/characters/
+   notes), notes persistence across reload, and zero console errors.
+
+Two journey-caught hardening fixes are part of Phase 6: (a) drop-to-group
+hit-testing walks the `elementsFromPoint` stack (the dragged frame is
+topmost under the cursor at release); (b) workspace revision is now
+returned by `/api/workspace/object` and adopted (monotonic) by the client
+so ungated upserts no longer desync gated groups/shelf writes — the
+409 adopt-and-retry now works against the real server (ApiError carries
+`workspace`), with per-route warned flags.
+
+Remaining honest limitations: single-viewport journey (mobile evidence
+and regressions harness per §7 are future work); bespoke layout code of
+§5 still present alongside the registry surfaces.
