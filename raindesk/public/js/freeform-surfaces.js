@@ -37,7 +37,8 @@
    *   prevTake() -> boolean, nextTake() -> boolean,
    *   commitTake() -> void, discardTakes() -> void,
    *   getCastState() -> { shotId, characters: [{id,name,locked,anchors}], boundIds } | null,
-   *   toggleBound(characterId) -> void
+   *   toggleBound(characterId) -> void,
+   *   getNotes() -> string, setNotes(text) -> void
    */
   function installSurfaces({ surfaces, deps } = {}) {
     if (!surfaces || typeof surfaces.register !== 'function') throw new Error('CreativeSurfaces registry is required');
@@ -198,6 +199,33 @@
         };
         render();
         return { render, destroy() { list.innerHTML = ''; } };
+      },
+    });
+
+    surfaces.register({
+      id: 'notes',
+      title: 'Notes',
+      entityType: 'notes_panel',
+      entityRefPrefix: 'notes',
+      minimumSize: { width: 200, height: 140 },
+      defaultPlacement: { width: 280, height: 220, x: null, y: 96 },
+      supportedStates: ['floating', 'minimised', 'maximised'],
+      createController: ({ body, document: doc }) => {
+        const ta = el(doc, 'textarea', 'freeform-notes-area');
+        ta.rows = 6;
+        ta.placeholder = 'scratch thoughts, cues, reminders — saved as you type';
+        body.appendChild(ta);
+        ta.addEventListener('input', () => {
+          if (deps.setNotes) deps.setNotes(String(ta.value || ''));
+        });
+        const render = () => {
+          const v = deps.getNotes ? String(deps.getNotes() || '') : '';
+          // Never clobber in-progress typing: only sync when the stored
+          // text genuinely diverges from what the artist sees.
+          if (String(ta.value || '') !== v) ta.value = v;
+        };
+        render();
+        return { render, destroy() { body.innerHTML = ''; } };
       },
     });
 

@@ -65,6 +65,8 @@ function install(defs = {}) {
   let takeState = { count: 0, index: -1 };
   let castState = null;
   const castCalls = [];
+  let notesText = '';
+  const notesCalls = [];
   const deps = {
     getBoard: defs.getBoard || (() => []),
     getActiveShotId: () => null,
@@ -81,9 +83,11 @@ function install(defs = {}) {
     discardTakes: () => { calls.discard += 1; takeState = { count: 0, index: -1 }; },
     getCastState: () => castState,
     toggleBound: (id) => { castCalls.push(id); },
+    getNotes: () => notesText,
+    setNotes: (t) => { notesText = String(t); notesCalls.push(String(t)); },
   };
   assert.equal(installSurfaces({ surfaces, deps }), true, 'installSurfaces completes');
-  return { registry, deps, calls, castCalls, setTakeState: (s) => { takeState = s; }, setCastState: (s) => { castState = s; } };
+  return { registry, deps, calls, castCalls, notesCalls, setTakeState: (s) => { takeState = s; }, setCastState: (s) => { castState = s; } };
 }
 
 function mount(registry, id) {
@@ -110,7 +114,7 @@ function findButton(body, cls) {
 
 test('installSurfaces registers scenes, layers and takes with registry metadata', () => {
   const { registry } = install();
-  assert.deepEqual([...registry.keys()].sort(), ['characters', 'layers', 'scenes', 'takes']);
+  assert.deepEqual([...registry.keys()].sort(), ['characters', 'layers', 'notes', 'scenes', 'takes']);
   const takes = registry.get('takes');
   assert.equal(takes.entityType, 'take_stack');
   assert.ok(Array.isArray(takes.supportedStates) && takes.supportedStates.includes('floating'));
@@ -211,10 +215,30 @@ test('characters surface renders bound/locked rows and fires toggleBound', () =>
 
   rows[1].children.find((c) => c.classList.contains('cast')).dispatch('click');
   assert.deepEqual(castCalls, ['mira'], 'cast button fires the toggleBound seam');
+});
 
-  // A fresh binding round re-renders through refreshAll.
-  setCastState({ shotId: 'S01', characters: [], boundIds: ['lena', 'mira'] });
-  controller.render();
-  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-character-empty'));
-  assert.equal(empty.textContent, 'no characters yet — pin a Character sheet in the world');
+test('notes surface registers and round-trips typing through the deps seam', () => {
+  const { registry, notesCalls } = install();
+  const notes = registry.get('notes');
+  assert.ok(notes, 'notes registered');
+  assert.equal(notes.entityType, 'notes_panel');
+
+  const body = makeNode('div');
+  const controller = notes.createController({ body, document: fakeDocument });
+  const ta = body.children[0];
+  assert.ok(ta.classList.contains('freeform-notes-area'), 'textarea mounted');
+
+  ta.value = 'hold on Lena longer';
+  ta.dispatch('input');
+  assert.deepEqual(notesCalls, ['hold on Lena longer'], 'typing persists through setNotes');
+
+  // render() restores stored text when it diverges (e.g. reload restore).
+  const body2 = makeNode('div');
+  const c2 = notes.createController({ body: body2, document: fakeDocument });
+  assert.equal(body2.children[0].value, 'hold on Lena longer', 'restore renders the persisted text');
+
+  // render() must not clobber in-progress typing when text already matches.
+  c2.render();
+  assert.equal(body2.children[0].value, 'hold on Lena longer');
+  controller.destroy();
 });

@@ -500,6 +500,12 @@
             nextTake: () => { if (core.nextTake()) { markDirty(); } },
             commitTake: () => { onCommit(); },
             discardTakes: () => { core.discardTakes(); state.takeMeta = []; markDirty(); },
+            getNotes: () => {
+              try { return window.localStorage.getItem('raindesk.notes.v1') || ''; } catch (_e) { return ''; }
+            },
+            setNotes: (text) => {
+              try { window.localStorage.setItem('raindesk.notes.v1', String(text || '')); } catch (_e) { /* private mode */ }
+            },
             getCastState: () => state.freeformCast || null,
             toggleBound: async (id) => {
               if (!state.shot || !API.setShotCharacters) return;
