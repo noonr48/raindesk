@@ -126,6 +126,7 @@ const fakeDocument = {
   createElement: (t) => makeNode(t),
   defaultView: { CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } },
   elementFromPoint: null, // tests stub this for drop-zone resolution
+  elementsFromPoint: null, // tests stub this for stacked (look-through) drops
   _listeners: {},
   addEventListener(type, fn, capture) {
     const key = capture ? `${type}:capture` : type;
@@ -386,15 +387,15 @@ test('window drag released over the shelf minimises it', async () => {
   assert.deepEqual(shelfCalls, [['window_references']], 'shelf membership persisted');
 });
 
-test('window drag released over another window joins its group', () => {
+test('window drag released over another window joins its group (through the dragged frame)', () => {
   const { manager, root } = groupingManager();
   const [a, b, c] = openThree(manager);
   manager.groupWindows([a, b], { activeWindowId: a });
-  // Spec path: drag the FLOATING window (c) and release over the target
-  // stack's frame (a). Stub the drop hit-test for the release point.
   const aFrame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
   const cFrame = root.children.find((f) => f.dataset && f.dataset.windowId === c);
-  fakeDocument.elementFromPoint = () => aFrame;
+  // Real-browser layout: the dragged frame (c) is under the cursor at
+  // release; the target stack (a) sits beneath it in the element stack.
+  fakeDocument.elementsFromPoint = () => [cFrame, aFrame];
   try {
     const head = cFrame.querySelector('.freeform-window-head');
     head.dispatch('pointerdown', { button: 0, clientX: 700, clientY: 300 });
@@ -404,6 +405,26 @@ test('window drag released over another window joins its group', () => {
     assert.deepEqual(manager.groups()[0].windowIds, [a, b, c], 'floating window joined the drop target stack');
     assert.equal(manager.state(c).state, 'tabbed');
     assert.equal(manager.groups()[0].activeWindowId, a, 'target stack keeps its active member');
+  } finally {
+    fakeDocument.elementsFromPoint = null;
+  }
+});
+
+test('drop-to-group falls back to elementFromPoint on hosts without the stacked API', () => {
+  const { manager, root } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b], { activeWindowId: a });
+  const aFrame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  const cFrame = root.children.find((f) => f.dataset && f.dataset.windowId === c);
+  fakeDocument.elementsFromPoint = null; // force the legacy branch
+  fakeDocument.elementFromPoint = () => aFrame; // topmost hit is the target
+  try {
+    const head = cFrame.querySelector('.freeform-window-head');
+    head.dispatch('pointerdown', { button: 0, clientX: 700, clientY: 300 });
+    fakeDocument.dispatch('pointermove', { clientX: 650, clientY: 280, buttons: 1 });
+    fakeDocument.dispatch('pointerup', { clientX: 620, clientY: 300 });
+    assert.deepEqual(manager.groups()[0].windowIds, [a, b, c], 'fallback path still joins the target stack');
+    assert.equal(manager.state(c).state, 'tabbed');
   } finally {
     fakeDocument.elementFromPoint = null;
   }

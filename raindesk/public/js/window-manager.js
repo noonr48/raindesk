@@ -788,13 +788,28 @@
 
     /** Put-away drop zones at drag release: the shelf (minimise) and other
      * windows (join their stack). Pure hit-testing, guarded for environments
-     * without layout. */
+     * without layout. The dragged window itself sits under the cursor at
+     * release, so the hit must look THROUGH the element stack, not stop at
+     * the topmost hit. */
     function resolveDropZone(x, y, draggedId) {
       if (shelfHostEl && pointInRect(x, y, rectOf(shelfHostEl))) return { kind: 'shelf' };
+      if (typeof document.elementsFromPoint === 'function') {
+        let stack = null;
+        try { stack = document.elementsFromPoint(x, y); } catch (_e) { return null; }
+        for (const el of (stack || [])) {
+          const zone = frameDropZone(el, draggedId);
+          if (zone) return zone;
+        }
+        return null;
+      }
       if (typeof document.elementFromPoint !== 'function') return null;
       let hit = null;
       try { hit = document.elementFromPoint(x, y); } catch (_e) { return null; }
-      const frame = hit && typeof hit.closest === 'function' ? hit.closest('.freeform-window') : null;
+      return frameDropZone(hit, draggedId);
+    }
+
+    function frameDropZone(el, draggedId) {
+      const frame = el && typeof el.closest === 'function' ? el.closest('.freeform-window') : null;
       if (!frame) return null;
       const targetId = frame.dataset && frame.dataset.windowId;
       if (!targetId || targetId === draggedId || !windows.has(targetId)) return null;
