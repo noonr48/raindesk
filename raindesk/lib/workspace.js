@@ -301,6 +301,17 @@ function setGroups(groups, options = {}) {
     if (group.activeWindowId != null) assertId(group.activeWindowId, 'group active window id');
     return { groupId, windowIds, activeWindowId: group.activeWindowId || null };
   });
+  // Group membership is API input: unknown windows are a 400 here, not a
+  // store-integrity 500 later (route-test repair).
+  const known = new Set(ws.windows.map((w) => w.windowId));
+  for (const group of clean) {
+    for (const id of group.windowIds) {
+      if (!known.has(id)) throw new HttpError(400, `groups reference unknown window ${id}`);
+    }
+    if (group.activeWindowId != null && !known.has(group.activeWindowId)) {
+      throw new HttpError(400, `groups reference unknown active window ${group.activeWindowId}`);
+    }
+  }
   // Windows not named by any group lose their groupId; named windows gain it.
   const membership = new Map();
   for (const group of clean) for (const id of group.windowIds) membership.set(id, group.groupId);
@@ -315,7 +326,22 @@ function setShelf(windowIds, options = {}) {
   const ws = read();
   assertBaseRevision(ws, options);
   if (!Array.isArray(windowIds)) throw new HttpError(400, 'shelf windowIds must be an array');
-  ws.shelf = { windowIds: windowIds.map((id) => assertId(id, 'shelf window id')) };
+  const ids = windowIds.map((id) => assertId(id, 'shelf window id'));
+  // Shelf membership IS the minimised state: members become minimised
+  // (rect preserved for restore); windows leaving the shelf float again.
+  const known = new Set(ws.windows.map((w) => w.windowId));
+  for (const id of ids) {
+    if (!known.has(id)) throw new HttpError(400, `shelf references unknown window ${id}`);
+  }
+  const shelfSet = new Set(ids);
+  for (const win of ws.windows) {
+    if (shelfSet.has(win.windowId)) {
+      if (win.state !== 'minimised') win.state = 'minimised';
+    } else if (win.state === 'minimised') {
+      win.state = win.space === 'screen' && win.dock ? 'docked' : 'floating';
+    }
+  }
+  ws.shelf = { windowIds: ids };
   validateWorkspace(ws);
   write(ws);
   return ws;

@@ -334,6 +334,45 @@ async function handleApi(req, res, url, deps) {
     const body = await readJson(req, 64 * 1024);
     return sendJson(res, 200, { ok: true, viewport: workspace.setViewport(body) });
   }
+  /* Freeform desk structural API: groups, shelf, window deletion. These are
+   * revision-gated (baseRevision -> 409 with the current workspace attached)
+   * because a lost update here is structural, not spatial. */
+  if (method === 'POST' && route === '/api/workspace/groups') {
+    const body = await readJson(req, 256 * 1024);
+    try {
+      const ws = workspace.setGroups(body && body.groups, { baseRevision: body && body.baseRevision });
+      return sendJson(res, 200, { ok: true, workspace: ws });
+    } catch (error) {
+      if (error instanceof HttpError && error.workspace) {
+        return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
+      }
+      throw error;
+    }
+  }
+  if (method === 'POST' && route === '/api/workspace/shelf') {
+    const body = await readJson(req, 64 * 1024);
+    try {
+      const ws = workspace.setShelf(body && body.windowIds, { baseRevision: body && body.baseRevision });
+      return sendJson(res, 200, { ok: true, workspace: ws });
+    } catch (error) {
+      if (error instanceof HttpError && error.workspace) {
+        return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
+      }
+      throw error;
+    }
+  }
+  if (method === 'POST' && route === '/api/workspace/window/delete') {
+    const body = await readJson(req, 64 * 1024);
+    try {
+      const ws = workspace.deleteWindow(body && body.windowId, { baseRevision: body && body.baseRevision });
+      return sendJson(res, 200, { ok: true, workspace: ws });
+    } catch (error) {
+      if (error instanceof HttpError && error.workspace) {
+        return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
+      }
+      throw error;
+    }
+  }
 
   /* Creative sheets: content is revisioned separately from world placement. */
   if (method === 'GET' && route === '/api/sheets') {
