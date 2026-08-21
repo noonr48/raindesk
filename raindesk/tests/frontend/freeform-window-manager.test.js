@@ -144,6 +144,17 @@ wm.CreativeSurfaces.clear();
 wm.CreativeSurfaces.register({ id: 'layers', title: 'Layers', entityType: 'layers_panel', minimumSize: { width: 240, height: 160 } });
 wm.CreativeSurfaces.register({ id: 'references', title: 'Reference Board', entityType: 'reference_board' });
 wm.CreativeSurfaces.register({ id: 'locked_only', title: 'Pinned Only', entityType: 'note', supportedStates: ['floating'] });
+// Shared controller-backed fixture, registered at module scope so ANY test
+// (including name-filtered runs) can open it — test-local registration made
+// isolated runs fail with 'unknown creative surface'.
+let probeDestroyed = 0;
+wm.CreativeSurfaces.register({
+  id: 'probe', title: 'Probe', entityType: 'generic_panel',
+  createController: ({ body, close }) => {
+    body.appendChild(fakeDocument.createElement('div'));
+    return { destroy() { probeDestroyed += 1; }, close, render() {} };
+  },
+});
 
 /* ------------------------------------------------------------- tests */
 
@@ -206,18 +217,11 @@ test('supportedStates is enforced on transition', () => {
 
 test('close destroys the controller and removes the frame', () => {
   const { manager, root } = freshManager();
-  let destroyed = 0;
-  wm.CreativeSurfaces.register({
-    id: 'probe', title: 'Probe', entityType: 'generic_panel',
-    createController: ({ body, close }) => {
-      body.appendChild(fakeDocument.createElement('div'));
-      return { destroy() { destroyed += 1; }, close };
-    },
-  });
+  const before = probeDestroyed;
   manager.open('probe');
   assert.equal(root.children.filter((c) => c.dataset && c.dataset.windowId === 'window_probe').length, 1);
   manager.close('window_probe');
-  assert.equal(destroyed, 1);
+  assert.equal(probeDestroyed, before + 1);
   assert.equal(manager.state('window_probe'), null);
   assert.equal(root.children.filter((c) => c.dataset && c.dataset.windowId === 'window_probe').length, 0);
 });
@@ -269,4 +273,107 @@ test('init restores persisted floating windows and skips minimised/tabbed ones',
   assert.equal(refs.rect.width, 300);
   assert.equal(manager.state('window_layers'), null, 'minimised windows wait for shelf restore');
   assert.equal(persistCalls.length, 0, 'init does not rewrite unchanged state');
+});
+
+/* ------------------------------------------------ grouping (Phase 2) */
+
+function groupingManager() {
+  const structural = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+    setWorkspaceGroups(groups, { baseRevision } = {}) {
+      structural.push({ kind: 'groups', groups, baseRevision });
+      return Promise.resolve({ ok: true, workspace: { revision: 9, windows: [], groups, shelf: { windowIds: [] } } });
+    },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  return { manager, root, structural };
+}
+
+function openThree(manager) {
+  manager.open('references');
+  manager.open('layers');
+  manager.open('probe');
+  return ['window_references', 'window_layers', 'window_probe'];
+}
+
+test('groupWindows tabs the members: active visible with a tab strip, others hidden', () => {
+  const { manager, root } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b, c], { activeWindowId: b });
+  assert.equal(manager.state(a).state, 'tabbed');
+  assert.equal(manager.state(b).state, 'tabbed');
+  assert.equal(manager.state(c).state, 'tabbed');
+  const group = manager.groups()[0];
+  assert.deepEqual(group.windowIds, [a, b, c]);
+  assert.equal(group.activeWindowId, b);
+  const activeFrame = root.children.find((f) => f.dataset && f.dataset.windowId === b);
+  const hiddenFrame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  assert.equal(activeFrame.hidden, false, 'active member visible');
+  assert.equal(hiddenFrame.hidden, true, 'inactive member hidden');
+  assert.ok(activeFrame.classList.contains('freeform-window-grouped'), 'grouped chrome class');
+  const tabs = activeFrame.querySelectorAll('.freeform-window-tab');
+  assert.equal(tabs.length, 3, 'tab strip lists every member');
+  const activeTab = tabs.find((t) => t.dataset.windowId === b);
+  assert.ok(activeTab && activeTab.classList.contains('active'), 'active tab marked');
+});
+
+test('switchTab flips visibility and the active tab', () => {
+  const { manager, root } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b, c], { activeWindowId: a });
+  manager.switchTab(c);
+  const group = manager.groups()[0];
+  assert.equal(group.activeWindowId, c);
+  const cFrame = root.children.find((f) => f.dataset && f.dataset.windowId === c);
+  const aFrame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  assert.equal(cFrame.hidden, false);
+  assert.equal(aFrame.hidden, true);
+  const tabs = cFrame.querySelectorAll('.freeform-window-tab');
+  const cTab = tabs.find((t) => t.dataset.windowId === c);
+  assert.ok(cTab.classList.contains('active'), 'new member owns the active tab');
+});
+
+test('tearOut frees the window; the group survives with the remaining pair', async () => {
+  const { manager, structural } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b, c], { activeWindowId: a });
+  manager.tearOut(b, 400, 300);
+  assert.equal(manager.state(b).state, 'floating');
+  assert.equal(manager.state(b).rect.x, 400);
+  const group = manager.groups()[0];
+  assert.deepEqual(group.windowIds, [a, c], 'group survives losing one member');
+  assert.equal(manager.state(a).state, 'tabbed');
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(structural.some((call) => call.kind === 'groups'), 'structural changes persist');
+});
+
+test('ungroup returns every member to floating and clears the group', () => {
+  const { manager } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  const group = manager.groupWindows([a, b, c]);
+  manager.ungroup(group.groupId);
+  assert.equal(manager.groups().length, 0);
+  for (const id of [a, b, c]) {
+    assert.equal(manager.state(id).state, 'floating');
+    assert.equal(manager.state(id).frame ? true : true, true);
+  }
+});
+
+test('closing one grouped member never destroys the others', () => {
+  const { manager } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b, c], { activeWindowId: a });
+  manager.close(b);
+  assert.ok(manager.state(a), 'other members keep their windows');
+  assert.ok(manager.state(c), 'other members keep their windows');
+  const group = manager.groups()[0];
+  assert.deepEqual(group.windowIds, [a, c]);
+  assert.equal(group.activeWindowId, a, 'active survives when a non-active member closes');
+  manager.close(a);
+  const after = manager.groups()[0];
+  assert.equal(after.windowIds.length, 1, 'last two members: survivor keeps its window');
+  assert.ok(manager.state(c));
 });

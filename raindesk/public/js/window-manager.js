@@ -94,9 +94,12 @@
     const metrics = viewportMetrics || (() => ({ width: root.clientWidth || 1280, height: root.clientHeight || 800 }));
     const windows = new Map();        // windowId -> model
     const controllers = new Map();    // windowId -> controller
+    const groups = new Map();         // groupId -> { groupId, windowIds, activeWindowId }
     const saves = new Map();          // windowId -> serialized save chain
     let zTop = 100;
     let focusedId = null;
+    let lastRevision = null;          // optimistic-concurrency token for structural writes
+    let structuralWarned = false;
 
     root.classList.add('freeform-desk-windows');
 
@@ -164,6 +167,8 @@
       frame.dataset.windowId = model.windowId;
       frame.dataset.surface = model.surfaceId;
       const head = el(document, 'header', 'freeform-window-head');
+      const tabsSlot = el(document, 'nav', 'freeform-window-tabs');
+      tabsSlot.setAttribute('aria-label', 'window tabs');
       const title = el(document, 'span', 'freeform-window-title', model.title);
       const actions = el(document, 'span', 'freeform-window-actions');
       const btnMin = el(document, 'button', 'freeform-window-btn minimise', '—');
@@ -184,9 +189,9 @@
       const body = el(document, 'div', 'freeform-window-body');
       const grip = el(document, 'div', 'freeform-window-resize');
       grip.setAttribute('aria-hidden', 'true');
-      frame.append(head, body, grip);
+      frame.append(tabsSlot, head, body, grip);
       root.appendChild(frame);
-      model.frame = frame; model.body = body; model.head = head; model.title = title;
+      model.frame = frame; model.body = body; model.head = head; model.title = title; model.tabsSlot = tabsSlot;
       installDrag(model); installResize(model, grip);
       btnMin.addEventListener('click', () => minimise(model.windowId));
       btnMax.addEventListener('click', () => (model.state === 'maximised' ? unmaximise(model.windowId) : maximise(model.windowId)));
@@ -212,7 +217,9 @@
 
     function renderFrame(model) {
       const frame = ensureFrame(model);
-      if (model.state === 'minimised') { frame.hidden = true; return; }
+      const group = groupFor(model.windowId);
+      const isHiddenMember = model.state === 'tabbed' && group && group.activeWindowId !== model.windowId;
+      if (model.state === 'minimised' || isHiddenMember) { frame.hidden = true; return; }
       frame.hidden = false;
       if (model.state === 'maximised' && model.restoreRect) {
         const m = metrics();
@@ -229,7 +236,9 @@
       frame.classList.toggle('freeform-window-collapsed', Boolean(model.collapsed));
       frame.classList.toggle('freeform-window-locked', Boolean(model.locked));
       frame.classList.toggle('freeform-window-focused', model.windowId === focusedId);
+      frame.classList.toggle('freeform-window-grouped', Boolean(group));
       frame.style.zIndex = String(model.zIndex);
+      renderGroupTabs(model);
     }
     function renderAll() { for (const model of windows.values()) renderFrame(model); }
 
@@ -237,7 +246,11 @@
 
     function transition(model, next) {
       const surface = surfaceFor(model);
-      if (surface && !surface.supportedStates.has(next)) {
+      // Tabbing and floating are manager-level spatial lifecycle states every
+      // grouped surface must accept; the surface gate covers content-affecting
+      // states only (minimise/maximise/dock).
+      const ALWAYS_ALLOWED = new Set(['floating', 'tabbed']);
+      if (surface && !ALWAYS_ALLOWED.has(next) && !surface.supportedStates.has(next)) {
         throw new Error(`surface ${model.surfaceId} does not support state ${next}`);
       }
       model.state = next;
@@ -437,11 +450,13 @@
     }
     function close(windowId) {
       const model = windows.get(windowId); if (!model) return null;
+      removeFromGroup(model); // group membership must never dangle past close (mission: closing one tab never destroys the others)
       const controller = controllers.get(windowId);
       if (controller && typeof controller.destroy === 'function') { try { controller.destroy(); } catch (_e) {} }
       if (model.frame && model.frame.parentNode) model.frame.parentNode.removeChild(model.frame);
       windows.delete(windowId); controllers.delete(windowId); saves.delete(windowId);
       if (focusedId === windowId) focusedId = null;
+      persistStructure();
       return model;
     }
 
@@ -493,7 +508,154 @@
       return list();
     }
 
-    return { open, close, minimise, restore, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll };
+    /* ------------------------------------------------------ grouping */
+
+    function groupIds() { return [...groups.keys()]; }
+    function groupFor(windowId) {
+      const model = windows.get(windowId);
+      if (!model || !model.groupId) return null;
+      return groups.get(model.groupId) || null;
+    }
+
+    function renderGroupTabs(model) {
+      if (!model.tabsSlot) return;
+      model.tabsSlot.innerHTML = '';
+      const group = groupFor(model.windowId);
+      if (!group || group.activeWindowId !== model.windowId) return;
+      for (const memberId of group.windowIds) {
+        const member = windows.get(memberId);
+        if (!member) continue;
+        const tab = el(document, 'button', 'freeform-window-tab' + (memberId === model.windowId ? ' active' : ''));
+        tab.type = 'button';
+        tab.textContent = member.title;
+        tab.dataset.windowId = memberId;
+        tab.addEventListener('click', () => switchTab(memberId));
+        installTabTear(tab, memberId);
+        model.tabsSlot.appendChild(tab);
+      }
+    }
+
+    /** Tab tear-out: a >10px drag on a tab pulls that window out of the
+     * group as a floating window (v1 creative-desk pattern, adapted). */
+    function installTabTear(tab, memberId) {
+      tab.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        const sx = e.clientX; const sy = e.clientY; let torn = false;
+        const move = (ev) => { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) torn = true; };
+        const up = (ev) => {
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          if (torn) {
+            e.preventDefault && e.preventDefault();
+            tearOut(memberId, ev.clientX, ev.clientY);
+          }
+        };
+        document.addEventListener('pointermove', move, true);
+        document.addEventListener('pointerup', up, true);
+      });
+    }
+
+    function tearOut(memberId, x, y) {
+      const model = windows.get(memberId); if (!model) return null;
+      removeFromGroup(model);
+      transition(model, 'floating');
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        model.rect.x = x; model.rect.y = y;
+      }
+      renderFrame(model); persist(model); persistStructure();
+      return model;
+    }
+
+    function removeFromGroup(model) {
+      if (!model.groupId) return;
+      const group = groups.get(model.groupId);
+      if (group) {
+        group.windowIds = group.windowIds.filter((id) => id !== model.windowId);
+        if (group.activeWindowId === model.windowId) group.activeWindowId = group.windowIds[0] || null;
+        // Store-aligned semantics: a group survives losing members down to a
+        // single survivor; only the LAST member leaving dissolves it (the
+        // lib/route tests pin the same behavior server-side).
+        if (group.windowIds.length === 0) {
+          groups.delete(group.groupId);
+        }
+      }
+      model.groupId = null;
+    }
+
+    function groupWindows(windowIds, options = {}) {
+      const ids = (Array.isArray(windowIds) ? windowIds : []).filter((id) => windows.has(id));
+      if (ids.length < 2) throw new Error('grouping needs at least two open windows');
+      const groupId = `group_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const activeWindowId = options.activeWindowId && ids.includes(options.activeWindowId) ? options.activeWindowId : ids[0];
+      groups.set(groupId, { groupId, windowIds: ids.slice(), activeWindowId });
+      for (const id of ids) {
+        const model = windows.get(id);
+        model.groupId = groupId;
+        transition(model, 'tabbed');
+        renderFrame(model);
+        persist(model);
+      }
+      persistStructure();
+      bringToFront(activeWindowId);
+      return groups.get(groupId);
+    }
+
+    function ungroup(groupIdOrWindowId) {
+      const group = groups.get(groupIdOrWindowId) || groupFor(groupIdOrWindowId);
+      if (!group) return null;
+      for (const id of group.windowIds.slice()) {
+        const model = windows.get(id);
+        if (!model) continue;
+        model.groupId = null;
+        transition(model, 'floating');
+        renderFrame(model);
+        persist(model);
+      }
+      groups.delete(group.groupId);
+      persistStructure();
+      return group;
+    }
+
+    function switchTab(memberId) {
+      const group = groupFor(memberId);
+      if (!group) return null;
+      group.activeWindowId = memberId;
+      for (const id of group.windowIds) renderFrame(windows.get(id));
+      bringToFront(memberId);
+      persistStructure();
+      return group;
+    }
+
+    /** Structural persistence: groups + shelf through the revision-gated
+     * API, with one adopt-and-retry on 409 and a bounded warning. */
+    function persistStructure() {
+      if (!api || typeof api.setWorkspaceGroups !== 'function') return Promise.resolve();
+      const attempt = (baseRevision) => api.setWorkspaceGroups(
+        [...groups.values()].map((g) => ({ groupId: g.groupId, windowIds: g.windowIds.slice(), activeWindowId: g.activeWindowId })),
+        { baseRevision },
+      ).then((res) => {
+        const ws = res && res.workspace;
+        if (ws && Number.isFinite(ws.revision)) lastRevision = ws.revision;
+        structuralWarned = false;
+      }).catch((error) => {
+        const ws = error && error.workspace;
+        if (ws && Number.isFinite(ws.revision) && baseRevision !== null && !structuralWarned) {
+          // Adopt the server's revision and retry once; further conflicts warn.
+          structuralWarned = true;
+          lastRevision = ws.revision;
+          return attempt(ws.revision);
+        }
+        if (!structuralWarned) {
+          structuralWarned = true;
+          console.warn('[freeform] window groups are not persisting:', error && error.message || error);
+        }
+      });
+      return attempt(lastRevision);
+    }
+
+    return { open, close, minimise, restore, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll,
+      groupWindows, ungroup, switchTab, tearOut, groupIds,
+      groups: () => [...groups.values()].map((g) => ({ ...g, windowIds: g.windowIds.slice() })) };
 
     /** Push external state changes (board edits, layer changes) into every
      * live surface controller (adversarial repair: stale surface lists). */
