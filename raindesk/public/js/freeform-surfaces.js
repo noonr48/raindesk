@@ -35,7 +35,9 @@
    *   toggleLayerVisible(layer), laneCounts(), lanesMeta(), moveShot(lane),
    *   getTakeState() -> { count, index } | null,
    *   prevTake() -> boolean, nextTake() -> boolean,
-   *   commitTake() -> void, discardTakes() -> void
+   *   commitTake() -> void, discardTakes() -> void,
+   *   getCastState() -> { shotId, characters: [{id,name,locked,anchors}], boundIds } | null,
+   *   toggleBound(characterId) -> void
    */
   function installSurfaces({ surfaces, deps } = {}) {
     if (!surfaces || typeof surfaces.register !== 'function') throw new Error('CreativeSurfaces registry is required');
@@ -156,6 +158,46 @@
         });
         sync();
         return { render: sync, destroy() { body.innerHTML = ''; } };
+      },
+    });
+
+    surfaces.register({
+      id: 'characters',
+      title: 'Characters',
+      entityType: 'character_registry',
+      entityRefPrefix: 'characters',
+      minimumSize: { width: 240, height: 160 },
+      defaultPlacement: { width: 300, height: 340, x: null, y: 96 },
+      supportedStates: ['floating', 'minimised', 'maximised'],
+      createController: ({ body, document: doc }) => {
+        const list = el(doc, 'div', 'freeform-character-rows');
+        body.appendChild(list);
+        const render = () => {
+          list.innerHTML = '';
+          const cast = deps.getCastState ? deps.getCastState() : null;
+          if (!cast || !cast.characters.length) {
+            list.appendChild(el(doc, 'p', 'freeform-character-empty',
+              cast ? 'no characters yet — pin a Character sheet in the world' : 'character registry offline (local server needed)'));
+            return;
+          }
+          const bound = new Set(cast.boundIds || []);
+          for (const ch of cast.characters) {
+            const row = el(doc, 'div', 'freeform-character' + (bound.has(ch.id) ? ' bound' : ''));
+            const name = el(doc, 'span', 'nm', ch.name || ch.id);
+            const meta = el(doc, 'small', 'meta',
+              (ch.anchors && ch.anchors.length ? `${ch.anchors.length} anchors` : 'no anchors'));
+            const lock = el(doc, 'span', 'lock', ch.locked ? '🔒' : '');
+            const castBtn = el(doc, 'button', 'cast', bound.has(ch.id) ? 'in cast' : 'add to cast');
+            castBtn.type = 'button';
+            castBtn.addEventListener('click', () => {
+              if (deps.toggleBound) deps.toggleBound(ch.id);
+            });
+            row.append(name, meta, lock, castBtn);
+            list.appendChild(row);
+          }
+        };
+        render();
+        return { render, destroy() { list.innerHTML = ''; } };
       },
     });
 

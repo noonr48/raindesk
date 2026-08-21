@@ -63,6 +63,8 @@ function install(defs = {}) {
   const surfaces = { register: (def) => { registry.set(def.id, def); } };
   const calls = { prev: 0, next: 0, commit: 0, discard: 0 };
   let takeState = { count: 0, index: -1 };
+  let castState = null;
+  const castCalls = [];
   const deps = {
     getBoard: defs.getBoard || (() => []),
     getActiveShotId: () => null,
@@ -77,9 +79,11 @@ function install(defs = {}) {
     nextTake: () => { calls.next += 1; takeState = { count: takeState.count, index: takeState.index + 1 }; },
     commitTake: () => { calls.commit += 1; },
     discardTakes: () => { calls.discard += 1; takeState = { count: 0, index: -1 }; },
+    getCastState: () => castState,
+    toggleBound: (id) => { castCalls.push(id); },
   };
   assert.equal(installSurfaces({ surfaces, deps }), true, 'installSurfaces completes');
-  return { registry, deps, calls, setTakeState: (s) => { takeState = s; } };
+  return { registry, deps, calls, castCalls, setTakeState: (s) => { takeState = s; }, setCastState: (s) => { castState = s; } };
 }
 
 function mount(registry, id) {
@@ -106,7 +110,7 @@ function findButton(body, cls) {
 
 test('installSurfaces registers scenes, layers and takes with registry metadata', () => {
   const { registry } = install();
-  assert.deepEqual([...registry.keys()].sort(), ['layers', 'scenes', 'takes']);
+  assert.deepEqual([...registry.keys()].sort(), ['characters', 'layers', 'scenes', 'takes']);
   const takes = registry.get('takes');
   assert.equal(takes.entityType, 'take_stack');
   assert.ok(Array.isArray(takes.supportedStates) && takes.supportedStates.includes('floating'));
@@ -169,4 +173,48 @@ test('takes surface re-renders through refreshAll (the syncDock seam contract)',
   assert.equal(findButton(body, 'freeform-take-prev').disabled, true);
   assert.equal(findButton(body, 'freeform-take-next').disabled, true, 'single take: next disabled');
   assert.equal(findButton(body, 'freeform-take-commit').disabled, false, 'a take can be accepted');
+});
+
+test('characters surface registers with registry metadata', () => {
+  const { registry } = install();
+  const chars = registry.get('characters');
+  assert.ok(chars, 'characters registered');
+  assert.equal(chars.entityType, 'character_registry');
+  assert.ok(chars.supportedStates.includes('floating'));
+});
+
+test('characters surface shows the offline empty state without cast data', () => {
+  const { registry } = install();
+  const { body } = mount(registry, 'characters');
+  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-character-empty'));
+  assert.equal(empty.textContent, 'character registry offline (local server needed)');
+});
+
+test('characters surface renders bound/locked rows and fires toggleBound', () => {
+  const { registry, castCalls, setCastState } = install();
+  setCastState({
+    shotId: 'S01',
+    characters: [
+      { id: 'lena', name: 'Lena', locked: true, anchors: [{ id: 'a1' }, { id: 'a2' }] },
+      { id: 'mira', name: 'Mira', locked: false, anchors: [] },
+    ],
+    boundIds: ['lena'],
+  });
+  const { body, controller } = mount(registry, 'characters');
+  const rows = body.children[0].children.filter((c) => c.classList.contains('freeform-character'));
+  assert.equal(rows.length, 2);
+  assert.ok(rows[0].classList.contains('bound'), 'lena is bound');
+  assert.equal(rows[0].children.find((c) => c.classList.contains('lock')).textContent, '🔒');
+  assert.equal(rows[0].children.find((c) => c.classList.contains('meta')).textContent, '2 anchors');
+  assert.equal(rows[0].children.find((c) => c.classList.contains('cast')).textContent, 'in cast');
+  assert.equal(rows[1].children.find((c) => c.classList.contains('cast')).textContent, 'add to cast');
+
+  rows[1].children.find((c) => c.classList.contains('cast')).dispatch('click');
+  assert.deepEqual(castCalls, ['mira'], 'cast button fires the toggleBound seam');
+
+  // A fresh binding round re-renders through refreshAll.
+  setCastState({ shotId: 'S01', characters: [], boundIds: ['lena', 'mira'] });
+  controller.render();
+  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-character-empty'));
+  assert.equal(empty.textContent, 'no characters yet — pin a Character sheet in the world');
 });

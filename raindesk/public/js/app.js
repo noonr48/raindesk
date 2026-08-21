@@ -500,6 +500,17 @@
             nextTake: () => { if (core.nextTake()) { markDirty(); } },
             commitTake: () => { onCommit(); },
             discardTakes: () => { core.discardTakes(); state.takeMeta = []; markDirty(); },
+            getCastState: () => state.freeformCast || null,
+            toggleBound: async (id) => {
+              if (!state.shot || !API.setShotCharacters) return;
+              const cur = state.freeformCast || { boundIds: [] };
+              const next = cur.boundIds.includes(id) ? cur.boundIds.filter((x) => x !== id) : [...cur.boundIds, id];
+              try {
+                const ctx = await API.setShotCharacters(state.shot.id, next);
+                state.freeformCast = { ...cur, shotId: state.shot.id, boundIds: (ctx && Array.isArray(ctx.characterIds) ? ctx.characterIds : next) };
+                if (state.freeform) state.freeform.refreshAll();
+              } catch (_e) { toast('cast binding needs the local server'); }
+            },
           },
         });
         state.freeform = window.RaindeskWindowManager.WindowManager({
@@ -515,11 +526,25 @@
         state.freeform.attachShelf(shelfEl);
         // Dev-journey affordance: the native smokes drive the manager directly.
         window.raindeskFreeform = state.freeform;
+        const loadCast = async () => {
+          if (!API.listCharacters || !state.shot) return;
+          try {
+            const chars = await API.listCharacters();
+            const ctx = await API.getShotCharacters(state.shot.id).catch(() => null);
+            state.freeformCast = {
+              shotId: state.shot.id,
+              characters: (chars && Array.isArray(chars.characters) ? chars.characters : []),
+              boundIds: (ctx && Array.isArray(ctx.characterIds) ? ctx.characterIds : []),
+            };
+            if (state.freeform) state.freeform.refreshAll();
+          } catch (_e) { /* character registry needs the local server */ }
+        };
         state.freeform.init().then(() => {
           if (!state.freeform.list().length) {
             state.freeform.open('scenes');
             state.freeform.open('layers');
           }
+          loadCast();
         }).catch(() => {});
       }
     } catch (_freeformError) { /* the freeform desk is additive; never block boot */ }
