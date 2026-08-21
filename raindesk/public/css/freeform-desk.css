@@ -1,0 +1,146 @@
+/* Freeform Creative Desk v2 — structural window chrome (Phase 1).
+ * Mechanics only: geometry, stacking, chrome affordances. The paper-desk
+ * visual language (warm ivory materials, shadows, motion) is Phase 5 and
+ * deliberately NOT styled here. */
+
+.freeform-desk-windows {
+  position: relative;
+}
+
+.freeform-window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  min-height: 120px;
+  background: var(--cream, #f6f2e8);
+  color: inherit;
+  border: 1px solid var(--line, #d8d2c4);
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(35, 30, 24, 0.10);
+  overflow: hidden;
+}
+
+.freeform-window-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: grab;
+  user-select: none;
+  border-bottom: 1px solid var(--line, #e4ddcf);
+  background: rgba(255, 253, 247, 0.6);
+  touch-action: none;
+}
+
+.freeform-window-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  outline: none;
+}
+
+.freeform-window-title[contenteditable="true"] {
+  cursor: text;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.freeform-window-actions { display: flex; gap: 4px; }
+
+.freeform-window-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: inherit;
+  opacity: 0.72;
+}
+.freeform-window-btn:hover { opacity: 1; background: rgba(35, 30, 24, 0.08); }
+
+.freeform-window-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.freeform-window-collapsed .freeform-window-body { display: none; }
+
+.freeform-window-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.freeform-window-focused {
+  box-shadow: 0 6px 22px rgba(35, 30, 24, 0.18);
+  border-color: var(--line-strong, #c9c1af);
+}
+
+.freeform-window-maximised {
+  border-radius: 0;
+  border: none;
+}
+
+.freeform-window-locked .freeform-window-head { cursor: default; }
+
+/* First-surface content rows (structural; theming in Phase 5). */
+.freeform-scene-rows, .freeform-layer-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.freeform-scene-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.freeform-scene-row:hover { background: rgba(35, 30, 24, 0.06); }
+.freeform-scene-row.active { background: rgba(193, 108, 42, 0.14); }
+
+.freeform-layer {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.freeform-layer:hover { background: rgba(35, 30, 24, 0.05); }
+.freeform-layer.on { background: rgba(193, 108, 42, 0.12); }
+.freeform-layer .eye { border: none; background: transparent; cursor: pointer; font-size: 12px; }
+
+.freeform-add-layer {
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px dashed var(--line, #d8d2c4);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.freeform-add-layer:hover { background: rgba(35, 30, 24, 0.05); }

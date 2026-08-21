@@ -461,6 +461,47 @@
     });
     await state.creativeDesk.init(state.shot);
 
+    // Freeform Creative Desk v2 (flag-gated): mount the shared window
+    // manager over the stage when the page runs with ?freeform=1. The
+    // default experience is unchanged until the freeform desk is proven;
+    // the registry surfaces own only their window content.
+    try {
+      if (new URLSearchParams(location.search).get('freeform') === '1' &&
+          window.RaindeskWindowManager && window.RaindeskFreeformSurfaces) {
+        window.RaindeskFreeformSurfaces.installSurfaces({
+          surfaces: window.RaindeskWindowManager.CreativeSurfaces,
+          deps: {
+            getBoard: () => (state.board && Array.isArray(state.board.shots) ? state.board.shots : []),
+            getActiveShotId: () => (state.shot && state.shot.id) || null,
+            openShot: (id) => { openShot(id); },
+            getLayers: () => core.layers,
+            getActiveLayerId: () => core.activeLayerId,
+            setActiveLayer: (id) => {
+              try { core.setActiveLayer(id); } catch (_e) { return false; }
+              markDirty(); scheduleShotSave('active layer'); return true;
+            },
+            addLayer: (spec) => {
+              core.addLayer(spec); markDirty(); scheduleShotSave('add pen layer');
+            },
+            toggleLayerVisible: (layer) => {
+              layer.visible = !layer.visible; markDirty(); scheduleShotSave('layer visibility');
+            },
+          },
+        });
+        state.freeform = window.RaindeskWindowManager.WindowManager({
+          root: $('stage'), document, api: API,
+          viewportMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
+          geometry: window.RaindeskWorkspaceUI || {},
+        });
+        state.freeform.init().then(() => {
+          if (!state.freeform.list().length) {
+            state.freeform.open('scenes');
+            state.freeform.open('layers');
+          }
+        }).catch(() => {});
+      }
+    } catch (_freeformError) { /* the freeform desk is additive; never block boot */ }
+
     $('drawerHandle').addEventListener('click', () => {
       if (state.drawer.isOpen()) state.drawer.close();
       else state.drawer.open('agent');
