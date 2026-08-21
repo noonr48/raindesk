@@ -141,7 +141,16 @@
         collapsed: model.collapsed,
         pinned: model.pinned,
         locked: model.locked,
-      })).then(() => model).catch(() => model);
+      })).then(() => { model.persistFailed = false; return model; }).catch((error) => {
+        // Bounded failure signal: persistence must not break the creative
+        // flow, but a window that never reaches disk deserves one visible
+        // warning per window, not silence (adversarial-review repair).
+        if (!model.persistFailed) {
+          model.persistFailed = true;
+          console.warn(`[freeform] window ${model.windowId} is not persisting:`, error && error.message || error);
+        }
+        return model;
+      });
       saves.set(model.windowId, next);
       return next;
     }
@@ -159,6 +168,13 @@
       const actions = el(document, 'span', 'freeform-window-actions');
       const btnMin = el(document, 'button', 'freeform-window-btn minimise', '—');
       btnMin.type = 'button'; btnMin.setAttribute('aria-label', 'minimise window');
+      if (!shelfHost) {
+        // No shelf yet (Phase 2): minimising would strand the window — keep
+        // the affordance honest by disabling it with a reason instead of
+        // letting a click lose the window for the session (adversarial repair).
+        btnMin.disabled = true;
+        btnMin.title = 'the shelf arrives with tab grouping — minimise comes with it';
+      }
       const btnMax = el(document, 'button', 'freeform-window-btn maximise', '□');
       btnMax.type = 'button'; btnMax.setAttribute('aria-label', 'maximise window');
       const btnClose = el(document, 'button', 'freeform-window-btn close', '✕');
@@ -382,7 +398,6 @@
       focusedId = windowId;
       model.zIndex = ++zTop;
       renderAll();
-      if (api && typeof api.focusWorkspace === 'function') api.focusWorkspace(windowId).catch(() => {});
       return model;
     }
 
@@ -459,8 +474,9 @@
           collapsed: Boolean(win.collapsed), pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
           restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null,
         };
-        if (model.state === 'minimised') continue; // shelf restores these on demand
+        if (model.state === 'minimised') continue; // shelf restores these on demand (Phase 2)
         if (model.state === 'tabbed') continue;    // tab groups are Phase 2
+        if (model.state === 'docked') model.state = 'floating'; // freeform windows re-derive dock geometry in Phase 2; stale persisted rects would render off-screen
         windows.set(model.windowId, model);
         zTop = Math.max(zTop, model.zIndex);
         renderFrame(model);
@@ -477,7 +493,17 @@
       return list();
     }
 
-    return { open, close, minimise, restore, maximise, unmaximise, bringToFront, focus, state, list, init };
+    return { open, close, minimise, restore, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll };
+
+    /** Push external state changes (board edits, layer changes) into every
+     * live surface controller (adversarial repair: stale surface lists). */
+    function refreshAll() {
+      for (const [windowId, controller] of controllers) {
+        if (controller && typeof controller.render === 'function') {
+          try { controller.render(); } catch (_e) { /* one damaged surface must not kill the desk */ }
+        }
+      }
+    }
   }
 
   /** Windows persisted a v3 `type` + optional entityRef; map back to surfaces.

@@ -167,9 +167,10 @@ function migrateV1toV2(ws) {
 
 /** v2 objects → v3 windows. Put-away world sheets become `tabbed` (they live
  * in the desk tab strip); hidden screen panels become `minimised` (shelf).
- * Existing groupIds synthesize groups; dock and activeObjectId carry over. */
+ * Existing groupIds synthesize groups; dock and activeObjectId carry over.
+ * NOTE: builds and returns the migrated object; does NOT write — the caller
+ * validates then persists exactly once. */
 function migrateV2toV3(ws) {
-  try { fs.copyFileSync(WORKSPACE_PATH, `${WORKSPACE_PATH}.v2.bak`); } catch (_e) { /* best-effort backup */ }
   const windows = (ws.objects || []).map((obj) => {
     const space = obj.space === 'world' ? 'world' : 'screen';
     let state = 'floating';
@@ -210,8 +211,6 @@ function migrateV2toV3(ws) {
     shelf: { windowIds: windows.filter((w) => w.state === 'minimised').map((w) => w.windowId) },
     createdAt: ws.createdAt || now(), updatedAt: now(),
   };
-  validateWorkspace(migrated);
-  atomicWrite(migrated);
   return migrated;
 }
 
@@ -225,8 +224,18 @@ function read() {
   let ws;
   try { ws = JSON.parse(raw); } catch (_e) { throw new HttpError(500, 'workspace state is corrupt'); }
   if (!ws || typeof ws !== 'object' || !ws.viewport) throw new HttpError(500, 'workspace state is malformed');
-  if (ws.schemaVersion === 1) { ws = migrateV1toV2(ws); write(ws); }
-  if (ws.schemaVersion === 2) { ws = migrateV2toV3(ws); return ws; }
+  if (ws.schemaVersion === 2 || ws.schemaVersion === 1) {
+    // Back up the ORIGINAL pre-migration file exactly once per migration —
+    // a poison-pill v1/v2 file that throws mid-chain must never destroy the
+    // only copy (adversarial-review repair: v1 files previously skipped the
+    // backup entirely and could brick every later read).
+    try { fs.copyFileSync(WORKSPACE_PATH, `${WORKSPACE_PATH}.pre-v3.bak`); } catch (_e) { /* best-effort */ }
+    if (ws.schemaVersion === 1) ws = migrateV1toV2(ws); // in-memory only; no disk write of the intermediate
+    const migrated = migrateV2toV3(ws);
+    validateWorkspace(migrated); // throws before anything touches disk if the legacy data is poison
+    atomicWrite(migrated);
+    return migrated;
+  }
   if (ws.schemaVersion !== 3 || !Array.isArray(ws.windows) || !Array.isArray(ws.groups)) {
     throw new HttpError(500, 'workspace state is malformed');
   }

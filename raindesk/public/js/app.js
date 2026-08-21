@@ -1339,7 +1339,13 @@
     markDirty();
   }
 
-  function markDirty() { state.dirty = true; }
+  function markDirty() {
+    state.dirty = true;
+    // Freeform surfaces ride the same invalidation: board/layer edits must
+    // reach the registry windows, not just the shot canvas (adversarial
+    // repair: stale surface lists).
+    if (state.freeform && typeof state.freeform.refreshAll === 'function') state.freeform.refreshAll();
+  }
 
   function tick() {
     if (state.dirty) {

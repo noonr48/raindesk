@@ -76,7 +76,7 @@ test('workspace schema v1 migrates through the chain to v3 preserving spaces and
   assert.equal(ws.windows.find((w) => w.windowId === 'old_partner').space, 'screen');
   assert.equal(ws.windows.find((w) => w.windowId === 'old_character').space, 'world');
   assert.equal(ws.viewport.zoom, 0.75);
-  assert.ok(fs.existsSync(`${workspace.WORKSPACE_PATH}.v2.bak`), 'migration leaves a v2 backup');
+  assert.ok(fs.existsSync(`${workspace.WORKSPACE_PATH}.pre-v3.bak`), 'migration leaves a pre-v3 backup of the original file');
 });
 
 test('v2 workspace migrates to v3: hidden world sheets become tabbed, hidden screen panels minimised, groupIds synthesize groups', () => {
