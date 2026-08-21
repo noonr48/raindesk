@@ -45,3 +45,25 @@ test('moveShot rejects unknown lane and unknown shot', () => {
   // state unchanged after failures
   assert.equal(board.readBoard().shots.find((s) => s.id === 'S01').lane, 'in_dev');
 });
+
+test('empty-project mode: seed gate suppresses S01-S07 on fresh boards', () => {
+  const emptyScratch = fs.mkdtempSync(path.join(os.tmpdir(), 'raindesk-board-empty-'));
+  const savedDir = process.env.RAINDESK_DATA_DIR;
+  try {
+    process.env.RAINDESK_DATA_DIR = emptyScratch;
+    // Fresh module instance bound to the new scratch dir; swap its BOARD_PATH
+    // (the module reads it at call time through the exported binding).
+    delete require.cache[require.resolve('../../lib/board')];
+    const fresh = require('../../lib/board');
+    const b = fresh.readBoard({ seed: false });
+    assert.deepEqual(b.shots, [], 'fresh empty-project board has zero shots');
+    assert.deepEqual(b.lanes, ['set', 'in_dev', 'unplanned'], 'lanes remain valid');
+    const raw = JSON.parse(fs.readFileSync(fresh.BOARD_PATH, 'utf8'));
+    assert.deepEqual(raw.shots, [], 'empty board persisted without the seed');
+  } finally {
+    process.env.RAINDESK_DATA_DIR = savedDir;
+    delete require.cache[require.resolve('../../lib/board')];
+    require('../../lib/board');
+    fs.rmSync(emptyScratch, { recursive: true, force: true });
+  }
+});

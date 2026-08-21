@@ -48,13 +48,19 @@ function writeBoard(board) {
   fs.renameSync(tmp, BOARD_PATH);
 }
 
-/** Read (seeding on first access). Always returns a validated board object. */
-function readBoard() {
+/** Read (seeding on first access). Always returns a validated board object.
+ * RAINDESK_SEED_BOARD=0 (or the emptyProject server option) suppresses the
+ * S01-S07 seed so a fresh project opens into a calm blank workspace — the
+ * freeform-desk acceptance journey's steps 1-2 require it. */
+function readBoard({ seed = null } = {}) {
+  const seedAllowed = seed != null ? Boolean(seed) : process.env.RAINDESK_SEED_BOARD !== '0';
   let raw;
   try {
     raw = fs.readFileSync(BOARD_PATH, 'utf8');
   } catch (_e) {
-    writeBoard({ ...SEED_BOARD, updatedAt: new Date().toISOString() });
+    writeBoard(seedAllowed
+      ? { ...SEED_BOARD, updatedAt: new Date().toISOString() }
+      : { lanes: LANES, shots: [], updatedAt: new Date().toISOString() });
     return readBoardFile();
   }
   let board;
