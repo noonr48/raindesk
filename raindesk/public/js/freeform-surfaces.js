@@ -40,8 +40,26 @@
    *   toggleBound(characterId) -> void,
    *   getNotes() -> string, setNotes(text) -> void,
    *   getProposals() -> [{id,type,label,status,executable}] ,
-   *   applyProposal(id) -> Promise<void>, cancelProposal(id) -> Promise<void>
+   *   applyProposal(id) -> Promise<void>, cancelProposal(id) -> Promise<void>,
+   *   refreshCast() -> void, refreshProposals() -> void
    */
+  /** Contextual-tools strip (Phase 4): a per-surface row of quick actions
+   * rendered inside the surface body it belongs to. Surfaces own their
+   * bodies, so surface-contextual actions live with the surface — the
+   * shared window chrome stays window-level only. */
+  function contextStrip(doc, body, actions) {
+    const strip = el(doc, 'nav', 'freeform-context-actions');
+    strip.setAttribute('aria-label', 'surface quick actions');
+    for (const action of actions || []) {
+      const btn = el(doc, 'button', 'freeform-context-action', action.label);
+      btn.type = 'button';
+      btn.addEventListener('click', () => { if (action.run) action.run(); });
+      strip.appendChild(btn);
+    }
+    body.appendChild(strip);
+    return strip;
+  }
+
   function installSurfaces({ surfaces, deps } = {}) {
     if (!surfaces || typeof surfaces.register !== 'function') throw new Error('CreativeSurfaces registry is required');
     if (!deps) throw new Error('surface deps are required');
@@ -173,6 +191,10 @@
       defaultPlacement: { width: 300, height: 340, x: null, y: 96 },
       supportedStates: ['floating', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
+        contextStrip(doc, body, [{
+          label: 'refresh cast',
+          run: () => { if (deps.refreshCast) deps.refreshCast(); },
+        }]);
         const list = el(doc, 'div', 'freeform-character-rows');
         body.appendChild(list);
         const render = () => {
@@ -240,6 +262,10 @@
       defaultPlacement: { width: 320, height: 240, x: null, y: 96 },
       supportedStates: ['floating', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
+        contextStrip(doc, body, [{
+          label: 'refresh',
+          run: () => { if (deps.refreshProposals) deps.refreshProposals(); },
+        }]);
         const list = el(doc, 'div', 'freeform-proposal-rows');
         body.appendChild(list);
         const render = () => {

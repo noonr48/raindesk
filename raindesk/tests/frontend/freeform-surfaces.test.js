@@ -39,6 +39,10 @@ function makeNode(tag) {
     },
     appendChild(child) { child.parentNode = this; this.children.push(child); return child; },
     append(...children) { for (const child of children) { child.parentNode = this; this.children.push(child); } },
+    setAttribute(k, v) { this._attrs = this._attrs || {}; this._attrs[k] = String(v); },
+    getAttribute(k) { return this._attrs && Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null; },
+    removeAttribute(k) { if (this._attrs) delete this._attrs[k]; },
+    hasAttribute(k) { return Boolean(this._attrs && Object.prototype.hasOwnProperty.call(this._attrs, k)); },
     addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); },
     dispatch(type, event) {
       event = event || {};
@@ -69,6 +73,7 @@ function install(defs = {}) {
   const notesCalls = [];
   let proposals = [];
   const proposalCalls = [];
+  const refreshCalls = [];
   const deps = {
     getBoard: defs.getBoard || (() => []),
     getActiveShotId: () => null,
@@ -90,9 +95,11 @@ function install(defs = {}) {
     getProposals: () => proposals,
     applyProposal: (id) => { proposalCalls.push(['apply', id]); },
     cancelProposal: (id) => { proposalCalls.push(['cancel', id]); },
+    refreshCast: () => { refreshCalls.push('cast'); },
+    refreshProposals: () => { refreshCalls.push('proposals'); },
   };
   assert.equal(installSurfaces({ surfaces, deps }), true, 'installSurfaces completes');
-  return { registry, deps, calls, castCalls, notesCalls, proposalCalls, setTakeState: (s) => { takeState = s; }, setCastState: (s) => { castState = s; }, setProposals: (p) => { proposals = p; } };
+  return { registry, deps, calls, castCalls, notesCalls, proposalCalls, refreshCalls, setTakeState: (s) => { takeState = s; }, setCastState: (s) => { castState = s; }, setProposals: (p) => { proposals = p; } };
 }
 
 function mount(registry, id) {
@@ -113,6 +120,10 @@ function findButton(body, cls) {
     return null;
   };
   return walk(body);
+}
+
+function hostOf(body, cls) {
+  return body.children.find((c) => c.classList && c.classList.contains(cls));
 }
 
 /* ------------------------------------------------------------- tests */
@@ -195,7 +206,7 @@ test('characters surface registers with registry metadata', () => {
 test('characters surface shows the offline empty state without cast data', () => {
   const { registry } = install();
   const { body } = mount(registry, 'characters');
-  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-character-empty'));
+  const empty = hostOf(body, 'freeform-character-rows').children.find((c) => c.classList.contains('freeform-character-empty'));
   assert.equal(empty.textContent, 'character registry offline (local server needed)');
 });
 
@@ -210,7 +221,7 @@ test('characters surface renders bound/locked rows and fires toggleBound', () =>
     boundIds: ['lena'],
   });
   const { body, controller } = mount(registry, 'characters');
-  const rows = body.children[0].children.filter((c) => c.classList.contains('freeform-character'));
+  const rows = hostOf(body, 'freeform-character-rows').children.filter((c) => c.classList.contains('freeform-character'));
   assert.equal(rows.length, 2);
   assert.ok(rows[0].classList.contains('bound'), 'lena is bound');
   assert.equal(rows[0].children.find((c) => c.classList.contains('lock')).textContent, '🔒');
@@ -251,8 +262,33 @@ test('notes surface registers and round-trips typing through the deps seam', () 
 test('proposals surface shows the empty state with no pending suggestions', () => {
   const { registry } = install();
   const { body } = mount(registry, 'proposals');
-  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-proposal-empty'));
+  const empty = hostOf(body, 'freeform-proposal-rows').children.find((c) => c.classList.contains('freeform-proposal-empty'));
   assert.equal(empty.textContent, 'no spatial suggestions right now');
+});
+
+test('contextual strips render per-surface quick actions and fire their seams', () => {
+  const { registry, refreshCalls } = install();
+
+  const castBody = makeNode('div');
+  registry.get('characters').createController({ body: castBody, document: fakeDocument });
+  const castStrip = hostOf(castBody, 'freeform-context-actions');
+  assert.ok(castStrip, 'strip mounts in the body');
+  const castBtn = castStrip.children[0];
+  assert.equal(castBtn.textContent, 'refresh cast');
+  castBtn.dispatch('click');
+  assert.deepEqual(refreshCalls, ['cast']);
+
+  const propBody = makeNode('div');
+  registry.get('proposals').createController({ body: propBody, document: fakeDocument });
+  const propBtn = hostOf(propBody, 'freeform-context-actions').children[0];
+  assert.equal(propBtn.textContent, 'refresh');
+  propBtn.dispatch('click');
+  assert.deepEqual(refreshCalls, ['cast', 'proposals']);
+
+  // Surfaces without contextual actions keep their bodies unchanged.
+  const notesBody = makeNode('div');
+  registry.get('notes').createController({ body: notesBody, document: fakeDocument });
+  assert.ok(!hostOf(notesBody, 'freeform-context-actions'));
 });
 
 test('proposals surface lists only proposed actions and fires apply/dismiss seams', () => {
@@ -263,7 +299,7 @@ test('proposals surface lists only proposed actions and fires apply/dismiss seam
     { id: 'a3', type: 'focus', label: 'already done', status: 'completed', executable: true },
   ]);
   const { body, controller } = mount(registry, 'proposals');
-  const rows = body.children[0].children.filter((c) => c.classList.contains('freeform-proposal'));
+  const rows = hostOf(body, 'freeform-proposal-rows').children.filter((c) => c.classList.contains('freeform-proposal'));
   assert.equal(rows.length, 2, 'only proposed actions render');
   assert.equal(rows[0].children.find((c) => c.classList.contains('nm')).textContent, 'stage layers beside scenes');
   assert.equal(rows[0].children.find((c) => c.classList.contains('freeform-proposal-apply')).textContent, 'apply');
@@ -280,6 +316,6 @@ test('proposals surface lists only proposed actions and fires apply/dismiss seam
   // After apply the proposal leaves the pending list (re-render contract).
   setProposals([{ id: 'a1', type: 'move_panel', label: 'staged', status: 'completed', executable: true }]);
   controller.render();
-  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-proposal-empty'));
+  const empty = hostOf(body, 'freeform-proposal-rows').children.find((c) => c.classList.contains('freeform-proposal-empty'));
   assert.ok(empty, 'completed actions no longer surface');
 });

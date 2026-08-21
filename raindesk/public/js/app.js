@@ -507,6 +507,8 @@
               try { window.localStorage.setItem('raindesk.notes.v1', String(text || '')); } catch (_e) { /* private mode */ }
             },
             getProposals: () => state.freeformProposals || [],
+            refreshCast: () => { loadCast(); },
+            refreshProposals: () => { loadProposals(); },
             applyProposal: async (id) => {
               if (!API.mutatePartnerAction) return;
               try {
