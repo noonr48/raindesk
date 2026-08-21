@@ -38,7 +38,9 @@
    *   commitTake() -> void, discardTakes() -> void,
    *   getCastState() -> { shotId, characters: [{id,name,locked,anchors}], boundIds } | null,
    *   toggleBound(characterId) -> void,
-   *   getNotes() -> string, setNotes(text) -> void
+   *   getNotes() -> string, setNotes(text) -> void,
+   *   getProposals() -> [{id,type,label,status,executable}] ,
+   *   applyProposal(id) -> Promise<void>, cancelProposal(id) -> Promise<void>
    */
   function installSurfaces({ surfaces, deps } = {}) {
     if (!surfaces || typeof surfaces.register !== 'function') throw new Error('CreativeSurfaces registry is required');
@@ -226,6 +228,50 @@
         };
         render();
         return { render, destroy() { body.innerHTML = ''; } };
+      },
+    });
+
+    surfaces.register({
+      id: 'proposals',
+      title: 'Partner proposals',
+      entityType: 'partner_proposals',
+      entityRefPrefix: 'proposals',
+      minimumSize: { width: 240, height: 140 },
+      defaultPlacement: { width: 320, height: 240, x: null, y: 96 },
+      supportedStates: ['floating', 'minimised', 'maximised'],
+      createController: ({ body, document: doc }) => {
+        const list = el(doc, 'div', 'freeform-proposal-rows');
+        body.appendChild(list);
+        const render = () => {
+          list.innerHTML = '';
+          const proposals = (deps.getProposals ? deps.getProposals() : []) || [];
+          const pending = proposals.filter((p) => p && p.status === 'proposed');
+          if (!pending.length) {
+            list.appendChild(el(doc, 'p', 'freeform-proposal-empty', 'no spatial suggestions right now'));
+            return;
+          }
+          for (const p of pending) {
+            const row = el(doc, 'div', 'freeform-proposal');
+            const label = el(doc, 'span', 'nm', p.label || `${p.type} ${p.targetId || ''}`.trim());
+            row.appendChild(label);
+            if (p.executable) {
+              const apply = el(doc, 'button', 'freeform-proposal-apply', 'apply');
+              apply.type = 'button';
+              apply.addEventListener('click', () => { if (deps.applyProposal) deps.applyProposal(p.id); });
+              row.appendChild(apply);
+            } else {
+              const note = el(doc, 'small', 'meta', 'advisory');
+              row.appendChild(note);
+            }
+            const dismiss = el(doc, 'button', 'freeform-proposal-dismiss', 'dismiss');
+            dismiss.type = 'button';
+            dismiss.addEventListener('click', () => { if (deps.cancelProposal) deps.cancelProposal(p.id); });
+            row.appendChild(dismiss);
+            list.appendChild(row);
+          }
+        };
+        render();
+        return { render, destroy() { list.innerHTML = ''; } };
       },
     });
 

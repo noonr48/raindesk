@@ -506,6 +506,24 @@
             setNotes: (text) => {
               try { window.localStorage.setItem('raindesk.notes.v1', String(text || '')); } catch (_e) { /* private mode */ }
             },
+            getProposals: () => state.freeformProposals || [],
+            applyProposal: async (id) => {
+              if (!API.mutatePartnerAction) return;
+              try {
+                // Reversible chain: approve -> execute (stores inverse) -> accept.
+                await API.mutatePartnerAction(id, 'approve');
+                await API.mutatePartnerAction(id, 'execute');
+                await API.mutatePartnerAction(id, 'accept');
+                await loadProposals();
+              } catch (_e) { toast('proposal needs the local server'); }
+            },
+            cancelProposal: async (id) => {
+              if (!API.mutatePartnerAction) return;
+              try {
+                await API.mutatePartnerAction(id, 'cancel');
+                await loadProposals();
+              } catch (_e) { toast('proposal needs the local server'); }
+            },
             getCastState: () => state.freeformCast || null,
             toggleBound: async (id) => {
               if (!state.shot || !API.setShotCharacters) return;
@@ -545,12 +563,23 @@
             if (state.freeform) state.freeform.refreshAll();
           } catch (_e) { /* character registry needs the local server */ }
         };
+        const loadProposals = async () => {
+          if (!API.listPartnerActions) return;
+          try {
+            const res = await API.listPartnerActions(20);
+            const items = (res && Array.isArray(res.actions) ? res.actions : []);
+            // Only actionable-by-artist ones surface here: pending proposals.
+            state.freeformProposals = items.filter((a) => a && a.status === 'proposed');
+            if (state.freeform) state.freeform.refreshAll();
+          } catch (_e) { /* proposals need the local server */ }
+        };
         state.freeform.init().then(() => {
           if (!state.freeform.list().length) {
             state.freeform.open('scenes');
             state.freeform.open('layers');
           }
           loadCast();
+          loadProposals();
         }).catch(() => {});
       }
     } catch (_freeformError) { /* the freeform desk is additive; never block boot */ }

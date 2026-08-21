@@ -67,6 +67,8 @@ function install(defs = {}) {
   const castCalls = [];
   let notesText = '';
   const notesCalls = [];
+  let proposals = [];
+  const proposalCalls = [];
   const deps = {
     getBoard: defs.getBoard || (() => []),
     getActiveShotId: () => null,
@@ -85,9 +87,12 @@ function install(defs = {}) {
     toggleBound: (id) => { castCalls.push(id); },
     getNotes: () => notesText,
     setNotes: (t) => { notesText = String(t); notesCalls.push(String(t)); },
+    getProposals: () => proposals,
+    applyProposal: (id) => { proposalCalls.push(['apply', id]); },
+    cancelProposal: (id) => { proposalCalls.push(['cancel', id]); },
   };
   assert.equal(installSurfaces({ surfaces, deps }), true, 'installSurfaces completes');
-  return { registry, deps, calls, castCalls, notesCalls, setTakeState: (s) => { takeState = s; }, setCastState: (s) => { castState = s; } };
+  return { registry, deps, calls, castCalls, notesCalls, proposalCalls, setTakeState: (s) => { takeState = s; }, setCastState: (s) => { castState = s; }, setProposals: (p) => { proposals = p; } };
 }
 
 function mount(registry, id) {
@@ -114,7 +119,7 @@ function findButton(body, cls) {
 
 test('installSurfaces registers scenes, layers and takes with registry metadata', () => {
   const { registry } = install();
-  assert.deepEqual([...registry.keys()].sort(), ['characters', 'layers', 'notes', 'scenes', 'takes']);
+  assert.deepEqual([...registry.keys()].sort(), ['characters', 'layers', 'notes', 'proposals', 'scenes', 'takes']);
   const takes = registry.get('takes');
   assert.equal(takes.entityType, 'take_stack');
   assert.ok(Array.isArray(takes.supportedStates) && takes.supportedStates.includes('floating'));
@@ -241,4 +246,40 @@ test('notes surface registers and round-trips typing through the deps seam', () 
   c2.render();
   assert.equal(body2.children[0].value, 'hold on Lena longer');
   controller.destroy();
+});
+
+test('proposals surface shows the empty state with no pending suggestions', () => {
+  const { registry } = install();
+  const { body } = mount(registry, 'proposals');
+  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-proposal-empty'));
+  assert.equal(empty.textContent, 'no spatial suggestions right now');
+});
+
+test('proposals surface lists only proposed actions and fires apply/dismiss seams', () => {
+  const { registry, proposalCalls, setProposals } = install();
+  setProposals([
+    { id: 'a1', type: 'move_panel', label: 'stage layers beside scenes', status: 'proposed', executable: true },
+    { id: 'a2', type: 'create_scene', label: 'advisory idea', status: 'proposed', executable: false },
+    { id: 'a3', type: 'focus', label: 'already done', status: 'completed', executable: true },
+  ]);
+  const { body, controller } = mount(registry, 'proposals');
+  const rows = body.children[0].children.filter((c) => c.classList.contains('freeform-proposal'));
+  assert.equal(rows.length, 2, 'only proposed actions render');
+  assert.equal(rows[0].children.find((c) => c.classList.contains('nm')).textContent, 'stage layers beside scenes');
+  assert.equal(rows[0].children.find((c) => c.classList.contains('freeform-proposal-apply')).textContent, 'apply');
+  assert.equal(rows[1].children.find((c) => c.classList.contains('meta')).textContent, 'advisory',
+    'non-executable proposal shows advisory note without apply');
+  assert.ok(!rows[1].children.find((c) => c.classList.contains('freeform-proposal-apply')),
+    'advisory row has no apply button');
+
+  rows[0].children.find((c) => c.classList.contains('freeform-proposal-apply')).dispatch('click');
+  assert.deepEqual(proposalCalls[0], ['apply', 'a1']);
+  rows[1].children.find((c) => c.classList.contains('freeform-proposal-dismiss')).dispatch('click');
+  assert.deepEqual(proposalCalls[1], ['cancel', 'a2']);
+
+  // After apply the proposal leaves the pending list (re-render contract).
+  setProposals([{ id: 'a1', type: 'move_panel', label: 'staged', status: 'completed', executable: true }]);
+  controller.render();
+  const empty = body.children[0].children.find((c) => c.classList.contains('freeform-proposal-empty'));
+  assert.ok(empty, 'completed actions no longer surface');
 });
