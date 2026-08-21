@@ -311,6 +311,42 @@ test('init restores persisted floating windows and shelf-backs minimised ones', 
   assert.equal(persistCalls.length, 0, 'init does not rewrite unchanged state');
 });
 
+test('init restores groups: tabbed members return with the active member visible', async () => {
+  const root = makeNode('div');
+  const api = {
+    getWorkspace() {
+      return Promise.resolve({
+        schemaVersion: 3, revision: 6,
+        windows: [
+          { windowId: 'window_ga', type: 'note', entityRef: 'note:ga', x: 10, y: 10, width: 300, height: 200, zIndex: 3, state: 'tabbed', groupId: 'g_restore', collapsed: false, pinned: false, locked: false },
+          { windowId: 'window_gb', type: 'note', entityRef: 'note:gb', x: 10, y: 10, width: 300, height: 200, zIndex: 4, state: 'tabbed', groupId: 'g_restore', collapsed: false, pinned: false, locked: false },
+          { windowId: 'window_stray', type: 'note', entityRef: 'note:stray', x: 60, y: 60, width: 260, height: 180, zIndex: 5, state: 'tabbed', groupId: 'g_lost', collapsed: false, pinned: false, locked: false },
+        ],
+        groups: [{ groupId: 'g_restore', windowIds: ['window_ga', 'window_gb'], activeWindowId: 'window_gb' }],
+        shelf: { windowIds: [] },
+      });
+    },
+    upsertWorkspaceObject(p) { return Promise.resolve({ ok: true }); },
+    setWorkspaceGroups() { return Promise.resolve({ ok: true, workspace: { revision: 7, windows: [], groups: [], shelf: { windowIds: [] } } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  const groups = manager.groups();
+  assert.equal(groups.length, 1, 'live group restored');
+  assert.deepEqual(groups[0].windowIds, ['window_ga', 'window_gb']);
+  assert.equal(groups[0].activeWindowId, 'window_gb');
+  const aFrame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_ga');
+  const bFrame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_gb');
+  assert.equal(bFrame.hidden, false, 'active member visible');
+  assert.equal(aFrame.hidden, true, 'inactive member hidden');
+  const tabs = bFrame.querySelectorAll('.freeform-window-tab');
+  assert.equal(tabs.length, 2, 'active member renders the tab strip');
+  const stray = manager.state('window_stray');
+  assert.equal(stray.state, 'floating', 'stranded tabbed member re-floats when its group is gone');
+  const strayFrame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_stray');
+  assert.equal(strayFrame.hidden, false, 'stranded member is visible');
+});
+
 /* ------------------------------------------------------ shelf (Phase 2) */
 
 function shelfManager() {
@@ -414,7 +450,7 @@ test('groupWindows tabs the members: active visible with a tab strip, others hid
   assert.ok(activeFrame.classList.contains('freeform-window-grouped'), 'grouped chrome class');
   const tabs = activeFrame.querySelectorAll('.freeform-window-tab');
   assert.equal(tabs.length, 3, 'tab strip lists every member');
-  const activeTab = tabs.find((t) => t.dataset.windowId === b);
+  const activeTab = tabs.find((t) => t.dataset.tabFor === b);
   assert.ok(activeTab && activeTab.classList.contains('active'), 'active tab marked');
 });
 
@@ -430,7 +466,7 @@ test('switchTab flips visibility and the active tab', () => {
   assert.equal(cFrame.hidden, false);
   assert.equal(aFrame.hidden, true);
   const tabs = cFrame.querySelectorAll('.freeform-window-tab');
-  const cTab = tabs.find((t) => t.dataset.windowId === c);
+  const cTab = tabs.find((t) => t.dataset.tabFor === c);
   assert.ok(cTab.classList.contains('active'), 'new member owns the active tab');
 });
 

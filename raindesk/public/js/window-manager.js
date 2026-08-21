@@ -571,11 +571,13 @@
           zIndex: Number(win.zIndex) || 1,
           state: SUPPORTED_STATES.has(win.state) ? win.state : 'floating',
           collapsed: Boolean(win.collapsed), pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
-          restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null,
+          groupId: win.groupId || null,
+          restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null, tabsSlot: null,
         };
         if (model.state === 'minimised') continue; // restored below as shelf-backed models
-        if (model.state === 'tabbed') continue;    // grouped restore is the grouping-persistence unit
-        if (model.state === 'docked') model.state = 'floating'; // stale persisted dock rects must not render off-screen
+        // Tabbed members restore with their group (rebuilt below); docked
+        // rects are stale across viewports and re-derive as floating.
+        if (model.state === 'docked') model.state = 'floating';
         windows.set(model.windowId, model);
         zTop = Math.max(zTop, model.zIndex);
         renderFrame(model);
@@ -617,6 +619,23 @@
           controllers.set(model.windowId, controller);
         }
       }
+      // Groups restore: rebuild group records; members above carry their
+      // groupId. Stale groups (<2 live members) dissolve; a stranded tabbed
+      // member (its group lost) re-floats so no window restores invisible.
+      const persistedGroups = ws && Array.isArray(ws.groups) ? ws.groups : [];
+      for (const group of persistedGroups) {
+        if (!group || !group.groupId || !Array.isArray(group.windowIds)) continue;
+        const windowIds = group.windowIds.filter((id) => windows.has(id));
+        if (windowIds.length < 2) continue;
+        const activeWindowId = windowIds.includes(group.activeWindowId) ? group.activeWindowId : windowIds[0];
+        groups.set(group.groupId, { groupId: group.groupId, windowIds, activeWindowId });
+      }
+      for (const model of windows.values()) {
+        if (model.state === 'tabbed' && (!model.groupId || !groups.has(model.groupId))) {
+          model.state = 'floating';
+          model.groupId = null;
+        }
+      }
       renderAll();
       renderShelf();
       return list();
@@ -642,7 +661,11 @@
         const tab = el(document, 'button', 'freeform-window-tab' + (memberId === model.windowId ? ' active' : ''));
         tab.type = 'button';
         tab.textContent = member.title;
-        tab.dataset.windowId = memberId;
+        // Distinct attribute from frames: tabs must never collide with
+        // window elements on data-window-id (live-caught: querySelector
+        // returned the embedded tab before the frame and the smoke's
+        // hidden-check timed out while the product state was correct).
+        tab.dataset.tabFor = memberId;
         tab.addEventListener('click', () => switchTab(memberId));
         installTabTear(tab, memberId);
         model.tabsSlot.appendChild(tab);

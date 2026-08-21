@@ -235,6 +235,14 @@ async function main() {
       // Let the persistence chain settle before reload.
       await delay(700);
 
+      // ---- Step 3b: group Scenes + Layers, verify tab semantics ----
+      phase = 'group';
+      await waitFor(page, `!!window.raindeskFreeform`, 'manager handle exposed', 8_000);
+      await value(page, `window.raindeskFreeform.groupWindows(['window_scenes','window_layers'], { activeWindowId: 'window_scenes' })`);
+      await waitFor(page, `!!document.querySelector('[data-window-id="window_scenes"] .freeform-window-tab')`, 'grouped tab strip', 8_000);
+      await waitFor(page, `document.querySelector('[data-window-id="window_layers"]').hidden === true`, 'inactive member hidden', 8_000);
+      await delay(700); // structural persistence settles before reload
+
       // ---- Step 4: reload restores the dragged position (workspace v3) ----
       phase = 'reload';
       try { page.ws.close(); } catch (_e) {}
@@ -246,6 +254,11 @@ async function main() {
       if (restored.left !== after.left || restored.top !== after.top) {
         throw new Error(`reload did not restore the dragged rect: ${JSON.stringify({ after, restored })}`);
       }
+      // Grouped windows restore: the group re-forms with its active member
+      // visible and the inactive member hidden behind it.
+      await waitFor(page, `window.raindeskFreeform && window.raindeskFreeform.groups().length === 1`, 'group restored after reload', 10_000);
+      await waitFor(page, `!!document.querySelector('[data-window-id="window_scenes"] .freeform-window-tab')`, 'tab strip restored after reload', 10_000);
+      await waitFor(page, `document.querySelector('[data-window-id="window_layers"]').hidden === true`, 'inactive member hidden after reload', 10_000);
 
       // ---- Step 5: no console errors on the freeform page ----
       phase = 'console';
