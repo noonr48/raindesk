@@ -324,7 +324,7 @@ async function handleApi(req, res, url, deps) {
 
   /* Spatial workspace: stable world-space objects shared by UI and Partner. */
   if (method === 'GET' && route === '/api/workspace') {
-    return sendJson(res, 200, workspace.read());
+    return sendJson(res, 200, workspace.readClient());
   }
   if (method === 'POST' && route === '/api/workspace/object') {
     const body = await readJson(req, 256 * 1024);
