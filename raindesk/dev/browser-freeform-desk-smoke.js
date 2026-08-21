@@ -195,8 +195,10 @@ async function main() {
         const blankRaw = await value(page, `(()=>{const c=document.getElementById('canvas');if(!c)return JSON.stringify({ok:false,reason:'no canvas'});const app=document.getElementById('app');const cs=getComputedStyle(app);const ax=parseFloat(cs.getPropertyValue('--art-x'))||0;const aw=parseFloat(cs.getPropertyValue('--art-w'))||c.clientWidth;const ab=parseFloat(cs.getPropertyValue('--art-b'))||c.clientHeight;const ay=ab-aw*(1024/1024);const x=c.getContext('2d');const cx=[ax+aw*0.15,ax+aw*0.5,ax+aw*0.85];const cy=[ay+ (ab-ay)*0.15,ay+(ab-ay)*0.5,ay+(ab-ay)*0.85];const pts=[[cx[0],cy[0]],[cx[2],cy[0]],[cx[1],cy[1]],[cx[0],cy[2]],[cx[2],cy[2]]];const samples=pts.map((pt)=>{const d=x.getImageData(Math.round(pt[0]),Math.round(pt[1]),1,1).data;return [d[0],d[1],d[2],d[3]];});let min=255,max=0;for(const s of samples){const l=(s[0]+s[1]+s[2])/3;min=Math.min(min,l);max=Math.max(max,l);}return JSON.stringify({ok:true,min,max,samples,artRect:{ax,aw,ab}});})()`);
         const probe = JSON.parse(blankRaw);
         if (!probe.ok || (probe.max - probe.min) > 8) throw new Error(`canvas is not a calm blank base: ${blankRaw}`);
-        // Alive: the freeform utility windows still mount over the blank desk.
-        await waitFor(page, `document.querySelectorAll('.freeform-window').length >= 2`, 'empty boot freeform windows', 20_000);
+        // Alive: VISIBLE freeform utility windows over the blank desk (hidden
+        // legacy panel frames must not satisfy the journey — live-caught when
+        // WorkspaceShell's seeded panel_* objects collided with restore).
+        await waitFor(page, `Array.from(document.querySelectorAll('.freeform-window')).filter((f)=>!f.hidden).length >= 2`, 'empty boot VISIBLE freeform windows', 20_000);
         if (page.consoleErrors.length) throw new Error(`empty boot console errors: ${page.consoleErrors.slice(0, 5).join(' | ')}`);
         if (SCREENSHOT) { const shot = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true }); fs.mkdirSync(path.dirname(SCREENSHOT), { recursive: true }); fs.writeFileSync(SCREENSHOT, Buffer.from(shot.data, 'base64')); }
         clearTimeout(watchdog);

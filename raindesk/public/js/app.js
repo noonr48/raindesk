@@ -499,6 +499,14 @@
           viewportMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
           geometry: window.RaindeskWorkspaceUI || {},
         });
+        // The tab shelf: calm restore surface for minimised windows (Phase 2).
+        const shelfEl = document.createElement('nav');
+        shelfEl.className = 'freeform-shelf';
+        shelfEl.setAttribute('aria-label', 'window shelf');
+        $('stage').appendChild(shelfEl);
+        state.freeform.attachShelf(shelfEl);
+        // Dev-journey affordance: the native smokes drive the manager directly.
+        window.raindeskFreeform = state.freeform;
         state.freeform.init().then(() => {
           if (!state.freeform.list().length) {
             state.freeform.open('scenes');

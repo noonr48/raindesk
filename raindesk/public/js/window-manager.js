@@ -96,6 +96,7 @@
     const controllers = new Map();    // windowId -> controller
     const groups = new Map();         // groupId -> { groupId, windowIds, activeWindowId }
     const saves = new Map();          // windowId -> serialized save chain
+    let shelfHostEl = shelfHost || null; // attachShelf() may bind it later
     let zTop = 100;
     let focusedId = null;
     let lastRevision = null;          // optimistic-concurrency token for structural writes
@@ -173,10 +174,11 @@
       const actions = el(document, 'span', 'freeform-window-actions');
       const btnMin = el(document, 'button', 'freeform-window-btn minimise', '—');
       btnMin.type = 'button'; btnMin.setAttribute('aria-label', 'minimise window');
-      if (!shelfHost) {
-        // No shelf yet (Phase 2): minimising would strand the window — keep
+      if (!shelfHostEl) {
+        // No shelf yet: minimising would strand the window — keep
         // the affordance honest by disabling it with a reason instead of
         // letting a click lose the window for the session (adversarial repair).
+        // attachShelf() re-enables these buttons.
         btnMin.disabled = true;
         btnMin.title = 'the shelf arrives with tab grouping — minimise comes with it';
       }
@@ -416,21 +418,97 @@
 
     function minimise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
+      removeFromGroup(model); // a shelf window is not a tab member
       transition(model, 'minimised');
-      if (shelfHost) shelfHost.dispatchEvent(new (document.defaultView || root.ownerDocument.defaultView || root).CustomEvent('freeform:shelf-add', { detail: { windowId } }));
       renderFrame(model);
+      renderShelf();
       persist(model);
+      persistShelfMembership();
       return model;
     }
     function restore(windowId) {
       const model = windows.get(windowId); if (!model) return null;
       if (model.state !== 'minimised' && model.state !== 'tabbed') return model;
       transition(model, 'floating');
-      if (shelfHost) shelfHost.dispatchEvent(new (document.defaultView || root.ownerDocument.defaultView || root).CustomEvent('freeform:shelf-remove', { detail: { windowId } }));
       renderFrame(model);
+      renderShelf();
       bringToFront(windowId);
       persist(model);
+      persistShelfMembership();
       return model;
+    }
+    function restoreAt(windowId, x, y) {
+      const model = restore(windowId);
+      if (model && Number.isFinite(x) && Number.isFinite(y)) {
+        model.rect.x = x; model.rect.y = y;
+        renderFrame(model);
+        persist(model);
+      }
+      return model;
+    }
+
+    /* ---------------------------------------------------------- shelf */
+
+    /** Bind (or rebind) the shelf host: calm chip strip for minimised
+     * windows. Re-enables any disabled minimise buttons. */
+    function attachShelf(host) {
+      shelfHostEl = host || null;
+      for (const model of windows.values()) {
+        const btn = model.frame && model.frame.querySelector && model.frame.querySelector('.freeform-window-btn.minimise');
+        if (btn) { btn.disabled = false; btn.title = ''; }
+      }
+      renderShelf();
+      return shelfHostEl;
+    }
+
+    function renderShelf() {
+      if (!shelfHostEl) return;
+      shelfHostEl.innerHTML = '';
+      for (const model of windows.values()) {
+        if (model.state !== 'minimised') continue;
+        const chip = el(document, 'button', 'freeform-shelf-chip', model.title);
+        chip.type = 'button';
+        chip.dataset.windowId = model.windowId;
+        chip.setAttribute('aria-label', `restore ${model.title}`);
+        chip.addEventListener('click', () => restore(model.windowId));
+        installShelfChipDrag(chip, model.windowId);
+        shelfHostEl.appendChild(chip);
+      }
+    }
+
+    /** Drag a shelf chip out (>10px) to re-float the window at the drop
+     * point — the shelf twin of tab tear-out. */
+    function installShelfChipDrag(chip, windowId) {
+      chip.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        const sx = e.clientX; const sy = e.clientY; let dragged = false;
+        const move = (ev) => { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) dragged = true; };
+        const up = (ev) => {
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          if (!dragged) return; // a click is not a drag; the click handler restores
+          if (e.preventDefault) e.preventDefault();
+          const rect = (root.getBoundingClientRect && root.getBoundingClientRect()) || { left: 0, top: 0 };
+          restoreAt(windowId, ev.clientX - rect.left, ev.clientY - rect.top);
+        };
+        document.addEventListener('pointermove', move, true);
+        document.addEventListener('pointerup', up, true);
+      });
+    }
+
+    /** Shelf membership persists through the revision-gated shelf route. */
+    function persistShelfMembership() {
+      if (!api || typeof api.setWorkspaceShelf !== 'function') return Promise.resolve();
+      const ids = [...windows.values()].filter((m) => m.state === 'minimised').map((m) => m.windowId);
+      return api.setWorkspaceShelf(ids, { baseRevision: lastRevision }).then((res) => {
+        const ws = res && res.workspace;
+        if (ws && Number.isFinite(ws.revision)) lastRevision = ws.revision;
+      }).catch((error) => {
+        if (!structuralWarned) {
+          structuralWarned = true;
+          console.warn('[freeform] shelf is not persisting:', error && error.message || error);
+        }
+      });
     }
     function maximise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
@@ -475,7 +553,13 @@
       let ws = null;
       try { ws = await api.getWorkspace(); } catch (_e) { return list(); }
       const persisted = ws && Array.isArray(ws.windows) ? ws.windows : [];
-      for (const win of persisted) {
+      // Namespace boundary during migration: freeform windows own the
+      // `window_` prefix; the still-running WorkspaceShell owns its legacy
+      // `panel_*` objects. Restoring those here would shadow the shell's own
+      // panels and block first-run auto-open (live-caught by the freeform
+      // smoke: hidden legacy frames made list() non-empty).
+      const freeformWindows = persisted.filter((win) => win && String(win.windowId).startsWith('window_'));
+      for (const win of freeformWindows) {
         const surfaceId = surfaceIdForEntityType(win.type, win.entityRef);
         if (!surfaceId || !CreativeSurfaces.get(surfaceId)) continue;
         if (windows.has(win.windowId)) continue;
@@ -489,9 +573,38 @@
           collapsed: Boolean(win.collapsed), pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
           restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null,
         };
-        if (model.state === 'minimised') continue; // shelf restores these on demand (Phase 2)
-        if (model.state === 'tabbed') continue;    // tab groups are Phase 2
-        if (model.state === 'docked') model.state = 'floating'; // freeform windows re-derive dock geometry in Phase 2; stale persisted rects would render off-screen
+        if (model.state === 'minimised') continue; // restored below as shelf-backed models
+        if (model.state === 'tabbed') continue;    // grouped restore is the grouping-persistence unit
+        if (model.state === 'docked') model.state = 'floating'; // stale persisted dock rects must not render off-screen
+        windows.set(model.windowId, model);
+        zTop = Math.max(zTop, model.zIndex);
+        renderFrame(model);
+        const surface = CreativeSurfaces.get(surfaceId);
+        if (surface && surface.createController) {
+          const controller = surface.createController({
+            windowId: model.windowId, body: model.body, api, document, root,
+            setTitle() {}, close: () => close(model.windowId),
+          }) || null;
+          controllers.set(model.windowId, controller);
+        }
+      }
+      // Shelf-backed models: minimised windows keep their identity, content
+      // controller and rect on disk; restore() re-floats them.
+      for (const win of freeformWindows) {
+        if (!win || win.state !== 'minimised') continue;
+        if (windows.has(win.windowId)) continue;
+        const surfaceId = surfaceIdForEntityType(win.type, win.entityRef);
+        if (!surfaceId || !CreativeSurfaces.get(surfaceId)) continue;
+        const model = {
+          windowId: win.windowId, surfaceId,
+          title: win.windowId, entityType: win.type,
+          entityRef: win.entityRef || null,
+          rect: clampRect({ x: win.x, y: win.y, width: win.width, height: win.height }, CreativeSurfaces.get(surfaceId)),
+          zIndex: Number(win.zIndex) || 1,
+          state: 'minimised',
+          collapsed: true, pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
+          restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null, tabsSlot: null,
+        };
         windows.set(model.windowId, model);
         zTop = Math.max(zTop, model.zIndex);
         renderFrame(model);
@@ -505,6 +618,7 @@
         }
       }
       renderAll();
+      renderShelf();
       return list();
     }
 
@@ -580,6 +694,7 @@
         }
       }
       model.groupId = null;
+      if (group) { for (const id of group.windowIds) { const win = windows.get(id); if (win) renderFrame(win); } }
     }
 
     function groupWindows(windowIds, options = {}) {
@@ -653,8 +768,8 @@
       return attempt(lastRevision);
     }
 
-    return { open, close, minimise, restore, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll,
-      groupWindows, ungroup, switchTab, tearOut, groupIds,
+    return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll,
+      groupWindows, ungroup, switchTab, tearOut, groupIds, attachShelf,
       groups: () => [...groups.values()].map((g) => ({ ...g, windowIds: g.windowIds.slice() })) };
 
     /** Push external state changes (board edits, layer changes) into every

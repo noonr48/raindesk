@@ -100,10 +100,22 @@ function makeNode(tag) {
 
 function findAll(node, selector, out, all) {
   const parts = selector.split(',').map((s) => s.trim());
+  // Compound class selectors (.a.b) require EVERY class, matching real DOM
+  // semantics (the shelf chrome queries .freeform-window-btn.minimise).
+  const matches = (child, part) => {
+    if (part.startsWith('.')) {
+      const classes = part.slice(1).split('.').filter(Boolean);
+      return Boolean(child.classList) && classes.every((c) => child.classList.contains(c));
+    }
+    if (part.startsWith('[')) {
+      const attr = part.slice(1, -1).split('=')[0];
+      return Boolean(child.hasAttribute) && child.hasAttribute(attr);
+    }
+    return Boolean(child.tagName) && child.tagName.toUpperCase() === part.toUpperCase();
+  };
   for (const child of node.children || []) {
     for (const part of parts) {
-      if (part.startsWith('.') && child.classList && child.classList.contains(part.slice(1))) { out.push(child); if (!all) return; }
-      else if (!part.startsWith('.') && !part.startsWith('[') && child.tagName && child.tagName.toUpperCase() === part.toUpperCase()) { out.push(child); if (!all) return; }
+      if (matches(child, part)) { out.push(child); if (!all) return; }
     }
     findAll(child, selector, out, all);
     if (!all && out.length) return;
@@ -113,7 +125,23 @@ function findAll(node, selector, out, all) {
 const fakeDocument = {
   createElement: (t) => makeNode(t),
   defaultView: { CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } },
-  addEventListener() {}, removeEventListener() {},
+  _listeners: {},
+  addEventListener(type, fn, capture) {
+    const key = capture ? `${type}:capture` : type;
+    (this._listeners[key] = this._listeners[key] || []).push(fn);
+  },
+  removeEventListener(type, fn, capture) {
+    const key = capture ? `${type}:capture` : type;
+    const list = this._listeners[key] || [];
+    const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1);
+  },
+  dispatch(type, event) {
+    event = event || {};
+    event.target = event.target || this;
+    event.preventDefault = event.preventDefault || (() => {});
+    for (const fn of this._listeners[type] || []) fn(event);
+    for (const fn of this._listeners[`${type}:capture`] || []) fn(event);
+  },
 };
 const savedDocument = global.document;
 global.document = fakeDocument;
@@ -249,9 +277,10 @@ test('focus and z-order: bringing a window to front raises its zIndex', () => {
   assert.ok(manager.state('window_references').zIndex > zl, 'bringToFront raises above the previous top');
 });
 
-test('init restores persisted floating windows and skips minimised/tabbed ones', async () => {
+test('init restores persisted floating windows and shelf-backs minimised ones', async () => {
   const persistCalls = [];
   const root = makeNode('div');
+  const shelf = makeNode('nav');
   const api = {
     getWorkspace() {
       return Promise.resolve({
@@ -264,15 +293,84 @@ test('init restores persisted floating windows and skips minimised/tabbed ones',
       });
     },
     upsertWorkspaceObject(p) { persistCalls.push(p); return Promise.resolve({ ok: true }); },
+    setWorkspaceShelf() { return Promise.resolve({ ok: true, workspace: { revision: 5, windows: [], groups: [], shelf: { windowIds: [] } } }); },
   };
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   await manager.init();
   const refs = manager.state('window_references');
   assert.ok(refs, 'floating window restored');
   assert.equal(refs.rect.x, 5);
-  assert.equal(refs.rect.width, 300);
-  assert.equal(manager.state('window_layers'), null, 'minimised windows wait for shelf restore');
+  // Minimised windows are shelf-backed: identity + rect + controller on
+  // disk, frame hidden until a shelf chip restores them.
+  const layers = manager.state('window_layers');
+  assert.ok(layers, 'minimised window restored as a shelf-backed model');
+  assert.equal(layers.state, 'minimised');
+  const layersFrame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_layers');
+  assert.ok(layersFrame, 'shelf-backed frame exists');
+  assert.equal(layersFrame.hidden, true, 'shelf-backed frame hidden until restored');
   assert.equal(persistCalls.length, 0, 'init does not rewrite unchanged state');
+});
+
+/* ------------------------------------------------------ shelf (Phase 2) */
+
+function shelfManager() {
+  const shelfCalls = [];
+  const root = makeNode('div');
+  const shelf = makeNode('nav');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+    setWorkspaceGroups(groups) { return Promise.resolve({ ok: true, workspace: { revision: 2, windows: [], groups, shelf: { windowIds: [] } } }); },
+    setWorkspaceShelf(windowIds) { shelfCalls.push(windowIds); return Promise.resolve({ ok: true, workspace: { revision: 3, windows: [], groups: [], shelf: { windowIds } } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  return { manager, root, shelf, shelfCalls };
+}
+
+test('minimise is disabled without a shelf; attachShelf re-enables it and renders a restore chip', async () => {
+  const { manager, root, shelf, shelfCalls } = shelfManager();
+  manager.open('references', { rect: { x: 120, y: 90, width: 400, height: 300 } });
+  const frame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_references');
+  const minBtn = frame.querySelector('.freeform-window-btn.minimise');
+  assert.equal(minBtn.disabled, true, 'no shelf yet: minimise disabled with a reason');
+
+  manager.attachShelf(shelf);
+  assert.equal(minBtn.disabled, false, 'attachShelf re-enables minimise');
+
+  manager.minimise('window_references');
+  assert.equal(manager.state('window_references').state, 'minimised');
+  assert.equal(frame.hidden, true, 'minimised frame hidden');
+  const chip = shelf.children.find((c) => c.classList.contains('freeform-shelf-chip'));
+  assert.ok(chip, 'shelf renders a chip for the minimised window');
+  assert.equal(chip.dataset.windowId, 'window_references');
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(shelfCalls, [['window_references']], 'shelf membership persisted');
+
+  chip.dispatch('click', {});
+  const restored = manager.state('window_references');
+  assert.equal(restored.state, 'floating');
+  assert.deepEqual(restored.rect, { x: 120, y: 90, width: 400, height: 300 }, 'restore preserves the prior rect');
+  assert.equal(frame.hidden, false);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(shelfCalls[shelfCalls.length - 1], [], 'shelf emptied on restore');
+});
+
+test('dragging a shelf chip out re-floats the window at the drop point', async () => {
+  const { manager, root, shelf } = shelfManager();
+  manager.attachShelf(shelf);
+  manager.open('references', { rect: { x: 120, y: 90, width: 400, height: 300 } });
+  manager.minimise('window_references');
+  const chip = shelf.children.find((c) => c.classList.contains('freeform-shelf-chip'));
+
+  chip.dispatch('pointerdown', { button: 0, clientX: 100, clientY: 700 });
+  fakeDocument.dispatch('pointermove', { clientX: 130, clientY: 700 }); // >10px => a drag, not a click
+  fakeDocument.dispatch('pointerup', { clientX: 260, clientY: 500 });
+
+  const state = manager.state('window_references');
+  assert.equal(state.state, 'floating', 'chip drag restores as floating');
+  assert.equal(state.rect.x, 260, 're-floated at the drop point (root rect 0,0)');
+  assert.equal(state.rect.y, 500);
+  assert.equal(shelf.children.filter((c) => c.classList.contains('freeform-shelf-chip')).length, 0, 'chip removed');
 });
 
 /* ------------------------------------------------ grouping (Phase 2) */

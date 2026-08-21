@@ -97,6 +97,59 @@
 
 .freeform-window-locked .freeform-window-head { cursor: default; }
 
+/* Window tab strip (grouped windows). Structural only — Phase 5 owns the
+ * paper-desk materials. */
+.freeform-window-tabs {
+  display: none;
+  gap: 2px;
+  padding: 3px 6px 0;
+}
+.freeform-window-grouped .freeform-window-tabs { display: flex; }
+.freeform-window-tab {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: inherit;
+  opacity: 0.7;
+  touch-action: none;
+}
+.freeform-window-tab:hover { opacity: 1; background: rgba(35, 30, 24, 0.07); }
+.freeform-window-tab.active { opacity: 1; background: rgba(193, 108, 42, 0.16); }
+
+/* Window shelf: calm, low chrome; invisible when empty. */
+.freeform-shelf {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: rgba(255, 253, 247, 0.78);
+  border: 1px solid var(--line, #e4ddcf);
+  box-shadow: 0 2px 8px rgba(35, 30, 24, 0.08);
+  z-index: 400;
+  max-width: calc(100% - 32px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.freeform-shelf:empty { display: none; }
+.freeform-shelf-chip {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  color: inherit;
+  touch-action: none;
+}
+.freeform-shelf-chip:hover { background: rgba(193, 108, 42, 0.14); }
+
 /* First-surface content rows (structural; theming in Phase 5). */
 .freeform-scene-rows, .freeform-layer-rows {
   display: flex;
