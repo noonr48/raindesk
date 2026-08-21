@@ -241,6 +241,12 @@ async function main() {
       await value(page, `window.raindeskFreeform.groupWindows(['window_scenes','window_layers'], { activeWindowId: 'window_scenes' })`);
       await waitFor(page, `!!document.querySelector('[data-window-id="window_scenes"] .freeform-window-tab')`, 'grouped tab strip', 8_000);
       await waitFor(page, `document.querySelector('[data-window-id="window_layers"]').hidden === true`, 'inactive member hidden', 8_000);
+      // Tear out and rejoin through the real DOM (drop-to-group mechanics).
+      await value(page, `window.raindeskFreeform.tearOut('window_layers', 900, 300)`);
+      await waitFor(page, `document.querySelector('[data-window-id="window_layers"]').hidden === false`, 'torn member floats', 8_000);
+      await value(page, `window.raindeskFreeform.joinGroup('window_layers', 'window_scenes')`);
+      await waitFor(page, `window.raindeskFreeform.groups().length === 1 && window.raindeskFreeform.groups()[0].windowIds.length === 2`, 'rejoined group has both members', 8_000);
+      await waitFor(page, `document.querySelector('[data-window-id="window_layers"]').hidden === true`, 'rejoined member hidden', 8_000);
       await delay(700); // structural persistence settles before reload
 
       // ---- Step 4: reload restores the dragged position (workspace v3) ----

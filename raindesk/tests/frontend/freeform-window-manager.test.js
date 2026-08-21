@@ -125,6 +125,7 @@ function findAll(node, selector, out, all) {
 const fakeDocument = {
   createElement: (t) => makeNode(t),
   defaultView: { CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } },
+  elementFromPoint: null, // tests stub this for drop-zone resolution
   _listeners: {},
   addEventListener(type, fn, capture) {
     const key = capture ? `${type}:capture` : type;
@@ -345,6 +346,100 @@ test('init restores groups: tabbed members return with the active member visible
   assert.equal(stray.state, 'floating', 'stranded tabbed member re-floats when its group is gone');
   const strayFrame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_stray');
   assert.equal(strayFrame.hidden, false, 'stranded member is visible');
+});
+
+test('joinGroup attaches to an existing stack and starts one around an ungrouped target', () => {
+  const { manager } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b], { activeWindowId: a });
+  manager.joinGroup(c, a);
+  let group = manager.groups()[0];
+  assert.deepEqual(group.windowIds, [a, b, c], 'dropped window joins the target stack');
+  assert.equal(manager.state(c).state, 'tabbed');
+
+  // Tear out, dissolve, then drop onto an ungrouped floating target.
+  manager.tearOut(c, 900, 700);
+  assert.equal(manager.state(c).state, 'floating');
+  manager.ungroup(manager.groups()[0].groupId);
+  assert.equal(manager.groups().length, 0);
+  manager.joinGroup(c, a); // a is floating now -> a fresh stack forms around it
+  group = manager.groups()[0];
+  assert.deepEqual(group.windowIds, [a, c], 'dropping onto an ungrouped window starts a stack');
+  assert.equal(group.activeWindowId, a, 'target stays active');
+  assert.equal(manager.state(c).state, 'tabbed');
+});
+
+test('window drag released over the shelf minimises it', async () => {
+  const { manager, root, shelf, shelfCalls } = shelfManager();
+  manager.attachShelf(shelf);
+  manager.open('references', { rect: { x: 120, y: 90, width: 400, height: 300 } });
+  shelf._rect = { left: 500, top: 740, right: 780, bottom: 780 };
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 200, clientY: 120 });
+  fakeDocument.dispatch('pointermove', { clientX: 240, clientY: 160, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 600, clientY: 760 });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.state('window_references').state, 'minimised', 'drop on the shelf minimises');
+  assert.equal(frame.hidden, true);
+  assert.ok(shelf.children.some((c) => c.classList.contains('freeform-shelf-chip')), 'shelf chip rendered');
+  assert.deepEqual(shelfCalls, [['window_references']], 'shelf membership persisted');
+});
+
+test('window drag released over another window joins its group', () => {
+  const { manager, root } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b], { activeWindowId: a });
+  // Spec path: drag the FLOATING window (c) and release over the target
+  // stack's frame (a). Stub the drop hit-test for the release point.
+  const aFrame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  const cFrame = root.children.find((f) => f.dataset && f.dataset.windowId === c);
+  fakeDocument.elementFromPoint = () => aFrame;
+  try {
+    const head = cFrame.querySelector('.freeform-window-head');
+    head.dispatch('pointerdown', { button: 0, clientX: 700, clientY: 300 });
+    fakeDocument.dispatch('pointermove', { clientX: 650, clientY: 280, buttons: 1 });
+    fakeDocument.dispatch('pointerup', { clientX: 620, clientY: 300 });
+    assert.equal(manager.groups().length, 1, 'one group after the drop');
+    assert.deepEqual(manager.groups()[0].windowIds, [a, b, c], 'floating window joined the drop target stack');
+    assert.equal(manager.state(c).state, 'tabbed');
+    assert.equal(manager.groups()[0].activeWindowId, a, 'target stack keeps its active member');
+  } finally {
+    fakeDocument.elementFromPoint = null;
+  }
+});
+
+test('tab drag within the strip reorders; beyond the strip tears out', () => {
+  const { manager, root } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b, c], { activeWindowId: a });
+  const activeFrame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  const strip = activeFrame.querySelector('.freeform-window-tabs');
+  strip._rect = { left: 0, top: 0, right: 1000, bottom: 40 };
+  const setTabRects = () => {
+    const tabs = strip.querySelectorAll('.freeform-window-tab');
+    const spans = [[0, 100], [100, 200], [200, 300]];
+    tabs.forEach((tab, i) => { tab._rect = { left: spans[i][0], top: 0, right: spans[i][1], bottom: 40 }; });
+    return tabs;
+  };
+  setTabRects();
+
+  // Reorder: drag B past C's midpoint (250), release inside the strip.
+  const tabs1 = setTabRects();
+  const tabB = tabs1.find((t) => t.dataset.tabFor === b);
+  tabB.dispatch('pointerdown', { button: 0, clientX: 150, clientY: 20 });
+  fakeDocument.dispatch('pointermove', { clientX: 260, clientY: 20 });
+  fakeDocument.dispatch('pointerup', { clientX: 260, clientY: 22 });
+  assert.deepEqual(manager.groups()[0].windowIds, [a, c, b], 'tab reordered within the strip');
+
+  // Tear: drag B far outside the strip rect.
+  const tabs2 = setTabRects();
+  const tabB2 = tabs2.find((t) => t.dataset.tabFor === b);
+  tabB2.dispatch('pointerdown', { button: 0, clientX: 250, clientY: 20 });
+  fakeDocument.dispatch('pointermove', { clientX: 250, clientY: 300 });
+  fakeDocument.dispatch('pointerup', { clientX: 250, clientY: 500 });
+  assert.equal(manager.state(b).state, 'floating', 'drag beyond the strip tears out');
+  assert.deepEqual(manager.groups()[0].windowIds, [a, c], 'group keeps the survivors');
 });
 
 /* ------------------------------------------------------ shelf (Phase 2) */

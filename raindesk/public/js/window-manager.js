@@ -306,6 +306,12 @@
           teardown();
           try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
           if (!captured || !moved(ev)) return; // a click is not a drag
+          // Put-away drop zones take precedence over snapping (Phase 2):
+          // release over the shelf minimises; release over another window
+          // joins that window's stack.
+          const drop = resolveDropZone(ev.clientX, ev.clientY, current.windowId);
+          if (drop && drop.kind === 'shelf') { minimise(current.windowId); return; }
+          if (drop && drop.kind === 'group') { joinGroup(current.windowId, drop.targetWindowId); return; }
           const snapped = snapPlace(current, ev.altKey);
           if (snapped) applySnap(current, snapped);
           renderFrame(current);
@@ -682,10 +688,16 @@
         const up = (ev) => {
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
-          if (torn) {
-            e.preventDefault && e.preventDefault();
-            tearOut(memberId, ev.clientX, ev.clientY);
+          if (!torn) return;
+          // A drag that releases INSIDE the strip reorders the tab instead of
+          // tearing it out (Phase 2: tab reordering).
+          const strip = tab.parentNode;
+          if (pointInRect(ev.clientX, ev.clientY, rectOf(strip))) {
+            reorderTab(memberId, ev.clientX);
+            return;
           }
+          e.preventDefault && e.preventDefault();
+          tearOut(memberId, ev.clientX, ev.clientY);
         };
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
@@ -764,6 +776,80 @@
       return group;
     }
 
+    /* ------------------------------------------------------ drop zones */
+
+    function pointInRect(x, y, rect) {
+      return Boolean(rect) && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    }
+    function rectOf(node) {
+      if (!node || typeof node.getBoundingClientRect !== 'function') return null;
+      try { return node.getBoundingClientRect(); } catch (_e) { return null; }
+    }
+
+    /** Put-away drop zones at drag release: the shelf (minimise) and other
+     * windows (join their stack). Pure hit-testing, guarded for environments
+     * without layout. */
+    function resolveDropZone(x, y, draggedId) {
+      if (shelfHostEl && pointInRect(x, y, rectOf(shelfHostEl))) return { kind: 'shelf' };
+      if (typeof document.elementFromPoint !== 'function') return null;
+      let hit = null;
+      try { hit = document.elementFromPoint(x, y); } catch (_e) { return null; }
+      const frame = hit && typeof hit.closest === 'function' ? hit.closest('.freeform-window') : null;
+      if (!frame) return null;
+      const targetId = frame.dataset && frame.dataset.windowId;
+      if (!targetId || targetId === draggedId || !windows.has(targetId)) return null;
+      const target = windows.get(targetId);
+      if (target.state === 'minimised') return null; // over a shelf chip is the shelf case
+      return { kind: 'group', targetWindowId: targetId };
+    }
+
+    /** Drop-to-group: attach windowId to targetWindowId's stack — creating
+     * the stack around the target when it is ungrouped. */
+    function joinGroup(windowId, targetWindowId) {
+      const model = windows.get(windowId); const target = windows.get(targetWindowId);
+      if (!model || !target || model === target) return null;
+      if (model.locked || target.locked) return null;
+      removeFromGroup(model);
+      let group = target.groupId && groups.get(target.groupId);
+      if (!group) {
+        const groupId = `group_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        group = { groupId, windowIds: [target.windowId], activeWindowId: target.windowId };
+        groups.set(groupId, group);
+        target.groupId = groupId;
+        transition(target, 'tabbed');
+      }
+      group.windowIds.push(model.windowId);
+      model.groupId = group.groupId;
+      transition(model, 'tabbed');
+      renderAll(); renderShelf();
+      persist(model); persistStructure();
+      bringToFront(group.activeWindowId);
+      return groups.get(group.groupId);
+    }
+
+    /** Reorder a tab inside its strip: insertion index from the drop x
+     * against sibling tab midpoints (strip renders on the active member). */
+    function reorderTab(memberId, x) {
+      const model = windows.get(memberId); if (!model || !model.groupId) return null;
+      const group = groups.get(model.groupId); if (!group) return null;
+      const activeModel = windows.get(group.activeWindowId);
+      const stripHost = activeModel && activeModel.frame && activeModel.frame.querySelector
+        ? activeModel.frame.querySelector('.freeform-window-tabs') : null;
+      if (!stripHost) return null;
+      let insertAt = 0;
+      for (const id of group.windowIds) {
+        if (id === memberId) continue;
+        const tab = Array.from(stripHost.querySelectorAll('.freeform-window-tab')).find((t) => t.dataset && t.dataset.tabFor === id);
+        const rect = tab ? rectOf(tab) : null;
+        if (rect && (rect.left + (rect.right - rect.left) / 2) < x) insertAt += 1;
+      }
+      group.windowIds.splice(group.windowIds.indexOf(memberId), 1);
+      group.windowIds.splice(insertAt, 0, memberId);
+      renderFrame(activeModel); // re-render the strip in the new order
+      persistStructure();
+      return group;
+    }
+
     /** Structural persistence: groups + shelf through the revision-gated
      * API, with one adopt-and-retry on 409 and a bounded warning. */
     function persistStructure() {
@@ -792,7 +878,7 @@
     }
 
     return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll,
-      groupWindows, ungroup, switchTab, tearOut, groupIds, attachShelf,
+      groupWindows, ungroup, switchTab, tearOut, joinGroup, groupIds, attachShelf,
       groups: () => [...groups.values()].map((g) => ({ ...g, windowIds: g.windowIds.slice() })) };
 
     /** Push external state changes (board edits, layer changes) into every
