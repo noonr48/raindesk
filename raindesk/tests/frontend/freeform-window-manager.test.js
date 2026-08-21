@@ -173,6 +173,7 @@ function freshManager({ persistCalls } = {}) {
 wm.CreativeSurfaces.clear();
 wm.CreativeSurfaces.register({ id: 'layers', title: 'Layers', entityType: 'layers_panel', minimumSize: { width: 240, height: 160 } });
 wm.CreativeSurfaces.register({ id: 'references', title: 'Reference Board', entityType: 'reference_board' });
+wm.CreativeSurfaces.register({ id: 'dockable', title: 'Dockable', entityType: 'generic_panel', supportedStates: ['floating', 'minimised', 'maximised', 'docked'] });
 wm.CreativeSurfaces.register({ id: 'locked_only', title: 'Pinned Only', entityType: 'note', supportedStates: ['floating'] });
 // Shared controller-backed fixture, registered at module scope so ANY test
 // (including name-filtered runs) can open it — test-local registration made
@@ -461,6 +462,47 @@ test('tab drag within the strip reorders; beyond the strip tears out', () => {
   fakeDocument.dispatch('pointerup', { clientX: 250, clientY: 500 });
   assert.equal(manager.state(b).state, 'floating', 'drag beyond the strip tears out');
   assert.deepEqual(manager.groups()[0].windowIds, [a, c], 'group keeps the survivors');
+});
+
+test('drag shows a live snap preview that clears when the gesture settles', () => {
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+    setWorkspace() { return Promise.resolve({ ok: true, workspace: { revision: 2, windows: [], groups: [], shelf: { windowIds: [] } } }); },
+    setWorkspaceGroups(groups) { return Promise.resolve({ ok: true, workspace: { revision: 3, windows: [], groups, shelf: { windowIds: [] } } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { edgeSnap: () => ({ dock: 'left', rect: { x: 0, y: 0, width: 640, height: 800 } }) },
+  });
+  manager.open('dockable');
+  const a = 'window_dockable';
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 60, clientY: 110 });
+  fakeDocument.dispatch('pointermove', { clientX: 20, clientY: 130, buttons: 1 });
+  const preview = root.children.find((c) => c.classList.contains('freeform-snap-preview'));
+  assert.ok(preview, 'preview mounts while a dock is in range');
+  assert.equal(preview.style.left, '0px');
+  assert.equal(preview.style.width, '640px');
+  fakeDocument.dispatch('pointerup', { clientX: 20, clientY: 130 });
+  assert.ok(!root.children.some((c) => c.classList.contains('freeform-snap-preview')),
+    'preview removed on release');
+  assert.equal(manager.state(a).state, 'docked', 'the previewed dock applies');
+});
+
+test('drag without a dock in range never mounts a preview', () => {
+  const { manager, root } = groupingManager(); // geometry: {} — no snapping
+  const [a] = openThree(manager);
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 60, clientY: 110 });
+  fakeDocument.dispatch('pointermove', { clientX: 120, clientY: 160, buttons: 1 });
+  assert.ok(!root.children.some((c) => c.classList.contains('freeform-snap-preview')),
+    'no dock in range: no preview element');
+  fakeDocument.dispatch('pointerup', { clientX: 120, clientY: 160 });
 });
 
 /* ------------------------------------------------------ shelf (Phase 2) */

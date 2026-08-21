@@ -272,6 +272,27 @@
 
     /* ------------------------------------------------------ gesture logic */
 
+    /* Phase 5: live snap preview — a calm ghost of where a drag would
+     * dock, cleared the moment the gesture settles. */
+    let snapPreviewEl = null;
+    function showSnapPreview(rect) {
+      if (!rect) { if (snapPreviewEl) snapPreviewEl.classList.add('freeform-snap-preview-hidden'); return; }
+      if (!snapPreviewEl) {
+        snapPreviewEl = el(document, 'div', 'freeform-snap-preview');
+        snapPreviewEl.setAttribute('aria-hidden', 'true');
+        root.appendChild(snapPreviewEl);
+      }
+      snapPreviewEl.style.left = `${rect.x}px`;
+      snapPreviewEl.style.top = `${rect.y}px`;
+      snapPreviewEl.style.width = `${rect.width}px`;
+      snapPreviewEl.style.height = `${rect.height}px`;
+      snapPreviewEl.classList.remove('freeform-snap-preview-hidden');
+    }
+    function clearSnapPreview() {
+      if (snapPreviewEl && snapPreviewEl.parentNode) snapPreviewEl.parentNode.removeChild(snapPreviewEl);
+      snapPreviewEl = null;
+    }
+
     function installDrag(model) {
       const head = model.head;
       head.addEventListener('pointerdown', (e) => {
@@ -301,9 +322,13 @@
           current.rect.x = start.ox + (ev.clientX - start.x);
           current.rect.y = start.oy + (ev.clientY - start.y);
           renderFrame(current);
+          // Phase 5: preview the dock the drag would settle into.
+          const preview = snapPlace(current, ev.altKey);
+          showSnapPreview(preview ? preview.rect : null);
         };
         const up = async (ev) => {
           teardown();
+          clearSnapPreview();
           try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
           if (!captured || !moved(ev)) return; // a click is not a drag
           // Put-away drop zones take precedence over snapping (Phase 2):

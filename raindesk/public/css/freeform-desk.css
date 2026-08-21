@@ -1,7 +1,22 @@
-/* Freeform Creative Desk v2 — structural window chrome (Phase 1).
- * Mechanics only: geometry, stacking, chrome affordances. The paper-desk
- * visual language (warm ivory materials, shadows, motion) is Phase 5 and
- * deliberately NOT styled here. */
+/* Freeform Creative Desk v2 — window chrome + paper-desk visual language.
+ * Phase 5 layers the visual tokens (warm ivory materials, shadows, snap
+ * preview, reduced-motion) over the Phase 1 structural mechanics. */
+
+/* Paper-desk tokens — scoped to the freeform host so the page's own
+ * palette stays untouched; every consumer carries a fallback. */
+.freeform-desk-windows {
+  --paper: #f7f3e9;
+  --paper-raised: #fffdf7;
+  --paper-edge: #d8d2c4;
+  --paper-edge-strong: #c9c1af;
+  --ink: #231e18;
+  --ink-soft: rgba(35, 30, 24, 0.62);
+  --desk-accent: #c16c2a;
+  --desk-accent-wash: rgba(193, 108, 42, 0.14);
+  --sheet-shadow: 0 2px 10px rgba(35, 30, 24, 0.10), 0 1px 2px rgba(35, 30, 24, 0.06);
+  --sheet-shadow-raised: 0 6px 22px rgba(35, 30, 24, 0.18), 0 2px 6px rgba(35, 30, 24, 0.08);
+  --desk-motion: 140ms ease;
+}
 
 .freeform-desk-windows {
   position: relative;
@@ -13,12 +28,15 @@
   flex-direction: column;
   min-width: 180px;
   min-height: 120px;
-  background: var(--cream, #f6f2e8);
-  color: inherit;
-  border: 1px solid var(--line, #d8d2c4);
-  border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(35, 30, 24, 0.10);
+  background:
+    linear-gradient(180deg, rgba(255, 253, 247, 0.55), rgba(255, 253, 247, 0) 48px),
+    var(--paper, #f6f2e8);
+  color: var(--ink, inherit);
+  border: 1px solid var(--paper-edge, #d8d2c4);
+  border-radius: 10px;
+  box-shadow: var(--sheet-shadow, 0 2px 10px rgba(35, 30, 24, 0.10));
   overflow: hidden;
+  transition: box-shadow var(--desk-motion, 140ms ease), border-color var(--desk-motion, 140ms ease);
 }
 
 .freeform-window-head {
@@ -29,8 +47,8 @@
   padding: 6px 10px;
   cursor: grab;
   user-select: none;
-  border-bottom: 1px solid var(--line, #e4ddcf);
-  background: rgba(255, 253, 247, 0.6);
+  border-bottom: 1px solid var(--paper-edge, #e4ddcf);
+  background: linear-gradient(180deg, var(--paper-raised, rgba(255, 253, 247, 0.6)), rgba(255, 253, 247, 0));
   touch-action: none;
 }
 
@@ -86,13 +104,39 @@
 }
 
 .freeform-window-focused {
-  box-shadow: 0 6px 22px rgba(35, 30, 24, 0.18);
-  border-color: var(--line-strong, #c9c1af);
+  box-shadow: var(--sheet-shadow-raised, 0 6px 22px rgba(35, 30, 24, 0.18));
+  border-color: var(--paper-edge-strong, #c9c1af);
 }
+
+/* Phase 5: the live dock preview shown during a drag — a calm accent
+ * ghost of where the window would settle, never a moving clone. */
+.freeform-snap-preview {
+  position: absolute;
+  border: 1.5px dashed var(--desk-accent, #c16c2a);
+  background: var(--desk-accent-wash, rgba(193, 108, 42, 0.14));
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 0; /* beneath every window; the desk edge is its stage */
+  opacity: 1;
+  transition: opacity 120ms ease;
+}
+.freeform-snap-preview.freeform-snap-preview-hidden { opacity: 0; }
 
 .freeform-window-maximised {
   border-radius: 0;
   border: none;
+}
+
+/* Reduced motion: the desk calms fully — no shadow/border transitions,
+ * no preview fade. Geometry stays instant everywhere (it already is). */
+@media (prefers-reduced-motion: reduce) {
+  .freeform-window,
+  .freeform-window-btn,
+  .freeform-window-tab,
+  .freeform-shelf-chip,
+  .freeform-snap-preview {
+    transition: none !important;
+  }
 }
 
 .freeform-window-locked .freeform-window-head { cursor: default; }
