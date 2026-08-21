@@ -516,6 +516,67 @@ test('init seeds lastRevision so the first gated write is gate-protected', async
     'first gated write carries the seeded revision (null would bypass the 409 gate)');
 });
 
+test('two desks on one store: gated writes stay revision-protected after init seeding', async () => {
+  // Shared store mimicking lib/workspace revision semantics: every write
+  // bumps revision; gated writes 409 with current state when stale.
+  const store = { revision: 1, windows: [], groups: [], shelf: { windowIds: [] } };
+  const groupCalls = [];
+  let groupsAttempts = 0;
+  const mkApi = () => ({
+    getWorkspace: () => Promise.resolve({ schemaVersion: 3, revision: store.revision, windows: store.windows.map((w) => ({ ...w })), groups: store.groups.map((g) => ({ ...g })), shelf: { windowIds: [] } }),
+    upsertWorkspaceObject: (payload) => {
+      store.revision += 1;
+      store.windows = store.windows.filter((w) => w.windowId !== payload.windowId).concat([{ ...payload }]);
+      return Promise.resolve({ ok: true, object: payload, revision: store.revision });
+    },
+    setWorkspaceGroups: (groups, { baseRevision } = {}) => {
+      groupCalls.push(baseRevision);
+      groupsAttempts += 1;
+      if (groupsAttempts === 1) {
+        // Simulate a foreign writer (the other desk) landing between our
+        // send and server-handle: 409 carrying the post-conflict state.
+        store.revision += 1;
+        return Promise.reject(Object.assign(new Error('workspace changed since this edit'), { workspace: { revision: store.revision, windows: [], groups: [], shelf: { windowIds: [] } } }));
+      }
+      store.revision += 1;
+      store.groups = groups.map((g) => ({ ...g }));
+      return Promise.resolve({ ok: true, workspace: { revision: store.revision, windows: [], groups: store.groups.map((g) => ({ ...g })), shelf: { windowIds: [] } } });
+    },
+  });
+  const rootA = makeNode('div');
+  const rootB = makeNode('div');
+  const mgrA = wm.WindowManager({ root: rootA, document: fakeDocument, api: mkApi(), viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const mgrB = wm.WindowManager({ root: rootB, document: fakeDocument, api: mkApi(), viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await Promise.all([mgrA.init(), mgrB.init()]); // BOTH seed lastRevision = 1
+
+  // Desk B lands an object upsert first (bumps the shared store to 2).
+  mgrB.open('references');
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(store.revision, 2, 'B upsert bumped the shared store');
+
+  // Desk A opens two windows (upserts bump to 3 then 4, each adopted) and
+  // groups them: the gated write must carry the CURRENT revision — null
+  // would bypass the gate and silently clobber B's landed object.
+  mgrA.open('layers');
+  await new Promise((r) => setTimeout(r, 5));
+  mgrA.open('probe');
+  await new Promise((r) => setTimeout(r, 5));
+  mgrA.groupWindows(['window_layers', 'window_probe'], { activeWindowId: 'window_layers' });
+  await new Promise((r) => setTimeout(r, 10));
+
+  // The first attempt must carry a REAL revision token — groupWindows' own
+  // member upserts serialize ahead of it on the chain and are adopted, so
+  // the exact number is their sum with the boot seed; null is the defect
+  // this test exists to forbid.
+  assert.ok(Number.isInteger(groupCalls[0]) && groupCalls[0] >= 2, 'first gated write carried a real (non-null) revision token');
+  // The simulated foreign write forced 409 -> adopt -> retry: convergence,
+  // not a silent drop, is the contract under cross-desk contention.
+  assert.equal(groupCalls[1], groupCalls[0] + 1, 'retry adopted the conflicted revision');
+  assert.equal(groupCalls.length, 2, 'exactly one adopt-and-retry after the conflict');
+  assert.equal(store.groups.length, 1, 'group converged onto the shared store');
+  assert.deepEqual(store.groups[0].windowIds.slice().sort(), ['window_layers', 'window_probe']);
+});
+
 /* ------------------------------------------------------ shelf (Phase 2) */
 
 function shelfManager() {
