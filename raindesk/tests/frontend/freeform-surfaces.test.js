@@ -1,0 +1,172 @@
+'use strict';
+
+/*
+ * Deterministic fake-DOM tests for the freeform surface registrations
+ * (public/js/freeform-surfaces.js) — Phase 1 scenes/layers + Phase 3 unit 1
+ * takes. The registry contract and controller behavior are checked without a
+ * browser; the native smoke owns end-to-end mounting.
+ */
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..', '..');
+const { installSurfaces } = require(path.join(ROOT, 'public/js/freeform-surfaces.js'));
+
+/* ---------------------------------------------------------- fake DOM */
+
+function makeNode(tag) {
+  const node = {
+    tagName: String(tag || 'div'),
+    children: [],
+    dataset: {},
+    _listeners: {},
+    textContent: '',
+    innerHTML: '',
+    disabled: false,
+    type: '',
+    classList: {
+      _set: new Set(),
+      add(...cs) { cs.forEach((c) => this._set.add(c)); },
+      remove(...cs) { cs.forEach((c) => this._set.delete(c)); },
+      toggle(c, on) {
+        if (on === undefined) { if (this._set.has(c)) this._set.delete(c); else this._set.add(c); }
+        else if (on) this._set.add(c); else this._set.delete(c);
+        return this._set.has(c);
+      },
+      contains(c) { return this._set.has(c); },
+    },
+    appendChild(child) { child.parentNode = this; this.children.push(child); return child; },
+    append(...children) { for (const child of children) { child.parentNode = this; this.children.push(child); } },
+    addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); },
+    dispatch(type, event) {
+      event = event || {};
+      event.target = event.target || this;
+      event.preventDefault = event.preventDefault || (() => {});
+      for (const fn of this._listeners[type] || []) fn(event);
+    },
+  };
+  Object.defineProperty(node, 'className', {
+    get() { return [...node.classList._set].join(' '); },
+    set(v) { node.classList._set = new Set(String(v).split(/\s+/).filter(Boolean)); },
+  });
+  return node;
+}
+
+const fakeDocument = { createElement: (t) => makeNode(t) };
+
+/* ------------------------------------------------------------ fixture */
+
+function install(defs = {}) {
+  const registry = new Map();
+  const surfaces = { register: (def) => { registry.set(def.id, def); } };
+  const calls = { prev: 0, next: 0, commit: 0, discard: 0 };
+  let takeState = { count: 0, index: -1 };
+  const deps = {
+    getBoard: defs.getBoard || (() => []),
+    getActiveShotId: () => null,
+    openShot: () => {},
+    getLayers: defs.getLayers || (() => []),
+    getActiveLayerId: () => null,
+    setActiveLayer: () => false,
+    addLayer: () => {},
+    toggleLayerVisible: () => {},
+    getTakeState: () => takeState,
+    prevTake: () => { calls.prev += 1; takeState = { count: takeState.count, index: takeState.index - 1 }; },
+    nextTake: () => { calls.next += 1; takeState = { count: takeState.count, index: takeState.index + 1 }; },
+    commitTake: () => { calls.commit += 1; },
+    discardTakes: () => { calls.discard += 1; takeState = { count: 0, index: -1 }; },
+  };
+  assert.equal(installSurfaces({ surfaces, deps }), true, 'installSurfaces completes');
+  return { registry, deps, calls, setTakeState: (s) => { takeState = s; } };
+}
+
+function mount(registry, id) {
+  const def = registry.get(id);
+  assert.ok(def, `surface ${id} registered`);
+  const body = makeNode('div');
+  const controller = def.createController({ body, document: fakeDocument });
+  return { body, controller };
+}
+
+function findButton(body, cls) {
+  const walk = (n) => {
+    for (const child of n.children || []) {
+      if (child.tagName === 'button' && child.classList && child.classList.contains(cls)) return child;
+      const hit = walk(child);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return walk(body);
+}
+
+/* ------------------------------------------------------------- tests */
+
+test('installSurfaces registers scenes, layers and takes with registry metadata', () => {
+  const { registry } = install();
+  assert.deepEqual([...registry.keys()].sort(), ['layers', 'scenes', 'takes']);
+  const takes = registry.get('takes');
+  assert.equal(takes.entityType, 'take_stack');
+  assert.ok(Array.isArray(takes.supportedStates) && takes.supportedStates.includes('floating'));
+  assert.ok(takes.minimumSize.width > 0 && takes.minimumSize.height > 0);
+});
+
+test('takes surface renders the empty state and disables every action', () => {
+  const { registry } = install();
+  const { body } = mount(registry, 'takes');
+  const label = body.children[0] && body.children[0].children.find((c) => c.classList.contains('freeform-take-label'));
+  assert.equal(label.textContent, 'no takes yet');
+  for (const cls of ['freeform-take-prev', 'freeform-take-next', 'freeform-take-commit', 'freeform-take-discard']) {
+    assert.equal(findButton(body, cls).disabled, true, `${cls} disabled with no takes`);
+  }
+});
+
+test('takes surface tracks prev/next bounds and fires the deps seams', () => {
+  const { registry, calls, setTakeState } = install();
+  const { body, controller } = mount(registry, 'takes');
+  setTakeState({ count: 3, index: 1 });
+  controller.render();
+  const label = body.children[0].children.find((c) => c.classList.contains('freeform-take-label'));
+  assert.equal(label.textContent, 'take 2/3');
+  const prev = findButton(body, 'freeform-take-prev');
+  const next = findButton(body, 'freeform-take-next');
+  const commit = findButton(body, 'freeform-take-commit');
+  const discard = findButton(body, 'freeform-take-discard');
+  assert.equal(prev.disabled, false);
+  assert.equal(next.disabled, false);
+  assert.equal(commit.disabled, false);
+  assert.equal(discard.disabled, false);
+
+  prev.dispatch('click');
+  assert.equal(calls.prev, 1);
+  assert.equal(label.textContent, 'take 1/3');
+
+  setTakeState({ count: 3, index: 0 });
+  controller.render();
+  assert.equal(findButton(body, 'freeform-take-prev').disabled, true, 'prev disabled at first take');
+
+  setTakeState({ count: 3, index: 2 });
+  controller.render();
+  assert.equal(findButton(body, 'freeform-take-next').disabled, true, 'next disabled at last take');
+
+  commit.dispatch('click');
+  assert.equal(calls.commit, 1);
+  discard.dispatch('click');
+  assert.equal(calls.discard, 1);
+  assert.equal(label.textContent, 'no takes yet', 'discard resets the label');
+});
+
+test('takes surface re-renders through refreshAll (the syncDock seam contract)', () => {
+  const { registry, setTakeState } = install();
+  const { body, controller } = mount(registry, 'takes');
+  // A new take arrives via GEN: app calls refreshAll -> controller.render.
+  setTakeState({ count: 1, index: 0 });
+  controller.render();
+  const label = body.children[0].children.find((c) => c.classList.contains('freeform-take-label'));
+  assert.equal(label.textContent, 'take 1/1');
+  assert.equal(findButton(body, 'freeform-take-prev').disabled, true);
+  assert.equal(findButton(body, 'freeform-take-next').disabled, true, 'single take: next disabled');
+  assert.equal(findButton(body, 'freeform-take-commit').disabled, false, 'a take can be accepted');
+});

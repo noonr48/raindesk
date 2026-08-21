@@ -26,12 +26,16 @@
   }
 
   /**
-   * installSurfaces({ surfaces, deps }) — registers Layers + Scenes on the
-   * shared registry. deps carries app-level seams:
+   * installSurfaces({ surfaces, deps }) — registers Layers + Scenes (Phase 1)
+   * and Takes (Phase 3 unit 1) on the shared registry. deps carries
+   * app-level seams:
    *   getBoard() -> board shots array
    *   getActiveShotId() -> string | null
    *   openShot(id), getLayers(), setActiveLayer(id), addLayer(spec),
-   *   toggleLayerVisible(layer), laneCounts(), lanesMeta(), moveShot(lane)
+   *   toggleLayerVisible(layer), laneCounts(), lanesMeta(), moveShot(lane),
+   *   getTakeState() -> { count, index } | null,
+   *   prevTake() -> boolean, nextTake() -> boolean,
+   *   commitTake() -> void, discardTakes() -> void
    */
   function installSurfaces({ surfaces, deps } = {}) {
     if (!surfaces || typeof surfaces.register !== 'function') throw new Error('CreativeSurfaces registry is required');
@@ -113,6 +117,45 @@
         };
         render();
         return { render, destroy() { list.innerHTML = ''; } };
+      },
+    });
+
+    surfaces.register({
+      id: 'takes',
+      title: 'Takes',
+      entityType: 'take_stack',
+      entityRefPrefix: 'takes',
+      minimumSize: { width: 220, height: 120 },
+      defaultPlacement: { width: 260, height: 150, x: null, y: 96 },
+      supportedStates: ['floating', 'minimised', 'maximised'],
+      createController: ({ body, document: doc }) => {
+        const label = el(doc, 'span', 'freeform-take-label', '');
+        const prev = el(doc, 'button', 'freeform-take-prev', '◀');
+        const next = el(doc, 'button', 'freeform-take-next', '▶');
+        const commit = el(doc, 'button', 'freeform-take-commit', 'accept');
+        const discard = el(doc, 'button', 'freeform-take-discard', 'clear');
+        for (const b of [prev, next, commit, discard]) b.type = 'button';
+        const row = el(doc, 'div', 'freeform-take-row');
+        row.append(prev, label, next);
+        body.append(row, commit, discard);
+        const sync = () => {
+          const s = deps.getTakeState ? deps.getTakeState() : null;
+          const has = Boolean(s && s.count > 0);
+          label.textContent = has ? `take ${s.index + 1}/${s.count}` : 'no takes yet';
+          prev.disabled = !has || s.index <= 0;
+          next.disabled = !has || s.index >= s.count - 1;
+          commit.disabled = !has;
+          discard.disabled = !has;
+        };
+        prev.addEventListener('click', () => { deps.prevTake && deps.prevTake(); sync(); });
+        next.addEventListener('click', () => { deps.nextTake && deps.nextTake(); sync(); });
+        commit.addEventListener('click', () => { if (deps.commitTake) deps.commitTake(); sync(); });
+        discard.addEventListener('click', () => {
+          if (deps.discardTakes) deps.discardTakes();
+          sync();
+        });
+        sync();
+        return { render: sync, destroy() { body.innerHTML = ''; } };
       },
     });
 

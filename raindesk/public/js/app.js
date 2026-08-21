@@ -492,6 +492,14 @@
             toggleLayerVisible: (layer) => {
               layer.visible = !layer.visible; markDirty(); scheduleShotSave('layer visibility');
             },
+            getTakeState: () => {
+              const s = core.session;
+              return s && s.takes.length ? { count: s.takes.length, index: s.takeIndex } : { count: 0, index: -1 };
+            },
+            prevTake: () => { if (core.prevTake()) { markDirty(); } },
+            nextTake: () => { if (core.nextTake()) { markDirty(); } },
+            commitTake: () => { onCommit(); },
+            discardTakes: () => { core.discardTakes(); state.takeMeta = []; markDirty(); },
           },
         });
         state.freeform = window.RaindeskWindowManager.WindowManager({
@@ -1104,6 +1112,9 @@
       $('prevTake').disabled = s.takeIndex <= 0;
       $('nextTake').disabled = s.takeIndex >= s.takes.length - 1;
     }
+    // Phase 3: the freeform Takes window refreshes from the same seam the
+    // bespoke dock uses — every take-changing site already calls syncDock.
+    if (state.freeform && typeof state.freeform.refreshAll === 'function') state.freeform.refreshAll();
   }
 
   async function onCommit() {
