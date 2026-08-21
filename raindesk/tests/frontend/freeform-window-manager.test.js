@@ -505,6 +505,17 @@ test('drag without a dock in range never mounts a preview', () => {
   fakeDocument.dispatch('pointerup', { clientX: 120, clientY: 160 });
 });
 
+test('init seeds lastRevision so the first gated write is gate-protected', async () => {
+  const { manager, structural } = groupingManager();
+  await manager.init(); // fixture getWorkspace returns revision 1
+  const [a, b] = openThree(manager);
+  manager.groupWindows([a, b], { activeWindowId: a });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(structural.length >= 1, 'structural write recorded');
+  assert.equal(structural[0].baseRevision, 1,
+    'first gated write carries the seeded revision (null would bypass the 409 gate)');
+});
+
 /* ------------------------------------------------------ shelf (Phase 2) */
 
 function shelfManager() {

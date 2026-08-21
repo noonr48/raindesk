@@ -617,6 +617,11 @@
       if (!api || typeof api.getWorkspace !== 'function') return list();
       let ws = null;
       try { ws = await api.getWorkspace(); } catch (_e) { return list(); }
+      // Seed the revision token from server truth so the FIRST gated
+      // structural write carries a real baseRevision instead of null
+      // (null bypasses the 409 gate entirely — a second tab's first write
+      // could silently clobber a concurrent tab's landed write).
+      if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision || 0, ws.revision);
       const persisted = ws && Array.isArray(ws.windows) ? ws.windows : [];
       // Namespace boundary during migration: freeform windows own the
       // `window_` prefix; the still-running WorkspaceShell owns its legacy
