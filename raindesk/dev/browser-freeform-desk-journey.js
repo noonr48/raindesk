@@ -314,8 +314,8 @@ async function main() {
     step(22, 'notes typing persists');
     await value(page, `window.raindeskFreeform.open('notes')`);
     await waitFor(page, `!!document.querySelector('.freeform-window[data-window-id="window_notes"] .freeform-notes-area')`, 'notes mounted', 8_000);
-    await value(page, `(()=>{const ta=document.querySelector('.freeform-window[data-window-id="window_notes"] .freeform-notes-area');ta.value='hold on Lena longer';ta.dispatchEvent(new Event('input',{bubbles:true}));return localStorage.getItem('raindesk.notes.v1');})()`);
-    if (await value(page, `localStorage.getItem('raindesk.notes.v1')`) !== 'hold on Lena longer') throw new Error('notes did not persist to the store');
+    await value(page, `(()=>{const ta=document.querySelector('.freeform-window[data-window-id="window_notes"] .freeform-notes-area');ta.value='hold on Lena longer';ta.dispatchEvent(new Event('input',{bubbles:true}));return 'typed';})()`);
+    await waitFor(page, `Object.keys(localStorage).some((k)=>k.startsWith('raindesk.notes.v1.') && localStorage.getItem(k)==='hold on Lena longer')`, 'notes persisted to the scoped store', 8_000);
 
     // 23. Notes survive a reload.
     step(23, 'notes survive reload');

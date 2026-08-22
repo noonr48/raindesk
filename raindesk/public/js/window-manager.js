@@ -325,7 +325,7 @@
           document.removeEventListener('pointercancel', up, true);
         };
         const move = (ev) => {
-          if (!ev.buttons) { teardown(); return; } // severed-gesture guard
+          if (!ev.buttons) { teardown(); clearSnapPreview(); return; } // severed-gesture guard: also clear the dock ghost
           if (!captured) {
             if (!moved(ev)) return;
             captured = true;
@@ -376,12 +376,23 @@
           current.rect.height = Math.max(min.height, start.h + (ev.clientY - start.y));
           renderFrame(current);
         };
+        const detach = () => {
+          grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', cancel);
+        };
         const up = async (ev) => {
           try { grip.releasePointerCapture(ev.pointerId); } catch (_e) {}
-          grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up);
+          detach();
           await persist(current);
         };
-        grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up);
+        // Interrupted resize reverts to the pre-grip dimensions instead of
+        // committing half a gesture (GPT Pro round-4 finding).
+        const cancel = () => {
+          try { grip.releasePointerCapture(e.pointerId); } catch (_e) {}
+          current.rect.width = start.w; current.rect.height = start.h;
+          renderFrame(current);
+          detach();
+        };
+        grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', cancel);
       });
     }
 

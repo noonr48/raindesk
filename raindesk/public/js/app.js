@@ -501,10 +501,10 @@
             commitTake: () => { onCommit(); },
             discardTakes: () => { core.discardTakes(); state.takeMeta = []; markDirty(); },
             getNotes: () => {
-              try { return window.localStorage.getItem('raindesk.notes.v1') || ''; } catch (_e) { return ''; }
+              try { return window.localStorage.getItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`) || ''; } catch (_e) { return ''; }
             },
             setNotes: (text) => {
-              try { window.localStorage.setItem('raindesk.notes.v1', String(text || '')); } catch (_e) { /* private mode */ }
+              try { window.localStorage.setItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`, String(text || '')); } catch (_e) { console.warn('[freeform] notes could not be saved (storage unavailable)'); }
             },
             getProposals: () => state.freeformProposals || [],
             refreshCast: () => { loadCast(); },
