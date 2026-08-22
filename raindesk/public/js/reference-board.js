@@ -191,7 +191,7 @@
         };
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
-        document.addEventListener('pointercancel', up, true);
+        document.addEventListener('pointercancel', cancelDrag, true);
       };
       document.addEventListener('pointerdown', onDragDown, true);
       if (registry) registry.push({ type: 'pointerdown', fn: onDragDown, capture: true });
@@ -241,7 +241,7 @@
         };
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
-        document.addEventListener('pointercancel', up, true);
+        document.addEventListener('pointercancel', cancelResize, true);
       };
       document.addEventListener('pointerdown', onResizeDown, true);
       if (registry) registry.push({ type: 'pointerdown', fn: onResizeDown, capture: true });
