@@ -401,7 +401,7 @@
         if (e.button !== 0 || e.target.closest('button,input,textarea,[contenteditable="true"]')) return;
         const obj = objects.get(id); if (!obj || obj.locked) return;
         e.preventDefault();
-        const start = { x: e.clientX, y: e.clientY, ox: obj.x, oy: obj.y };
+        const start = { x: e.clientX, y: e.clientY, ox: obj.x, oy: obj.y, pointerId: e.pointerId };
         // Defer pointer capture until real movement: capturing at pointerdown
         // retargets click/dblclick to the header, which would break rename's
         // dblclick on the title. A stationary press never captures; a real drag
@@ -418,6 +418,7 @@
           document.removeEventListener('pointercancel', up, true);
         };
         const move = (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer: never steer another gesture
           // Severed-gesture guard: a hover (buttons===0) after a press that
           // never received up/cancel must not ghost-drag — tear down and stop.
           if (!ev.buttons) { teardown(); return; }
@@ -432,6 +433,7 @@
           renderObject(obj);
         };
         const up = async (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer cannot commit or tear down
           teardown();
           try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
           // A click is not a drag: nothing persisted without a real drag
@@ -453,19 +455,33 @@
         if (e.button !== 0) return;
         const obj = objects.get(id); if (!obj || obj.locked) return;
         e.preventDefault(); e.stopPropagation(); grip.setPointerCapture(e.pointerId);
-        const start = { x: e.clientX, y: e.clientY, w: obj.width, h: obj.height };
+        const start = { x: e.clientX, y: e.clientY, w: obj.width, h: obj.height, pointerId: e.pointerId };
         const move = (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer
           const scale = worldScale(vp, metrics()) || 1;
           obj.width = clamp(start.w + (ev.clientX - start.x) / scale, 220, 1800);
           obj.height = clamp(start.h + (ev.clientY - start.y) / scale, 180, 1800);
           renderObject(obj);
         };
+        const detach = () => {
+          grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', cancel);
+        };
         const up = async (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer
           try { grip.releasePointerCapture(ev.pointerId); } catch (_e) {}
-          grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up);
+          detach();
           await persistObject(obj); onContextChange();
         };
-        grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up);
+        // Interrupted resize reverts to the pre-grip dimensions instead of
+        // committing half a gesture (mirrors window-manager cancel semantics).
+        const cancel = (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer
+          try { grip.releasePointerCapture(start.pointerId); } catch (_e) {}
+          obj.width = start.w; obj.height = start.h;
+          renderObject(obj);
+          detach();
+        };
+        grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', cancel);
       });
     }
 
