@@ -149,6 +149,13 @@
         if (topmostClaimant(mountState, e.clientX, e.clientY) !== card) return;
         const rect = card.getBoundingClientRect();
         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+        // Resize-grip exclusivity: a press inside the grip belongs to
+        // onResizeDown — exactly one gesture may claim a press.
+        const grip = card.querySelector('.reference-card-resize');
+        if (grip) {
+          const gr = grip.getBoundingClientRect();
+          if (e.clientX >= gr.left && e.clientX <= gr.right && e.clientY >= gr.top && e.clientY <= gr.bottom) return;
+        }
         e.preventDefault(); e.stopPropagation();
         const layerRect = mountState.layer.getBoundingClientRect();
         const pid = e.pointerId;
