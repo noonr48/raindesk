@@ -159,11 +159,20 @@
           media.y = oy + (ev.clientY - sy) * canvas.height / Math.max(1, layerRect.height);
           applyStyle(card, media, canvas);
         };
+        const cancelDrag = (ev) => {
+          if (ev.pointerId !== pid) return; // foreign pointer
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          document.removeEventListener('pointercancel', cancelDrag, true);
+          // Interrupted drag reverts to the pre-grip position instead of
+          // committing half a gesture (spec-wave finding).
+          media.x = ox; media.y = oy; applyStyle(card, media, canvas);
+        };
         const up = (ev) => {
           if (ev.pointerId !== pid) return; // foreign pointer
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
-          document.removeEventListener('pointercancel', up, true);
+          document.removeEventListener('pointercancel', cancelDrag, true);
           // Swallow the drag-release synthesized click ONLY when the pointer
           // actually moved (a real drag): a deliberate click on the card's
           // own controls has ~no movement and must survive untouched.
@@ -203,11 +212,20 @@
           media.width = clamp(ow + (ev.clientX - sx) * canvas.width / Math.max(1, layerRect.width), 40, canvas.width * 1.5);
           media.height = Math.max(40, media.width * ratio); applyStyle(card, media, canvas);
         };
+        const cancelResize = (rev) => {
+          if (rev.pointerId !== pid) return; // foreign pointer
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+          document.removeEventListener('pointercancel', cancelResize, true);
+          // Interrupted resize reverts to the pre-grip dimensions instead of
+          // committing half a gesture (spec-wave finding).
+          media.width = ow; media.height = oh; applyStyle(card, media, canvas);
+        };
         const up = (rev) => {
           if (rev.pointerId !== pid) return; // foreign pointer
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
-          document.removeEventListener('pointercancel', up, true);
+          document.removeEventListener('pointercancel', cancelResize, true);
           const dragged = Math.abs(rev.clientX - sx) > 3 || Math.abs(rev.clientY - sy) > 3;
           if (dragged) {
             const upX = rev.clientX, upY = rev.clientY;
