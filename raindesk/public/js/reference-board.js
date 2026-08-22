@@ -151,13 +151,16 @@
         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
         e.preventDefault(); e.stopPropagation();
         const layerRect = mountState.layer.getBoundingClientRect();
+        const pid = e.pointerId;
         const sx = e.clientX, sy = e.clientY; const ox = media.x, oy = media.y;
         const move = (ev) => {
+          if (ev.pointerId !== pid) return; // foreign pointer
           media.x = ox + (ev.clientX - sx) * canvas.width / Math.max(1, layerRect.width);
           media.y = oy + (ev.clientY - sy) * canvas.height / Math.max(1, layerRect.height);
           applyStyle(card, media, canvas);
         };
         const up = (ev) => {
+          if (ev.pointerId !== pid) return; // foreign pointer
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
           document.removeEventListener('pointercancel', up, true);
@@ -194,12 +197,14 @@
         const rect = resize.getBoundingClientRect();
         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
         e.preventDefault(); e.stopPropagation();
-        const layerRect = mountState.layer.getBoundingClientRect(); const sx = e.clientX; const ow = media.width; const oh = media.height; const ratio = oh / Math.max(1, ow);
+        const layerRect = mountState.layer.getBoundingClientRect(); const pid = e.pointerId; const sx = e.clientX; const ow = media.width; const oh = media.height; const ratio = oh / Math.max(1, ow);
         const move = (ev) => {
+          if (ev.pointerId !== pid) return; // foreign pointer
           media.width = clamp(ow + (ev.clientX - sx) * canvas.width / Math.max(1, layerRect.width), 40, canvas.width * 1.5);
           media.height = Math.max(40, media.width * ratio); applyStyle(card, media, canvas);
         };
         const up = (rev) => {
+          if (rev.pointerId !== pid) return; // foreign pointer
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
           document.removeEventListener('pointercancel', up, true);

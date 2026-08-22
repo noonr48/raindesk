@@ -545,9 +545,11 @@
     function installShelfChipDrag(chip, windowId) {
       chip.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
+        const pid = e.pointerId;
         const sx = e.clientX; const sy = e.clientY; let dragged = false;
-        const move = (ev) => { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) dragged = true; };
+        const move = (ev) => { if (ev.pointerId !== pid) return; if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) dragged = true; };
         const up = (ev) => {
+          if (ev.pointerId !== pid) return;
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
           if (!dragged) return; // a click is not a drag; the click handler restores
@@ -763,9 +765,11 @@
     function installTabTear(tab, memberId) {
       tab.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
+        const pid = e.pointerId;
         const sx = e.clientX; const sy = e.clientY; let torn = false;
-        const move = (ev) => { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) torn = true; };
+        const move = (ev) => { if (ev.pointerId !== pid) return; if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) torn = true; };
         const up = (ev) => {
+          if (ev.pointerId !== pid) return;
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
           if (!torn) return;
