@@ -313,7 +313,7 @@
         const current = windows.get(model.windowId); if (!current || current.locked) return;
         if (current.state === 'maximised') return; // maximised windows do not drag; restore first
         e.preventDefault();
-        const start = { x: e.clientX, y: e.clientY, ox: current.rect.x, oy: current.rect.y };
+        const start = { x: e.clientX, y: e.clientY, ox: current.rect.x, oy: current.rect.y, pointerId: e.pointerId };
         // Deferred capture (>3px) so dblclick-to-rename survives; threshold
         // listeners live at DOCUMENT capture level because a steep drag can
         // leave the head rect on its first interpolated step (proven v1).
@@ -325,6 +325,7 @@
           document.removeEventListener('pointercancel', up, true);
         };
         const move = (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer: never steer another gesture
           if (!ev.buttons) { teardown(); clearSnapPreview(); return; } // severed-gesture guard: also clear the dock ghost
           if (!captured) {
             if (!moved(ev)) return;
@@ -340,6 +341,7 @@
           showSnapPreview(preview ? preview.rect : null);
         };
         const up = async (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer cannot commit or tear down
           teardown();
           clearSnapPreview();
           try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
@@ -370,8 +372,9 @@
         grip.setPointerCapture(e.pointerId);
         const surface = surfaceFor(current);
         const min = surface ? surface.minimumSize : { width: 200, height: 140 };
-        const start = { x: e.clientX, y: e.clientY, w: current.rect.width, h: current.rect.height };
+        const start = { x: e.clientX, y: e.clientY, w: current.rect.width, h: current.rect.height, pointerId: e.pointerId };
         const move = (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer
           current.rect.width = Math.max(min.width, start.w + (ev.clientX - start.x));
           current.rect.height = Math.max(min.height, start.h + (ev.clientY - start.y));
           renderFrame(current);
@@ -380,13 +383,15 @@
           grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', cancel);
         };
         const up = async (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer
           try { grip.releasePointerCapture(ev.pointerId); } catch (_e) {}
           detach();
           await persist(current);
         };
         // Interrupted resize reverts to the pre-grip dimensions instead of
         // committing half a gesture (GPT Pro round-4 finding).
-        const cancel = () => {
+        const cancel = (ev) => {
+          if (ev.pointerId !== start.pointerId) return; // foreign pointer
           try { grip.releasePointerCapture(e.pointerId); } catch (_e) {}
           current.rect.width = start.w; current.rect.height = start.h;
           renderFrame(current);

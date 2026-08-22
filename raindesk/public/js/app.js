@@ -504,7 +504,10 @@
               try { return window.localStorage.getItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`) || ''; } catch (_e) { return ''; }
             },
             setNotes: (text) => {
-              try { window.localStorage.setItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`, String(text || '')); } catch (_e) { console.warn('[freeform] notes could not be saved (storage unavailable)'); }
+              try { window.localStorage.setItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`, String(text || '')); } catch (_e) {
+                // Warn once per session: per-keystroke spam helps nobody.
+                if (!state.notesStorageWarned) { state.notesStorageWarned = true; console.warn('[freeform] notes could not be saved (storage unavailable)'); }
+              }
             },
             getProposals: () => state.freeformProposals || [],
             refreshCast: () => { loadCast(); },
