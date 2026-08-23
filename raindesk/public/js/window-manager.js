@@ -52,8 +52,10 @@
           height: Math.max(90, Number(surface.minimumSize && surface.minimumSize.height) || 180),
         }),
         defaultPlacement: surface.defaultPlacement || { width: 460, height: 360, dock: null },
+        // Every window snaps to the desk edges by default (owner reference:
+        // all panels dock); a surface opts out by declaring its own list.
         supportedStates: new Set(
-          (Array.isArray(surface.supportedStates) ? surface.supportedStates : ['floating', 'minimised', 'maximised'])
+          (Array.isArray(surface.supportedStates) ? surface.supportedStates : ['floating', 'docked', 'minimised', 'maximised'])
             .filter((state) => SUPPORTED_STATES.has(state)),
         ),
         contextualTools: Array.isArray(surface.contextualTools) ? surface.contextualTools.slice() : [],
@@ -75,6 +77,10 @@
     return node;
   }
   const DRAG_THRESHOLD_PX = 3;
+
+  /* 8-way resize: edge strips + corner pads, keyed by data-resize-dir. */
+  const RESIZE_DIRECTIONS = Object.freeze(['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']);
+  const SNAP_ZONE_EDGES = Object.freeze(['left', 'right', 'top', 'bottom']);
 
   /* ---------------------------------------------------------- window model */
 
@@ -202,12 +208,16 @@
       actions.append(btnMin, btnMax, btnClose);
       head.append(title, actions);
       const body = el(document, 'div', 'freeform-window-body');
-      const grip = el(document, 'div', 'freeform-window-resize');
-      grip.setAttribute('aria-hidden', 'true');
-      frame.append(tabsSlot, head, body, grip);
+      const resizeHandles = RESIZE_DIRECTIONS.map((dir) => {
+        const handle = el(document, 'div', `freeform-window-resize ${dir}`);
+        handle.setAttribute('aria-hidden', 'true');
+        handle.dataset.resizeDir = dir;
+        return handle;
+      });
+      frame.append(tabsSlot, head, body, ...resizeHandles);
       root.appendChild(frame);
       model.frame = frame; model.body = body; model.head = head; model.title = title; model.tabsSlot = tabsSlot;
-      installDrag(model); installResize(model, grip);
+      installDrag(model); installResize(model, resizeHandles);
       btnMin.addEventListener('click', () => minimise(model.windowId));
       btnMax.addEventListener('click', () => (model.state === 'maximised' ? unmaximise(model.windowId) : maximise(model.windowId)));
       btnClose.addEventListener('click', () => close(model.windowId));
@@ -306,6 +316,37 @@
       snapPreviewEl = null;
     }
 
+    /* Phase 6: visible edge drop zones while a docking-capable window is
+     * dragged — four calm paper washes, one per desk edge; the zone
+     * snapPlace() would settle into carries the accent emphasis. The layer
+     * mounts lazily and switches off the moment any drag settles or tears
+     * down (including the severed-gesture ev.buttons path). */
+    let snapZoneHost = null;
+    let snapZoneEls = null;
+    function ensureSnapZones() {
+      if (snapZoneHost) return;
+      snapZoneHost = el(document, 'div', 'freeform-snap-zones');
+      snapZoneHost.setAttribute('aria-hidden', 'true');
+      snapZoneEls = new Map();
+      for (const edge of SNAP_ZONE_EDGES) {
+        const zone = el(document, 'div', `freeform-snap-zone ${edge}`);
+        zone.setAttribute('aria-hidden', 'true');
+        snapZoneHost.appendChild(zone);
+        snapZoneEls.set(edge, zone);
+      }
+      root.appendChild(snapZoneHost);
+    }
+    function showSnapZones(activeDock) {
+      ensureSnapZones();
+      snapZoneHost.classList.add('on');
+      for (const [edge, zone] of snapZoneEls) zone.classList.toggle('active', edge === activeDock);
+    }
+    function clearSnapZones() {
+      if (!snapZoneHost) return;
+      snapZoneHost.classList.remove('on');
+      for (const [, zone] of snapZoneEls) zone.classList.remove('active');
+    }
+
     function installDrag(model) {
       const head = model.head;
       head.addEventListener('pointerdown', (e) => {
@@ -313,20 +354,33 @@
         const current = windows.get(model.windowId); if (!current || current.locked) return;
         if (current.state === 'maximised') return; // maximised windows do not drag; restore first
         e.preventDefault();
+        const surface = surfaceFor(current);
+        const canDock = Boolean(surface && surface.supportedStates.has('docked'));
         const start = { x: e.clientX, y: e.clientY, ox: current.rect.x, oy: current.rect.y, pointerId: e.pointerId };
         // Deferred capture (>3px) so dblclick-to-rename survives; threshold
         // listeners live at DOCUMENT capture level because a steep drag can
         // leave the head rect on its first interpolated step (proven v1).
         let captured = false;
         const moved = (ev) => Math.abs(ev.clientX - start.x) > DRAG_THRESHOLD_PX || Math.abs(ev.clientY - start.y) > DRAG_THRESHOLD_PX;
+        const onKeyDown = (ev) => {
+          if (ev.key !== 'Escape') return;
+          // Escape cancels a pending drop: pre-gesture geometry, overlays
+          // gone, listeners detached — the gesture never commits.
+          current.rect.x = start.ox; current.rect.y = start.oy;
+          renderFrame(current);
+          clearSnapPreview();
+          clearSnapZones();
+          teardown();
+        };
         const teardown = () => {
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
           document.removeEventListener('pointercancel', up, true);
+          document.removeEventListener('keydown', onKeyDown, true);
         };
         const move = (ev) => {
           if (ev.pointerId !== start.pointerId) return; // foreign pointer: never steer another gesture
-          if (!ev.buttons) { teardown(); clearSnapPreview(); return; } // severed-gesture guard: also clear the dock ghost
+          if (!ev.buttons) { teardown(); clearSnapPreview(); clearSnapZones(); return; } // severed-gesture guard: also clear the dock ghost
           if (!captured) {
             if (!moved(ev)) return;
             captured = true;
@@ -337,13 +391,19 @@
           current.rect.y = start.oy + (ev.clientY - start.y);
           renderFrame(current);
           // Phase 5: preview the dock the drag would settle into.
+          // Phase 6: light up the four edge zones, emphasizing the one
+          // snapPlace() would choose. Alt disables snapping entirely —
+          // zones included.
           const preview = snapPlace(current, ev.altKey);
+          if (canDock && !ev.altKey) showSnapZones(preview ? preview.dock : null);
+          else clearSnapZones();
           showSnapPreview(preview ? preview.rect : null);
         };
         const up = async (ev) => {
           if (ev.pointerId !== start.pointerId) return; // foreign pointer cannot commit or tear down
           teardown();
           clearSnapPreview();
+          clearSnapZones();
           try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
           if (!captured || !moved(ev)) return; // a click is not a drag
           // Put-away drop zones take precedence over snapping (Phase 2):
@@ -354,51 +414,69 @@
           if (drop && drop.kind === 'group') { joinGroup(current.windowId, drop.targetWindowId); return; }
           const snapped = snapPlace(current, ev.altKey);
           if (snapped) applySnap(current, snapped);
+          else if (current.state === 'docked') transition(current, 'floating'); // dragged off the edge re-floats
           renderFrame(current);
           await persist(current);
         };
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
         document.addEventListener('pointercancel', up, true);
+        document.addEventListener('keydown', onKeyDown, true);
       });
     }
 
-    function installResize(model, grip) {
-      grip.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return;
-        const current = windows.get(model.windowId); if (!current || current.locked) return;
-        if (current.state === 'maximised') return;
-        e.preventDefault(); e.stopPropagation();
-        grip.setPointerCapture(e.pointerId);
-        const surface = surfaceFor(current);
-        const min = surface ? surface.minimumSize : { width: 200, height: 140 };
-        const start = { x: e.clientX, y: e.clientY, w: current.rect.width, h: current.rect.height, pointerId: e.pointerId };
-        const move = (ev) => {
-          if (ev.pointerId !== start.pointerId) return; // foreign pointer
-          current.rect.width = Math.max(min.width, start.w + (ev.clientX - start.x));
-          current.rect.height = Math.max(min.height, start.h + (ev.clientY - start.y));
-          renderFrame(current);
-        };
-        const detach = () => {
-          grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', cancel);
-        };
-        const up = async (ev) => {
-          if (ev.pointerId !== start.pointerId) return; // foreign pointer
-          try { grip.releasePointerCapture(ev.pointerId); } catch (_e) {}
-          detach();
-          await persist(current);
-        };
-        // Interrupted resize reverts to the pre-grip dimensions instead of
-        // committing half a gesture (GPT Pro round-4 finding).
-        const cancel = (ev) => {
-          if (ev.pointerId !== start.pointerId) return; // foreign pointer
-          try { grip.releasePointerCapture(e.pointerId); } catch (_e) {}
-          current.rect.width = start.w; current.rect.height = start.h;
-          renderFrame(current);
-          detach();
-        };
-        grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', cancel);
-      });
+    /** 8-way resize over n/s/e/w strips plus the four corners. Gesture laws
+     * are identical to v1: initiating-pointerId filters everywhere,
+     * pointercancel reverts to the pre-gesture rect (never commits),
+     * persistence happens only on commit, maximised windows refuse. */
+    function installResize(model, handles) {
+      const grips = Array.isArray(handles) ? handles : [handles];
+      for (const grip of grips) {
+        grip.addEventListener('pointerdown', (e) => {
+          if (e.button !== 0) return;
+          const current = windows.get(model.windowId); if (!current || current.locked) return;
+          if (current.state === 'maximised') return;
+          e.preventDefault(); e.stopPropagation();
+          const dir = grip.dataset.resizeDir || 'se';
+          try { grip.setPointerCapture(e.pointerId); } catch (_e) {}
+          const surface = surfaceFor(current);
+          const min = surface ? surface.minimumSize : { width: 200, height: 140 };
+          const start = { x: e.clientX, y: e.clientY, rect: { ...current.rect }, pointerId: e.pointerId };
+          const move = (ev) => {
+            if (ev.pointerId !== start.pointerId) return; // foreign pointer
+            const r = start.rect;
+            let left = r.x; let top = r.y;
+            let right = r.x + r.width; let bottom = r.y + r.height;
+            // Moving edges clamp against the opposite (anchored) edge so the
+            // per-surface minimum size holds; free edges simply grow/shrink.
+            if (dir.includes('e')) right = Math.max(right + (ev.clientX - start.x), left + min.width);
+            if (dir.includes('w')) left = Math.min(left + (ev.clientX - start.x), right - min.width);
+            if (dir.includes('s')) bottom = Math.max(bottom + (ev.clientY - start.y), top + min.height);
+            if (dir.includes('n')) top = Math.min(top + (ev.clientY - start.y), bottom - min.height);
+            current.rect = { x: left, y: top, width: right - left, height: bottom - top };
+            renderFrame(current);
+          };
+          const detach = () => {
+            grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', cancel);
+          };
+          const up = async (ev) => {
+            if (ev.pointerId !== start.pointerId) return; // foreign pointer
+            try { grip.releasePointerCapture(ev.pointerId); } catch (_e) {}
+            detach();
+            await persist(current);
+          };
+          // Interrupted resize reverts to the pre-gesture rect instead of
+          // committing half a gesture (GPT Pro round-4 finding).
+          const cancel = (ev) => {
+            if (ev.pointerId !== start.pointerId) return; // foreign pointer
+            try { grip.releasePointerCapture(start.pointerId); } catch (_e) {}
+            current.rect = { ...start.rect };
+            renderFrame(current);
+            detach();
+          };
+          grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', cancel);
+        });
+      }
     }
 
     /* --------------------------------------------------------- placement */

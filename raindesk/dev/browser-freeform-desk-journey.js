@@ -223,10 +223,14 @@ async function main() {
     const after = await windowRect(page, 'window_scenes');
     if (!after || after.left === before.left) throw new Error(`drag did not move scenes: ${JSON.stringify({ before, after })}`);
 
-    // 8. Edge drag on a non-docking surface stays floating, no console error.
-    step(8, 'edge drag stays floating for non-docking surface');
+    // 8. Edge drag docks a dock-capable surface; dragging away re-floats it.
+    step(8, 'edge drag docks, drag-away re-floats');
     await dragWindow(page, 'window_scenes', -(parseInt(after.left, 10) || 200) - 40, 0);
-    await waitFor(page, `window.raindeskFreeform.state('window_scenes').state==='floating'`, 'still floating after edge press', 5_000);
+    await waitFor(page, `window.raindeskFreeform.state('window_scenes').state==='docked'`, 'scenes dock at left edge', 5_000);
+    const postDock = await windowRect(page, 'window_scenes');
+    await dragWindow(page, 'window_scenes', 320, 0);
+    await waitFor(page, `window.raindeskFreeform.state('window_scenes').state==='floating'`, 'drag off the edge re-floats scenes', 5_000);
+    if ((await windowRect(page, 'window_scenes')).left === postDock.left) throw new Error('re-float did not move the window off the dock edge');
 
     // 9. Manager rename through title editing.
     step(9, 'rename through title edit');
@@ -325,14 +329,17 @@ async function main() {
     await value(page, `window.raindeskFreeform.open('notes')`);
     await waitFor(page, `document.querySelector('.freeform-window[data-window-id="window_notes"] .freeform-notes-area').value==='hold on Lena longer'`, 'notes restored', 10_000);
 
-    // 24. Snap preview never appears for non-docking surfaces — probed AT
-    // the edge, where a wrongly-offered dock would actually show a ghost.
-    step(24, 'no snap preview for non-docking surfaces');
+    // 24. Edge snap is real for dock-capable surfaces and leaves no ghost:
+    // drag notes into the left edge (it must dock), then away (it must
+    // re-float), then assert the preview overlay was fully torn down.
+    step(24, 'edge snap docks, no leaked snap ghost');
     const notesRect = await windowRect(page, 'window_notes');
     const notesLeft = parseInt(notesRect.left, 10) || 0;
     await dragWindow(page, 'window_notes', -(notesLeft + 40), 0);
-    if (await value(page, `document.querySelectorAll('.freeform-snap-preview').length`) !== 0) throw new Error('snap preview shown for a non-docking surface at the edge');
-    await waitFor(page, `window.raindeskFreeform.state('window_notes').state==='floating'`, 'notes stay floating at the edge', 5_000);
+    await waitFor(page, `window.raindeskFreeform.state('window_notes').state==='docked'`, 'notes dock at left edge', 5_000);
+    await dragWindow(page, 'window_notes', 320, 0);
+    await waitFor(page, `window.raindeskFreeform.state('window_notes').state==='floating'`, 'notes re-float off the edge', 5_000);
+    if (await value(page, `document.querySelectorAll('.freeform-snap-preview').length`) !== 0) throw new Error('snap preview ghost leaked after gesture settled');
 
     // 25. Zero console errors across the whole journey.
     step(25, 'zero console errors');

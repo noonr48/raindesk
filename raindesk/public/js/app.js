@@ -423,6 +423,11 @@
     $('scenesClose').addEventListener('click', () => $('scenesPanel').classList.remove('open'));
 
     state.workspaceUI = WSPACE.WorkspaceShell({ api: API, shelf: $('panelShelf') });
+    // Freeform-desk routing flag, computed once so the Beats panel can be
+    // retired from the bespoke shell on the desktop path while the legacy
+    // experience keeps it everywhere else.
+    const useFreeformDesk = new URLSearchParams(location.search).get('freeform') === '1' &&
+      Boolean(window.RaindeskWindowManager && window.RaindeskFreeformSurfaces);
     state.workspaceUI.registerPanel({
       id: 'panel_layers', key: 'layers', type: 'layers_panel', label: 'Layers',
       element: $('layersPanel'), handle: $('layersPanel').querySelector('h4'),
@@ -437,14 +442,18 @@
       open: () => { $('scenesPanel').classList.add('open'); renderScenesPanel(); },
       close: () => $('scenesPanel').classList.remove('open'),
     });
-    state.workspaceUI.registerPanel({
-      id: 'panel_beats', key: 'beats', type: 'beat_trail', label: 'Beats',
-      element: $('beatTrail'), handle: $('beatTrail').querySelector('.beat-trail-head'),
-      visibilityTarget: $('beatTrail'), visibleClass: 'open',
-      isOpen: () => state.beatTrail && state.beatTrail.isOpen(),
-      open: () => state.beatTrail && state.beatTrail.open(),
-      close: () => state.beatTrail && state.beatTrail.close(),
-    });
+    // Phase 3 migration: when the registry desk mounts, the bespoke Beats
+    // shell is not registered — window_beats owns the surface instead.
+    if (!useFreeformDesk) {
+      state.workspaceUI.registerPanel({
+        id: 'panel_beats', key: 'beats', type: 'beat_trail', label: 'Beats',
+        element: $('beatTrail'), handle: $('beatTrail').querySelector('.beat-trail-head'),
+        visibilityTarget: $('beatTrail'), visibleClass: 'open',
+        isOpen: () => state.beatTrail && state.beatTrail.isOpen(),
+        open: () => state.beatTrail && state.beatTrail.open(),
+        close: () => state.beatTrail && state.beatTrail.close(),
+      });
+    }
     state.workspaceUI.registerPanel({
       id: 'panel_partner', key: 'partner', type: 'partner_panel', label: 'Partner',
       element: $('drawer').querySelector('.chat-panel'), handle: $('drawer').querySelector('.chat-tabs'),
@@ -472,8 +481,7 @@
     // default experience is unchanged until the freeform desk is proven;
     // the registry surfaces own only their window content.
     try {
-      if (new URLSearchParams(location.search).get('freeform') === '1' &&
-          window.RaindeskWindowManager && window.RaindeskFreeformSurfaces) {
+      if (useFreeformDesk) {
         window.RaindeskFreeformSurfaces.installSurfaces({
           surfaces: window.RaindeskWindowManager.CreativeSurfaces,
           deps: {
@@ -500,6 +508,46 @@
             nextTake: () => { if (core.nextTake()) { markDirty(); } },
             commitTake: () => { onCommit(); },
             discardTakes: () => { core.discardTakes(); state.takeMeta = []; markDirty(); },
+            // Registry hosting of the EXISTING trail (Phase 3 unit 2):
+            // beats.js keeps owning rendering; this seam only mounts a fresh
+            // BeatTrail into the window body and hands its lifecycle to the
+            // window controller contract.
+            mountBeatTrail: (host) => {
+              const trailRoot = document.createElement('div');
+              host.appendChild(trailRoot);
+              const trail = BEATS.BeatTrail(trailRoot, {
+                api: API,
+                direction: DIR,
+                shot: state.shot,
+                contextProvider: partnerCanvasContext,
+                onPartnerMessage: (message, moves) => {
+                  if (state.drawer && state.drawer.addPartnerNote) state.drawer.addPartnerNote(message, moves);
+                },
+                onActiveBeatChange: (beat) => {
+                  state.activeBeatId = beat && beat.id || null;
+                  markDirty();
+                },
+                onCaptureFrame: (slot, context) => captureDirectionFrame(slot, context),
+              });
+              trail.open();
+              // The floating window chrome owns closing; leaving the inline
+              // minimiser would freeze refreshes inside a visible window.
+              const inlineClose = typeof trailRoot.querySelector === 'function'
+                ? trailRoot.querySelector('.beat-trail-close') : null;
+              if (inlineClose && inlineClose.style) inlineClose.style.display = 'none';
+              // One live trail at a time: Partner canvas context, shot
+              // switches and drawer-turn refreshes all read state.beatTrail.
+              state.beatTrail = trail;
+              return {
+                render() { if (trail.isOpen()) trail.refresh(); },
+                destroy() {
+                  if (state.beatTrail === trail) state.beatTrail = null;
+                  trail.close();
+                  trailRoot.innerHTML = '';
+                  host.innerHTML = '';
+                },
+              };
+            },
             getNotes: () => {
               try { return window.localStorage.getItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`) || ''; } catch (_e) { return ''; }
             },
@@ -865,6 +913,44 @@
     dctx.restore();
   }
 
+  /* ------------------------------------------------ beats surface routing */
+  // Phase 3 migration: the freeform registry owns the desktop Beats window;
+  // the bespoke beat-trail shell stays the fallback wherever the freeform
+  // desk did not mount (default experience, no ?freeform=1).
+
+  function beatsWindowId() { return 'window_beats'; }
+
+  function beatsWindowState() {
+    return state.freeform ? state.freeform.state(beatsWindowId()) : null;
+  }
+
+  /** Desktop Beats entry point: open / restore / minimise the registry
+   * window (toggle parity with the old bespoke shell). Returns false when
+   * the freeform desk is absent so callers fall back to the legacy path. */
+  function toggleBeatsSurface() {
+    const win = beatsWindowState();
+    if (!win) {
+      if (!state.freeform) return false;
+      // Stable entityRef keeps Partner move_panel compatibility inside the
+      // documented beats: namespace (workspace schema v3 ENTITY_REF_RE).
+      state.freeform.open('beats', { entityRef: 'beats:active_shot' });
+      return true;
+    }
+    if (win.state === 'minimised' || win.state === 'tabbed') state.freeform.restore(win.windowId);
+    else state.freeform.minimise(win.windowId);
+    return true;
+  }
+
+  /** Escape-style dismissal: minimise (never destroy) so the trail instance
+   * keeps tracking shot changes while hidden. Returns false when there is
+   * no registry window to dismiss. */
+  function closeBeatsSurface() {
+    const win = beatsWindowState();
+    if (!win || win.state === 'minimised') return Boolean(win);
+    state.freeform.minimise(win.windowId);
+    return true;
+  }
+
   /* ------------------------------------------------------------ chrome */
 
   function bindChrome() {
@@ -873,7 +959,7 @@
       btn.addEventListener('click', () => {
         const t = btn.dataset.tool;
         if (t === 'layers') { togglePanel(); return; }
-        if (t === 'beats') { if (state.beatTrail) state.beatTrail.toggle(); return; }
+        if (t === 'beats') { if (!toggleBeatsSurface() && state.beatTrail) state.beatTrail.toggle(); return; }
         if (t === 'pen' && state.tool === 'pen') { togglePenPop(); return; }
         setTool(t);
       });
@@ -930,7 +1016,7 @@
         $('penpop').classList.remove('open');
         $('layersPanel').classList.remove('open');
         $('scenesPanel').classList.remove('open');
-        if (state.beatTrail) state.beatTrail.close();
+        if (!closeBeatsSurface() && state.beatTrail) state.beatTrail.close();
         if (state.drawer) state.drawer.close();
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); onUndo(); }

@@ -57,9 +57,12 @@ function makeNode(tag) {
       event = event || {};
       event.target = event.target || this;
       event.preventDefault = event.preventDefault || (() => {});
+      event.stopPropagation = event.stopPropagation || (() => {});
       for (const fn of this._listeners[type] || []) fn(event);
       for (const fn of this._listeners[`${type}:capture`] || []) fn(event);
     },
+    setPointerCapture() {},
+    releasePointerCapture() {},
     closest(selector) {
       // Minimal: support 'button,input,textarea,a,[contenteditable="true"],[data-no-drag]'
       // and '.cls' forms used by the manager.
@@ -503,6 +506,227 @@ test('drag without a dock in range never mounts a preview', () => {
   assert.ok(!root.children.some((c) => c.classList.contains('freeform-snap-preview')),
     'no dock in range: no preview element');
   fakeDocument.dispatch('pointerup', { clientX: 120, clientY: 160 });
+});
+
+/* ------------------------------------------- 8-way resize + snap zones (Phase 6) */
+
+function resizeHandleFor(frame, dir) {
+  return frame.querySelectorAll('.freeform-window-resize').find((h) => h.dataset && h.dataset.resizeDir === dir);
+}
+function zoneHostIn(root) {
+  return root.children.find((c) => c.classList.contains('freeform-snap-zones')) || null;
+}
+function edgeSnapManager(edgeResult) {
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { edgeSnap: () => edgeResult },
+  });
+  return { manager, root };
+}
+
+test('register defaults include docked so every window can snap; explicit lists stay opt-outs', () => {
+  assert.ok(wm.CreativeSurfaces.get('references').supportedStates.has('docked'),
+    "default supportedStates now carries 'docked'");
+  assert.ok(!wm.CreativeSurfaces.get('locked_only').supportedStates.has('docked'),
+    'a surface that declares its own list without docked stays a non-docking surface');
+});
+
+test('resize: eight directions update the rect respecting per-surface minimums', () => {
+  const { manager, root } = freshManager();
+  const id = 'window_layers'; // layers minimumSize: 240x160
+  manager.open('layers', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const rect = () => manager.state(id).rect;
+  const drag = (dir, down, to) => {
+    const h = resizeHandleFor(frame, dir);
+    h.dispatch('pointerdown', { button: 0, clientX: down[0], clientY: down[1], pointerId: 1 });
+    h.dispatch('pointermove', { clientX: to[0], clientY: to[1], pointerId: 1 });
+    h.dispatch('pointerup', { clientX: to[0], clientY: to[1], pointerId: 1 });
+  };
+
+  drag('e', [500, 250], [560, 250]); // east edge grows right; x/y anchored
+  assert.deepEqual(rect(), { x: 100, y: 100, width: 460, height: 300 });
+
+  drag('w', [100, 250], [40, 250]); // west edge moves left, right edge anchored
+  assert.deepEqual(rect(), { x: 40, y: 100, width: 520, height: 300 });
+
+  drag('s', [300, 400], [300, 470]);
+  assert.deepEqual(rect(), { x: 40, y: 100, width: 520, height: 370 });
+
+  drag('n', [300, 100], [300, 60]);
+  assert.deepEqual(rect(), { x: 40, y: 60, width: 520, height: 410 });
+
+  drag('ne', [560, 60], [600, 40]);
+  assert.deepEqual(rect(), { x: 40, y: 40, width: 560, height: 430 });
+
+  drag('sw', [40, 470], [20, 500]);
+  assert.deepEqual(rect(), { x: 20, y: 40, width: 580, height: 460 });
+
+  // Minimum clamp on a moving edge: the opposite edge stays anchored.
+  const before = rect();
+  drag('w', [before.x, 250], [before.x + 500, 250]); // huge inward push clamps at min.width
+  assert.equal(rect().width, 240);
+  assert.equal(rect().x + rect().width, before.x + before.width, 'right edge stayed anchored at the clamp');
+
+  drag('n', [300, rect().y], [300, rect().y + 300]);
+  assert.equal(rect().height, 160);
+});
+
+test('resize gesture laws: pointercancel reverts and commits nothing; foreign pointers are ignored; maximised refuses', async () => {
+  const { manager, root, calls } = freshManager();
+  const id = 'window_layers';
+  manager.open('layers', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  await new Promise((r) => setTimeout(r, 5)); // open()'s own persist lands -> baseline
+  const baseline = calls.length;
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const before = { ...manager.state(id).rect };
+  const h = resizeHandleFor(frame, 'e');
+
+  h.dispatch('pointerdown', { button: 0, clientX: 500, clientY: 250, pointerId: 1 });
+  h.dispatch('pointermove', { clientX: 700, clientY: 250, pointerId: 2 }); // foreign pointer: ignored
+  assert.equal(manager.state(id).rect.width, before.width, 'a foreign pointer never steers the gesture');
+  h.dispatch('pointermove', { clientX: 700, clientY: 250, pointerId: 1 });
+  assert.equal(manager.state(id).rect.width, 600);
+  h.dispatch('pointercancel', { pointerId: 1 });
+  assert.deepEqual(manager.state(id).rect, before, 'cancel reverts to the pre-gesture rect');
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(calls.length, baseline, 'an interrupted resize never persists');
+
+  manager.maximise(id);
+  h.dispatch('pointerdown', { button: 0, clientX: 500, clientY: 250, pointerId: 1 });
+  h.dispatch('pointermove', { clientX: 900, clientY: 250, pointerId: 1 });
+  h.dispatch('pointerup', { clientX: 900, clientY: 250, pointerId: 1 });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.state(id).state, 'maximised');
+  assert.deepEqual(manager.state(id).rect, before, 'maximised windows do not resize (restoreRect untouched)');
+});
+
+test('resize commit persists once with the final rect', async () => {
+  const { manager, root, calls } = freshManager();
+  const id = 'window_layers';
+  manager.open('layers', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  await new Promise((r) => setTimeout(r, 5));
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const h = resizeHandleFor(frame, 'se');
+  h.dispatch('pointerdown', { button: 0, clientX: 500, clientY: 400, pointerId: 1 });
+  h.dispatch('pointermove', { clientX: 520, clientY: 430, pointerId: 1 });
+  h.dispatch('pointerup', { clientX: 520, clientY: 430, pointerId: 1 });
+  await new Promise((r) => setTimeout(r, 5));
+  const last = calls[calls.length - 1];
+  assert.equal(last.windowId, id);
+  assert.equal(last.width, 420);
+  assert.equal(last.height, 330);
+});
+
+test('snap zones render during a header drag for a default-supported surface and emphasize the settling edge', () => {
+  const { manager, root } = edgeSnapManager({ dock: 'left', rect: { x: 0, y: 66, width: 420, height: 650 } });
+  manager.open('layers', { rect: { x: 200, y: 200, width: 380, height: 280 } });
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 220, clientY: 220 });
+  fakeDocument.dispatch('pointermove', { clientX: 10, clientY: 240, buttons: 1 });
+
+  const host = zoneHostIn(root);
+  assert.ok(host, 'the zone layer mounts while a docking-capable window drags');
+  assert.ok(host.classList.contains('on'), 'zones visible during the drag');
+  assert.equal(host.children.length, 4, 'one zone per desk edge');
+  assert.ok(host.querySelector('.freeform-snap-zone.left.active'), 'left zone emphasized: snapPlace settles there');
+  assert.ok(!host.querySelector('.freeform-snap-zone.right.active'), 'other zones stay calm');
+
+  fakeDocument.dispatch('pointerup', { clientX: 10, clientY: 240 });
+  assert.ok(zoneHostIn(root), 'zone layer persists as an element but...');
+  assert.ok(!zoneHostIn(root).classList.contains('on'), 'switches off when the gesture settles');
+  assert.ok(!zoneHostIn(root).querySelector('.freeform-snap-zone.active'), 'no emphasized zone after settle');
+  assert.equal(manager.state('window_layers').state, 'docked', 'the emphasized dock applied');
+});
+
+test('Alt suppresses snap zones entirely during a drag', () => {
+  const { manager, root } = edgeSnapManager({ dock: 'left', rect: { x: 0, y: 66, width: 420, height: 650 } });
+  manager.open('layers', { rect: { x: 200, y: 200, width: 380, height: 280 } });
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 220, clientY: 220 });
+  fakeDocument.dispatch('pointermove', { clientX: 10, clientY: 240, buttons: 1, altKey: true });
+  const host = zoneHostIn(root);
+  assert.ok(!host || !host.classList.contains('on'), 'alt disables snapping: no visible zones');
+  fakeDocument.dispatch('pointerup', { clientX: 10, clientY: 240, altKey: true });
+  assert.equal(manager.state('window_layers').state, 'floating', 'alt release stays floating, as today');
+});
+
+test('a severed gesture (ev.buttons lost) clears the zones mid-drag', () => {
+  const { manager, root } = edgeSnapManager({ dock: 'left', rect: { x: 0, y: 66, width: 420, height: 650 } });
+  manager.open('layers', { rect: { x: 200, y: 200, width: 380, height: 280 } });
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 220, clientY: 220 });
+  fakeDocument.dispatch('pointermove', { clientX: 10, clientY: 240, buttons: 1 });
+  assert.ok(zoneHostIn(root) && zoneHostIn(root).classList.contains('on'), 'zones were up');
+
+  fakeDocument.dispatch('pointermove', { clientX: 12, clientY: 244, buttons: 0 }); // severed
+  assert.ok(zoneHostIn(root), 'layer element may remain mounted');
+  assert.ok(!zoneHostIn(root).classList.contains('on'), 'severed gesture switches the zones off');
+
+  // The torn-down gesture is dead: a later pointerup must not dock or persist.
+  const before = { ...manager.state('window_layers').rect };
+  fakeDocument.dispatch('pointerup', { clientX: 12, clientY: 244 });
+  assert.equal(manager.state('window_layers').state, 'floating');
+  assert.deepEqual(manager.state('window_layers').rect, before);
+});
+
+test('Escape cancels a pending drop: geometry reverts, overlays clear, nothing commits', () => {
+  const { manager, root } = edgeSnapManager({ dock: 'left', rect: { x: 0, y: 66, width: 420, height: 650 } });
+  manager.open('layers', { rect: { x: 200, y: 200, width: 380, height: 280 } });
+  const startRect = { ...manager.state('window_layers').rect };
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 220, clientY: 220 });
+  fakeDocument.dispatch('pointermove', { clientX: 10, clientY: 240, buttons: 1 });
+  assert.ok(root.children.some((c) => c.classList.contains('freeform-snap-preview')), 'preview was pending');
+
+  fakeDocument.dispatch('keydown', { key: 'Escape' });
+  assert.deepEqual(manager.state('window_layers').rect, startRect, 'pre-drag geometry restored');
+  assert.ok(!root.children.some((c) => c.classList.contains('freeform-snap-preview')), 'dock ghost cleared');
+  const host = zoneHostIn(root);
+  assert.ok(!host || !host.classList.contains('on'), 'zones cleared');
+
+  fakeDocument.dispatch('pointerup', { clientX: 10, clientY: 240 }); // dead gesture: no commit
+  assert.equal(manager.state('window_layers').state, 'floating', 'escape-cancelled drop never docks');
+  assert.deepEqual(manager.state('window_layers').rect, startRect);
+});
+
+test('docked -> floating restore roundtrip works for default-supported surfaces', () => {
+  let nearEdge = true;
+  const root = makeNode('div');
+  const manager = wm.WindowManager({
+    root, document: fakeDocument,
+    api: { upsertWorkspaceObject: (p) => Promise.resolve({ ok: true, object: p }), getWorkspace: () => Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }) },
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { edgeSnap: (rect, m) => (nearEdge ? { dock: 'left', rect: { x: 0, y: 66, width: rect.width, height: m.height - 150 } } : null) },
+  });
+  manager.open('probe', { rect: { x: 300, y: 200, width: 380, height: 300 } });
+  const id = 'window_probe';
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const head = frame.querySelector('.freeform-window-head');
+
+  head.dispatch('pointerdown', { button: 0, clientX: 320, clientY: 220 });
+  fakeDocument.dispatch('pointermove', { clientX: 8, clientY: 240, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 8, clientY: 240 });
+  assert.equal(manager.state(id).state, 'docked', 'transition(model, docked) applies for a default-supported surface');
+  assert.equal(manager.state(id).rect.x, 0, 'docked rect comes from dockRect/edgeSnap geometry');
+
+  nearEdge = false; // dragged away from every edge
+  head.dispatch('pointerdown', { button: 0, clientX: 30, clientY: 220 });
+  fakeDocument.dispatch('pointermove', { clientX: 500, clientY: 260, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 500, clientY: 260 });
+  const after = manager.state(id);
+  assert.equal(after.state, 'floating', 'releasing off-edge re-floats a docked window');
+  assert.equal(after.rect.x, 0 + (500 - 30), 'floating rect follows the free release point');
 });
 
 test('init seeds lastRevision so the first gated write is gate-protected', async () => {

@@ -9,6 +9,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -90,6 +91,7 @@ function install(defs = {}) {
     discardTakes: () => { calls.discard += 1; takeState = { count: 0, index: -1 }; },
     getCastState: () => castState,
     toggleBound: (id) => { castCalls.push(id); },
+    mountBeatTrail: defs.mountBeatTrail || null,
     getNotes: () => notesText,
     setNotes: (t) => { notesText = String(t); notesCalls.push(String(t)); },
     getProposals: () => proposals,
@@ -128,9 +130,9 @@ function hostOf(body, cls) {
 
 /* ------------------------------------------------------------- tests */
 
-test('installSurfaces registers scenes, layers and takes with registry metadata', () => {
+test('installSurfaces registers scenes, layers, takes and beats with registry metadata', () => {
   const { registry } = install();
-  assert.deepEqual([...registry.keys()].sort(), ['characters', 'layers', 'notes', 'proposals', 'scenes', 'takes']);
+  assert.deepEqual([...registry.keys()].sort(), ['beats', 'characters', 'layers', 'notes', 'proposals', 'scenes', 'takes']);
   const takes = registry.get('takes');
   assert.equal(takes.entityType, 'take_stack');
   assert.ok(Array.isArray(takes.supportedStates) && takes.supportedStates.includes('floating'));
@@ -257,6 +259,90 @@ test('notes surface registers and round-trips typing through the deps seam', () 
   c2.render();
   assert.equal(body2.children[0].value, 'hold on Lena longer');
   controller.destroy();
+});
+
+/* ------------------------------------------------- beats surface (Phase 3) */
+
+test('beats surface registers with beat_trail metadata and the beats: entityRef namespace', () => {
+  const { registry } = install();
+  const beats = registry.get('beats');
+  assert.ok(beats, 'beats registered');
+  assert.equal(beats.entityType, 'beat_trail');
+  // Partner move_panel compatibility: the durable window object keeps a
+  // typed entityRef inside the documented beats: namespace.
+  assert.equal(beats.entityRefPrefix, 'beats');
+  assert.ok(beats.supportedStates.includes('floating') && beats.supportedStates.includes('minimised'));
+  assert.ok(beats.minimumSize.width > 0 && beats.minimumSize.height > 0);
+});
+
+test('opening the beats surface mounts the EXISTING trail content into the window body', () => {
+  const mountedHosts = [];
+  const { registry } = install({
+    mountBeatTrail(host) {
+      mountedHosts.push(host);
+      const root = makeNode('div');
+      root.classList.add('beat-trail');
+      host.appendChild(root);
+      return { render() {}, destroy() {} };
+    },
+  });
+  const { body, controller } = mount(registry, 'beats');
+  assert.equal(mountedHosts.length, 1, 'the trail mounts once per window open');
+  assert.equal(mountedHosts[0], body, 'the trail mounts into the registry window body');
+  assert.ok(hostOf(body, 'beat-trail'), 'existing beats.js content renders unrewritten');
+  controller.destroy();
+});
+
+test('shot-change refresh updates trail content through the registry lifecycle', () => {
+  let spec = { shotId: 'S01', beats: [{ id: 'b1', rawDirection: 'she turns her head' }] };
+  let rowRef = null;
+  const { registry } = install({
+    mountBeatTrail(host) {
+      const row = makeNode('div');
+      row.classList.add('beat-row');
+      host.appendChild(row);
+      rowRef = row;
+      return {
+        render() { row.textContent = `${spec.shotId}:${spec.beats.map((b) => b.rawDirection).join('|')}`; },
+        destroy() {},
+      };
+    },
+  });
+  const { controller } = mount(registry, 'beats');
+  controller.render();
+  assert.equal(rowRef.textContent, 'S01:she turns her head');
+  // Shot changes while the window is open, minimised or grouped: the
+  // instance persists, so refreshAll -> controller.render shows the new shot.
+  spec = { shotId: 'S02', beats: [{ id: 'b2', rawDirection: 'he lunges' }] };
+  controller.render();
+  assert.equal(rowRef.textContent, 'S02:he lunges', 'content follows the shot change');
+});
+
+test('beats surface shows an honest empty state when no trail seam is provided', () => {
+  const { registry } = install(); // no mountBeatTrail dep
+  const { body } = mount(registry, 'beats');
+  assert.ok(hostOf(body, 'freeform-beat-empty'), 'fallback note instead of a dead window');
+});
+
+test('desktop Beats entry point routes through the registry window; bespoke shell is gated off there', () => {
+  const appSource = fs.readFileSync(path.join(ROOT, 'public/js/app.js'), 'utf8');
+  // Tool click delegates to the registry window first...
+  const toolAt = appSource.indexOf("t === 'beats'");
+  assert.notEqual(toolAt, -1, 'beats tool binding present');
+  const branch = appSource.slice(toolAt, appSource.indexOf('\n', toolAt));
+  assert.match(branch, /toggleBeatsSurface\(\)/, 'entry point opens/focuses window_beats');
+  // ...and only falls back to the bespoke shell where freeform never mounted
+  // (default experience / sub-900px legacy path stays intact).
+  assert.match(branch, /state\.beatTrail\.toggle\(\)/);
+  assert.match(appSource, /if \(!toggleBeatsSurface\(\) && state\.beatTrail\) state\.beatTrail\.toggle\(\)/);
+  // panel_beats is not registered on the freeform desktop path.
+  const regionStart = appSource.indexOf("id: 'panel_layers'");
+  const regionEnd = appSource.indexOf("id: 'panel_partner'");
+  const region = appSource.slice(regionStart, regionEnd);
+  assert.match(region, /if \(!useFreeformDesk\) \{[\s\S]*id: 'panel_beats'/,
+    'bespoke panel_beats registration is skipped when the registry desk mounts');
+  // The registry window opens with a beats:-namespaced entityRef.
+  assert.match(appSource, /open\('beats', \{ entityRef: 'beats:[A-Za-z0-9_.-]+' \}\)/);
 });
 
 test('proposals surface shows the empty state with no pending suggestions', () => {

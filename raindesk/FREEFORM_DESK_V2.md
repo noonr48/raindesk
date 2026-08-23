@@ -104,7 +104,8 @@ non-committal; Escape cancels a pending drop.
    into surface modules; zero scrim/wrapper entanglement.
 2. **Reference Board** — already a world sheet; unify its MutationObserver
    chrome injection into the registry.
-3. **Beats** — registered; `refresh/setShot` coupling moves behind the
+3. **Beats** — registered (was claimed registered on 2026-08-21 but actually
+   bespoke until 2026-08-23); `refresh/setShot` coupling moves behind the
    registry's focus events.
 4. **Partner LAST** — highest coupling: scrim close, mobile fallback (the
    workspace shell is disabled <900px today), `surface-handoff` hard-targets,
@@ -188,6 +189,35 @@ so ungated upserts no longer desync gated groups/shelf writes — the
 409 adopt-and-retry now works against the real server (ApiError carries
 `workspace`), with per-route warned flags.
 
+## 10. Floating-window evolution (2026-08-23)
+
+Owner reference mockup (`/tmp/raindesk-vision-ref.png`) drove three gap-
+closers on top of Phases 1–6:
+
+1. **Free scale** — resize grew from a single corner grip to 8-way
+   (`RESIZE_DIRECTIONS` n/s/e/w/ne/nw/se/sw in `window-manager.js`), each
+   direction clamped against its anchored edge so per-surface minimumSize
+   holds; gesture laws unchanged (pointerId filter, cancel-reverts,
+   persist-on-commit, maximised refuses).
+2. **Visible snap zones** — during a header drag of a dock-capable window,
+   four paper-language edge drop zones render (`.freeform-snap-zones`,
+   left/right/top/bottom at 32% depth), the settling edge emphasized;
+   cleared on settle AND on severed gestures; Alt still disables.
+3. **Snap for every window** — `docked` joined the register() default
+   `supportedStates` AND every real surface declaration in
+   `freeform-surfaces.js` (an earlier state left all seven surfaces
+   explicitly opting out, which silently disabled snapping everywhere —
+   caught by adversarial review). Drag off an edge re-floats a docked
+   window.
+4. **Beats migrated** onto the registry (surface id `beats`, entityRef
+   `beats:…`); the bespoke desktop shell only mounts when the freeform
+   desk did not (`useFreeFormDesk` gate).
+
+Journey steps 8 and 24 were rewritten for the new contract (dock→re-float
+roundtrips + snap-ghost leak check). Suite 290/290; journey {ok:true,
+steps:25} witnessed after the last mutation.
+
 Remaining honest limitations: single-viewport journey (mobile evidence
 and regressions harness per §7 are future work); bespoke layout code of
-§5 still present alongside the registry surfaces.
+§5 still present alongside the registry surfaces (Partner drawer, scene
+strip, reference board sheet, shot canvas world object).

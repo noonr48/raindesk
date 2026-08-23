@@ -93,15 +93,22 @@
 
 .freeform-window-collapsed .freeform-window-body { display: none; }
 
+/* 8-way resize handles: thin edge strips + corner pads. The se corner
+ * keeps the classic generous pad; edges sit slightly outside the frame so
+ * a steep pointer never misses them. */
 .freeform-window-resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 16px;
-  height: 16px;
-  cursor: nwse-resize;
   touch-action: none;
+  z-index: 6;
 }
+.freeform-window-resize.n  { top: -4px; left: 12px; right: 12px; height: 9px; cursor: ns-resize; }
+.freeform-window-resize.s  { bottom: -4px; left: 12px; right: 12px; height: 9px; cursor: ns-resize; }
+.freeform-window-resize.e  { right: -4px; top: 12px; bottom: 12px; width: 9px; cursor: ew-resize; }
+.freeform-window-resize.w  { left: -4px; top: 12px; bottom: 12px; width: 9px; cursor: ew-resize; }
+.freeform-window-resize.ne { top: -4px; right: -4px; width: 15px; height: 15px; cursor: nesw-resize; }
+.freeform-window-resize.nw { top: -4px; left: -4px; width: 15px; height: 15px; cursor: nwse-resize; }
+.freeform-window-resize.se { right: -4px; bottom: -4px; width: 15px; height: 15px; cursor: nwse-resize; }
+.freeform-window-resize.sw { bottom: -4px; left: -4px; width: 15px; height: 15px; cursor: nesw-resize; }
 
 .freeform-window-focused {
   box-shadow: var(--sheet-shadow-raised, 0 6px 22px rgba(35, 30, 24, 0.18));
@@ -122,6 +129,33 @@
 }
 .freeform-snap-preview.freeform-snap-preview-hidden { opacity: 0; }
 
+/* Phase 6: visible edge drop zones while a docking-capable window is
+ * dragged — four calm paper washes over the desk edges; the zone
+ * snapPlace() would settle into carries the accent emphasis. The layer
+ * is display:none unless a drag switches it on. */
+.freeform-snap-zones {
+  display: none;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0; /* beneath every window, beside the preview */
+}
+.freeform-snap-zones.on { display: block; }
+.freeform-snap-zone {
+  position: absolute;
+  border-radius: 10px;
+  background: rgba(35, 30, 24, 0.04);
+  box-shadow: inset 0 0 0 1px var(--paper-edge, #d8d2c4);
+}
+.freeform-snap-zone.left   { left: 0; top: 0; bottom: 0; width: 32%; }
+.freeform-snap-zone.right  { right: 0; top: 0; bottom: 0; width: 32%; }
+.freeform-snap-zone.top    { left: 0; right: 0; top: 0; height: 32%; }
+.freeform-snap-zone.bottom { left: 0; right: 0; bottom: 0; height: 32%; }
+.freeform-snap-zone.active {
+  background: var(--desk-accent-wash, rgba(193, 108, 42, 0.14));
+  box-shadow: inset 0 0 0 1.5px var(--desk-accent, #c16c2a);
+}
+
 .freeform-window-maximised {
   border-radius: 0;
   border: none;
@@ -134,7 +168,8 @@
   .freeform-window-btn,
   .freeform-window-tab,
   .freeform-shelf-chip,
-  .freeform-snap-preview {
+  .freeform-snap-preview,
+  .freeform-snap-zone {
     transition: none !important;
   }
 }

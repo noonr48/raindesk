@@ -38,6 +38,8 @@
    *   commitTake() -> void, discardTakes() -> void,
    *   getCastState() -> { shotId, characters: [{id,name,locked,anchors}], boundIds } | null,
    *   toggleBound(characterId) -> void,
+   *   mountBeatTrail(host) -> { render, destroy } (installs the EXISTING
+   *   beats.js BeatTrail into a registry window body; Phase 3 unit 2),
    *   getNotes() -> string, setNotes(text) -> void,
    *   getProposals() -> [{id,type,label,status,executable}] ,
    *   applyProposal(id) -> Promise<void>, cancelProposal(id) -> Promise<void>,
@@ -71,7 +73,7 @@
       entityRefPrefix: 'scenes',
       minimumSize: { width: 260, height: 200 },
       defaultPlacement: { width: 340, height: 420, x: 24, y: 96 },
-      supportedStates: ['floating', 'minimised', 'maximised'],
+      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
         const list = el(doc, 'div', 'freeform-scene-rows');
         body.appendChild(list);
@@ -103,7 +105,7 @@
       entityRefPrefix: 'layers',
       minimumSize: { width: 240, height: 180 },
       defaultPlacement: { width: 300, height: 380, x: null, y: 96 },
-      supportedStates: ['floating', 'minimised', 'maximised'],
+      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
         const list = el(doc, 'div', 'freeform-layer-rows');
         body.appendChild(list);
@@ -150,7 +152,7 @@
       entityRefPrefix: 'takes',
       minimumSize: { width: 220, height: 120 },
       defaultPlacement: { width: 260, height: 150, x: null, y: 96 },
-      supportedStates: ['floating', 'minimised', 'maximised'],
+      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
         const label = el(doc, 'span', 'freeform-take-label', '');
         const prev = el(doc, 'button', 'freeform-take-prev', '◀');
@@ -183,13 +185,35 @@
     });
 
     surfaces.register({
+      id: 'beats',
+      title: 'Beats',
+      entityType: 'beat_trail',
+      entityRefPrefix: 'beats',
+      minimumSize: { width: 300, height: 240 },
+      defaultPlacement: { width: 350, height: 430, x: null, y: 96 },
+      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
+      createController: ({ body, document: doc }) => {
+        // Phase 3 unit 2: the trail rendering itself stays in beats.js — this
+        // surface only hosts it. deps.mountBeatTrail installs the existing
+        // BeatTrail into this window body and returns its controller so
+        // refresh/setShot ride the registry lifecycle.
+        if (typeof deps.mountBeatTrail !== 'function') {
+          const note = el(doc, 'p', 'freeform-beat-empty', 'beat trail unavailable');
+          body.appendChild(note);
+          return { render() {}, destroy() { body.innerHTML = ''; } };
+        }
+        return deps.mountBeatTrail(body);
+      },
+    });
+
+    surfaces.register({
       id: 'characters',
       title: 'Characters',
       entityType: 'character_registry',
       entityRefPrefix: 'characters',
       minimumSize: { width: 240, height: 160 },
       defaultPlacement: { width: 300, height: 340, x: null, y: 96 },
-      supportedStates: ['floating', 'minimised', 'maximised'],
+      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
         contextStrip(doc, body, [{
           label: 'refresh cast',
@@ -233,7 +257,7 @@
       entityRefPrefix: 'notes',
       minimumSize: { width: 200, height: 140 },
       defaultPlacement: { width: 280, height: 220, x: null, y: 96 },
-      supportedStates: ['floating', 'minimised', 'maximised'],
+      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
         const ta = el(doc, 'textarea', 'freeform-notes-area');
         ta.rows = 6;
@@ -260,7 +284,7 @@
       entityRefPrefix: 'proposals',
       minimumSize: { width: 240, height: 140 },
       defaultPlacement: { width: 320, height: 240, x: null, y: 96 },
-      supportedStates: ['floating', 'minimised', 'maximised'],
+      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
         contextStrip(doc, body, [{
           label: 'refresh',
