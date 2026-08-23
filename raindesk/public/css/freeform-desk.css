@@ -155,6 +155,7 @@
   background: var(--desk-accent-wash, rgba(193, 108, 42, 0.14));
   box-shadow: inset 0 0 0 1.5px var(--desk-accent, #c16c2a);
 }
+.freeform-snap-zone.blocked { display: none; } /* edge outside the surface's dock policy: not a target */
 
 .freeform-window-maximised {
   border-radius: 0;

@@ -136,6 +136,7 @@ test('installSurfaces registers scenes, layers, takes and beats with registry me
   const takes = registry.get('takes');
   assert.equal(takes.entityType, 'take_stack');
   assert.ok(Array.isArray(takes.supportedStates) && takes.supportedStates.includes('floating'));
+  assert.ok(!takes.supportedStates.includes('docked'), 'dock policy: Takes never docks (compact controls, not panel content)');
   assert.ok(takes.minimumSize.width > 0 && takes.minimumSize.height > 0);
 });
 

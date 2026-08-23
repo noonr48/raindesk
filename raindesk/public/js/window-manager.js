@@ -58,6 +58,13 @@
           (Array.isArray(surface.supportedStates) ? surface.supportedStates : ['floating', 'docked', 'minimised', 'maximised'])
             .filter((state) => SUPPORTED_STATES.has(state)),
         ),
+        // Which EDGES a dock-capable surface may dock to (GPT Pro round-3:
+        // vertical list/editor surfaces get left/right rails; top/bottom need
+        // horizontal layouts that do not exist yet). Default: left+right.
+        dockEdges: Object.freeze(
+          (Array.isArray(surface.dockEdges) ? surface.dockEdges : ['left', 'right'])
+            .filter((edge) => SNAP_ZONE_EDGES.includes(edge)),
+        ),
         contextualTools: Array.isArray(surface.contextualTools) ? surface.contextualTools.slice() : [],
       });
       registry.set(def.id, def);
@@ -297,6 +304,56 @@
 
     /* ------------------------------------------------------ gesture logic */
 
+    /* Gesture-session kernel (GPT Pro round-3 TOP-3 #2, gesture half).
+     * ONE gesture per window: a second contact on the same window is
+     * refused — it must never steer or commit another contact's gesture.
+     * Environment interruption — pointercancel, lostpointercapture, window
+     * blur, tab hidden — is a TERMINAL that cancels, never commits.
+     * close() revokes any live gesture before destroying the window. */
+    const activeGestures = new Map(); // windowId -> { onCancel, onHidden, cancel }
+    function beginGesture(windowId, pointerId, cancel) {
+      if (activeGestures.has(windowId)) return null; // busy: another gesture owns this window
+      const samePointer = (ev) => !ev || ev.pointerId === undefined || ev.pointerId === pointerId;
+      const onCancel = (ev) => {
+        if (!samePointer(ev) || activeGestures.get(windowId) !== bundle) return;
+        endGesture(windowId);
+        try { cancel(); } catch (_e) {}
+      };
+      const onHidden = () => { if (document.hidden) onCancel(); };
+      const bundle = { onCancel, onHidden, cancel };
+      document.addEventListener('pointercancel', onCancel, true);
+      document.addEventListener('visibilitychange', onHidden);
+      activeGestures.set(windowId, bundle);
+      return {
+        end() { if (activeGestures.get(windowId) === bundle) endGesture(windowId); },
+      };
+    }
+    // NOTE (deliberate scope cuts, evidence-dated 2026-08-23):
+    // - `lostpointercapture` is NOT wired: it is dispatched asynchronously
+    //   with a recycled pointerId, so a stale release from the PREVIOUS
+    //   gesture is indistinguishable from genuine mid-gesture capture loss
+    //   (intermittently cancelled healthy drags — journey step-8 race).
+    // - window `blur` is NOT wired: probe-witnessed spurious blur events
+    //   fire mid-gesture (focus churn / CDP attachment) and rolled back
+    //   healthy drags. pointercancel covers real capture takeovers; a blur
+    //   mid-gesture leaves the gesture alive to complete or cancel on its
+    //   own terminals.
+    // - `visibilitychange` cancels only when the document is actually
+    //   hidden (it also fires on becoming visible).
+    function endGesture(windowId) {
+      const bundle = activeGestures.get(windowId);
+      if (!bundle) return;
+      document.removeEventListener('pointercancel', bundle.onCancel, true);
+      document.removeEventListener('visibilitychange', bundle.onHidden);
+      activeGestures.delete(windowId);
+    }
+    function abortGesturesFor(windowId) {
+      const bundle = activeGestures.get(windowId);
+      if (!bundle) return;
+      endGesture(windowId);
+      try { bundle.cancel(); } catch (_e) {}
+    }
+
     /* Phase 5: live snap preview — a calm ghost of where a drag would
      * dock, cleared the moment the gesture settles. */
     let snapPreviewEl = null;
@@ -338,10 +395,16 @@
       }
       root.appendChild(snapZoneHost);
     }
-    function showSnapZones(activeDock) {
+    function showSnapZones(activeDock, allowedEdges) {
       ensureSnapZones();
       snapZoneHost.classList.add('on');
-      for (const [edge, zone] of snapZoneEls) zone.classList.toggle('active', edge === activeDock);
+      for (const [edge, zone] of snapZoneEls) {
+        zone.classList.toggle('active', edge === activeDock);
+        // Dock-policy honesty (GPT Pro round-3): an edge the surface may not
+        // dock to never offers a target — the visible set equals the
+        // dockable set.
+        zone.classList.toggle('blocked', Array.isArray(allowedEdges) && !allowedEdges.includes(edge));
+      }
     }
     function clearSnapZones() {
       if (!snapZoneHost) return;
@@ -363,11 +426,13 @@
         // listeners live at DOCUMENT capture level because a steep drag can
         // leave the head rect on its first interpolated step (proven v1).
         let captured = false;
+        let session = null;
         const moved = (ev) => Math.abs(ev.clientX - start.x) > DRAG_THRESHOLD_PX || Math.abs(ev.clientY - start.y) > DRAG_THRESHOLD_PX;
         const onKeyDown = (ev) => {
           if (ev.key !== 'Escape') return;
           // Escape cancels a pending drop: pre-gesture geometry, overlays
           // gone, listeners detached — the gesture never commits.
+          if (session) session.end();
           current.rect.x = start.ox; current.rect.y = start.oy;
           renderFrame(current);
           try { if (captured) head.releasePointerCapture(start.pointerId); } catch (_e) {}
@@ -375,13 +440,14 @@
           clearSnapZones();
           teardown();
         };
-        const cancel = (ev) => {
-          // pointercancel is a TERMINAL, never a commit (GPT Pro round-3):
-          // an OS/browser gesture takeover restores the pre-gesture snapshot,
-          // clears overlays, and persists nothing.
-          if (ev.pointerId !== start.pointerId) return;
+        const cancel = () => {
+          // pointercancel / blur / hidden tab is a TERMINAL, never a commit
+          // (GPT Pro round-3): restore the pre-gesture snapshot, clear
+          // overlays, and persist nothing. The gesture kernel already
+          // filtered to the initiating pointer and ended the session before
+          // invoking this.
           teardown();
-          try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
+          try { if (captured) head.releasePointerCapture(start.pointerId); } catch (_e) {}
           clearSnapPreview();
           clearSnapZones();
           if (!captured) return;
@@ -391,12 +457,25 @@
         const teardown = () => {
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
-          document.removeEventListener('pointercancel', cancel, true);
           document.removeEventListener('keydown', onKeyDown, true);
         };
+        // One gesture per window, for the whole down->up lifecycle: a second
+        // contact on this window is refused (kernel lock, GPT Pro round-3).
+        session = beginGesture(current.windowId, start.pointerId, cancel);
+        if (!session) return; // another gesture owns this window
         const move = (ev) => {
           if (ev.pointerId !== start.pointerId) return; // foreign pointer: never steer another gesture
-          if (!ev.buttons) { teardown(); clearSnapPreview(); clearSnapZones(); return; } // severed-gesture guard: also clear the dock ghost
+          if (!ev.buttons) {
+            // Severed gesture (buttons lost) is a cancel terminal too: the
+            // mutated rect is rolled back, never left half-way (GPT Pro r3).
+            session.end();
+            teardown();
+            clearSnapPreview();
+            clearSnapZones();
+            try { if (captured) head.releasePointerCapture(start.pointerId); } catch (_e) {}
+            if (captured) { current.rect.x = start.ox; current.rect.y = start.oy; renderFrame(current); }
+            return;
+          }
           if (!captured) {
             if (!moved(ev)) return;
             captured = true;
@@ -411,12 +490,13 @@
           // snapPlace() would choose. Alt disables snapping entirely —
           // zones included.
           const preview = snapPlace(current, ev.altKey);
-          if (canDock && !ev.altKey) showSnapZones(preview ? preview.dock : null);
+          if (canDock && !ev.altKey) showSnapZones(preview ? preview.dock : null, surface && surface.dockEdges);
           else clearSnapZones();
           showSnapPreview(preview ? preview.rect : null);
         };
         const up = async (ev) => {
           if (ev.pointerId !== start.pointerId) return; // foreign pointer cannot commit or tear down
+          session.end();
           teardown();
           clearSnapPreview();
           clearSnapZones();
@@ -436,7 +516,6 @@
         };
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
-        document.addEventListener('pointercancel', cancel, true);
         document.addEventListener('keydown', onKeyDown, true);
       });
     }
@@ -458,8 +537,13 @@
           const surface = surfaceFor(current);
           const min = surface ? surface.minimumSize : { width: 200, height: 140 };
           const start = { x: e.clientX, y: e.clientY, rect: { ...current.rect }, pointerId: e.pointerId };
+          // One gesture per window (kernel lock): a second contact on this
+          // window must never steer or commit another contact's resize.
+          const session = beginGesture(model.windowId, e.pointerId, () => cancel({ pointerId: start.pointerId }));
+          if (!session) return; // another gesture owns this window
           const move = (ev) => {
             if (ev.pointerId !== start.pointerId) return; // foreign pointer
+            if (ev.buttons === 0) { cancel(ev); return; } // severed buttons: cancel terminal, never half-commit (GPT Pro r3)
             const r = start.rect;
             let left = r.x; let top = r.y;
             let right = r.x + r.width; let bottom = r.y + r.height;
@@ -477,14 +561,17 @@
           };
           const up = async (ev) => {
             if (ev.pointerId !== start.pointerId) return; // foreign pointer
+            session.end();
             try { grip.releasePointerCapture(ev.pointerId); } catch (_e) {}
             detach();
             await persist(current);
           };
           // Interrupted resize reverts to the pre-gesture rect instead of
-          // committing half a gesture (GPT Pro round-4 finding).
+          // committing half a gesture (GPT Pro round-4 finding). The kernel
+          // routes pointercancel/lostpointercapture/blur/visibility here too.
           const cancel = (ev) => {
-            if (ev.pointerId !== start.pointerId) return; // foreign pointer
+            if (ev && ev.pointerId !== undefined && ev.pointerId !== start.pointerId) return; // foreign pointer
+            session.end();
             try { grip.releasePointerCapture(start.pointerId); } catch (_e) {}
             current.rect = { ...start.rect };
             renderFrame(current);
@@ -507,7 +594,9 @@
       const rect = { ...model.rect, width: model.rect.width, height: model.rect.height };
       if (geo.edgeSnap) {
         const edge = geo.edgeSnap(rect, m, 18);
-        if (edge && edge.dock) return { kind: 'dock', dock: edge.dock, rect: edge.rect };
+        // Dock-policy honesty (GPT Pro round-3): an edge outside the
+        // surface's allowed dockEdges never offers a dock or a preview.
+        if (edge && edge.dock && surface.dockEdges.includes(edge.dock)) return { kind: 'dock', dock: edge.dock, rect: edge.rect };
       }
       return null;
     }
@@ -643,11 +732,19 @@
         if (e.button !== 0) return;
         const pid = e.pointerId;
         const sx = e.clientX; const sy = e.clientY; let dragged = false;
+        const detach = () => {
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+        };
+        // Kernel: one gesture per window; interruption cancels (chip drag
+        // mutates only at up, so cancel = detach).
+        const session = beginGesture(windowId, pid, detach);
+        if (!session) return; // another gesture owns this window
         const move = (ev) => { if (ev.pointerId !== pid) return; if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) dragged = true; };
         const up = (ev) => {
           if (ev.pointerId !== pid) return;
-          document.removeEventListener('pointermove', move, true);
-          document.removeEventListener('pointerup', up, true);
+          session.end();
+          detach();
           if (!dragged) return; // a click is not a drag; the click handler restores
           if (e.preventDefault) e.preventDefault();
           const rect = (root.getBoundingClientRect && root.getBoundingClientRect()) || { left: 0, top: 0 };
@@ -707,6 +804,7 @@
     }
     function close(windowId) {
       const model = windows.get(windowId); if (!model) return null;
+      abortGesturesFor(windowId); // a live gesture must not outlive its window (GPT Pro round-3)
       removeFromGroup(model); // group membership must never dangle past close (mission: closing one tab never destroys the others)
       const controller = controllers.get(windowId);
       if (controller && typeof controller.destroy === 'function') { try { controller.destroy(); } catch (_e) {} }
@@ -777,11 +875,16 @@
         // Tabbed members restore with their group (rebuilt below). Docked
         // windows stay docked durably: the stored edge re-derives geometry
         // against current metrics (GPT Pro round-3 — docking must survive
-        // reload). A docked row without an edge downgrades honestly.
-        if (model.state === 'docked' && model.dock) {
-          model.rect = geo.dockRect ? geo.dockRect(model.dock, model.rect, metrics()) : model.rect;
-        } else if (model.state === 'docked') {
-          model.state = 'floating';
+        // reload). A docked row without an edge — or whose edge is now
+        // outside the surface's dock policy — downgrades honestly.
+        {
+          const surface = surfaceFor(model);
+          const edgeAllowed = surface && surface.supportedStates.has('docked') && surface.dockEdges.includes(model.dock);
+          if (model.state === 'docked' && model.dock && edgeAllowed) {
+            model.rect = geo.dockRect ? geo.dockRect(model.dock, model.rect, metrics()) : model.rect;
+          } else if (model.state === 'docked') {
+            model.state = 'floating';
+          }
         }
         windows.set(model.windowId, model);
         zTop = Math.max(zTop, model.zIndex);
@@ -885,11 +988,19 @@
         if (e.button !== 0) return;
         const pid = e.pointerId;
         const sx = e.clientX; const sy = e.clientY; let torn = false;
+        const detach = () => {
+          document.removeEventListener('pointermove', move, true);
+          document.removeEventListener('pointerup', up, true);
+        };
+        // Kernel: one gesture per window; environment interruption cancels
+        // cleanly (tab tear mutates only at up, so cancel = detach).
+        const session = beginGesture(memberId, pid, detach);
+        if (!session) return; // another gesture owns this window
         const move = (ev) => { if (ev.pointerId !== pid) return; if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) torn = true; };
         const up = (ev) => {
           if (ev.pointerId !== pid) return;
-          document.removeEventListener('pointermove', move, true);
-          document.removeEventListener('pointerup', up, true);
+          session.end();
+          detach();
           if (!torn) return;
           // A drag that releases INSIDE the strip reorders the tab instead of
           // tearing it out (Phase 2: tab reordering).

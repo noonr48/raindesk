@@ -1073,3 +1073,76 @@ test('drag pointercancel is a terminal: geometry reverts, overlays clear, nothin
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(persistCalls.length, baseline, 'cancellation persists nothing');
 });
+
+/* ------------------- phase: gesture kernel lock + dock-edge policies */
+
+test('gesture lock: a second contact on the same window is refused while a gesture is live', async () => {
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('layers');
+  const id = 'window_layers';
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const head = frame.querySelector('.freeform-window-head');
+  // First pointer starts and captures the window's gesture slot.
+  head.dispatch('pointerdown', { button: 0, clientX: 300, clientY: 110, pointerId: 1 });
+  fakeDocument.dispatch('pointermove', { clientX: 220, clientY: 150, buttons: 1, pointerId: 1 });
+  const withOne = { ...manager.state(id).rect };
+  assert.notEqual(withOne.x, 400, 'sanity: pointer 1 moved the frame');
+  // Second pointer on the SAME window must be refused: no listener was
+  // installed for it, so its moves cannot steer the frame (GPT Pro r3).
+  head.dispatch('pointerdown', { button: 0, clientX: 220, clientY: 150, pointerId: 2 });
+  fakeDocument.dispatch('pointermove', { clientX: 900, clientY: 700, buttons: 1, pointerId: 2 });
+  assert.deepEqual(manager.state(id).rect, withOne, 'foreign pointer 2 never steers a live gesture');
+  fakeDocument.dispatch('pointerup', { clientX: 220, clientY: 150, pointerId: 1 });
+  await new Promise((r) => setTimeout(r, 0));
+  // Lock released at up: a new gesture on the same window must work again.
+  head.dispatch('pointerdown', { button: 0, clientX: 220, clientY: 150, pointerId: 3 });
+  fakeDocument.dispatch('pointermove', { clientX: 260, clientY: 150, buttons: 1, pointerId: 3 });
+  fakeDocument.dispatch('pointerup', { clientX: 260, clientY: 150, pointerId: 3 });
+  assert.equal(manager.state(id).rect.x, withOne.x + 40, 'gesture lock releases at up: next gesture proceeds');
+});
+
+test('dock policy: an edge outside dockEdges never docks and its zone never paints', async () => {
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { edgeSnap: () => ({ dock: 'top', rect: { x: 0, y: 0, width: 640, height: 800 } }) },
+  });
+  manager.open('layers'); // layers: dockable, default dockEdges left+right — top NOT allowed
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 600, clientY: 110 });
+  fakeDocument.dispatch('pointermove', { clientX: 620, clientY: 10, buttons: 1 });
+  assert.ok(!root.children.some((c) => c.classList.contains('freeform-snap-preview')), 'no preview for a policy-forbidden edge');
+  const host = zoneHostIn(root);
+  assert.ok(host && host.classList.contains('on'), 'zones visible for a dock-capable drag');
+  assert.ok(host.querySelector('.freeform-snap-zone.top.blocked'), 'the forbidden edge is masked out');
+  assert.ok(!host.querySelector('.freeform-snap-zone.left.blocked'), 'allowed edges still paint');
+  fakeDocument.dispatch('pointerup', { clientX: 620, clientY: 10 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(manager.state('window_layers').state, 'floating', 'release over a forbidden edge never docks');
+});
+
+test('init downgrades a persisted docked row whose edge is outside the surface policy', async () => {
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() {
+      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
+        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 400, height: 300, zIndex: 3, state: 'docked', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'top' },
+      ], groups: [], shelf: { windowIds: [] } });
+    },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  assert.equal(manager.state('window_layers').state, 'floating', 'top-docked layers row downgrades: top is outside its dock policy');
+});

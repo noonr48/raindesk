@@ -152,7 +152,9 @@
       entityRefPrefix: 'takes',
       minimumSize: { width: 220, height: 120 },
       defaultPlacement: { width: 260, height: 150, x: null, y: 96 },
-      supportedStates: ['floating', 'docked', 'minimised', 'maximised'],
+      // Dock policy (GPT Pro round-3 Q7): Takes is compact transport controls,
+      // not panel content — it stays a free-floating card and never docks.
+      supportedStates: ['floating', 'minimised', 'maximised'],
       createController: ({ body, document: doc }) => {
         const label = el(doc, 'span', 'freeform-take-label', '');
         const prev = el(doc, 'button', 'freeform-take-prev', '◀');
