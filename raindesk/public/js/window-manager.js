@@ -153,10 +153,12 @@
         width: Math.round(model.rect.width), height: Math.round(model.rect.height),
         zIndex: model.zIndex,
         state: model.state,
+        dock: model.dock || null,
         collapsed: model.collapsed,
         pinned: model.pinned,
         locked: model.locked,
       })).then((res) => {
+        model.persisted = true;
         // Ungated upserts still bump the server revision; adopt it (monotonic —
         // an older response arriving late must never move it backward) so
         // gated structural writes (groups/shelf) do not fire stale.
@@ -368,14 +370,28 @@
           // gone, listeners detached — the gesture never commits.
           current.rect.x = start.ox; current.rect.y = start.oy;
           renderFrame(current);
+          try { if (captured) head.releasePointerCapture(start.pointerId); } catch (_e) {}
           clearSnapPreview();
           clearSnapZones();
           teardown();
         };
+        const cancel = (ev) => {
+          // pointercancel is a TERMINAL, never a commit (GPT Pro round-3):
+          // an OS/browser gesture takeover restores the pre-gesture snapshot,
+          // clears overlays, and persists nothing.
+          if (ev.pointerId !== start.pointerId) return;
+          teardown();
+          try { if (captured) head.releasePointerCapture(ev.pointerId); } catch (_e) {}
+          clearSnapPreview();
+          clearSnapZones();
+          if (!captured) return;
+          current.rect.x = start.ox; current.rect.y = start.oy;
+          renderFrame(current);
+        };
         const teardown = () => {
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
-          document.removeEventListener('pointercancel', up, true);
+          document.removeEventListener('pointercancel', cancel, true);
           document.removeEventListener('keydown', onKeyDown, true);
         };
         const move = (ev) => {
@@ -414,13 +430,13 @@
           if (drop && drop.kind === 'group') { joinGroup(current.windowId, drop.targetWindowId); return; }
           const snapped = snapPlace(current, ev.altKey);
           if (snapped) applySnap(current, snapped);
-          else if (current.state === 'docked') transition(current, 'floating'); // dragged off the edge re-floats
+          else if (current.state === 'docked') { current.dock = null; transition(current, 'floating'); } // dragged off the edge re-floats
           renderFrame(current);
           await persist(current);
         };
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
-        document.addEventListener('pointercancel', up, true);
+        document.addEventListener('pointercancel', cancel, true);
         document.addEventListener('keydown', onKeyDown, true);
       });
     }
@@ -498,6 +514,7 @@
     function applySnap(model, snapped) {
       if (snapped.kind === 'dock') {
         model.rect = { ...snapped.rect };
+        model.dock = snapped.dock; // durable edge: docking must survive reload (GPT Pro round-3)
         transition(model, 'docked');
       }
     }
@@ -521,6 +538,7 @@
         rect: clampRect(options.rect || defaultRect(surface), surface),
         zIndex: ++zTop,
         state: 'floating',
+        dock: null,
         collapsed: false, pinned: false, locked: false,
         restoreRect: null,
         onRename: options.onRename || null,
@@ -696,6 +714,20 @@
       windows.delete(windowId); controllers.delete(windowId); saves.delete(windowId);
       if (focusedId === windowId) focusedId = null;
       persistStructure();
+      if (model.persisted && api && typeof api.deleteWorkspaceWindow === 'function') {
+        // Close is authoritative server-side too (GPT Pro round-3): without
+        // this the row survives and the surface resurrects on reload. The
+        // delete chains AFTER pending saves, so a queued upsert can never
+        // resurrect a closed window.
+        writeChain = writeChain.then(() => api.deleteWorkspaceWindow(windowId, { baseRevision: lastRevision }))
+          .then((res) => { if (res && Number.isFinite(res.revision)) lastRevision = Math.max(lastRevision, res.revision); })
+          .catch((error) => {
+            if (!model.closeDeleteFailed) {
+              model.closeDeleteFailed = true;
+              console.warn(`[freeform] window ${windowId} close-delete failed:`, error && error.message || error);
+            }
+          });
+      }
       return model;
     }
 
@@ -738,12 +770,19 @@
           state: SUPPORTED_STATES.has(win.state) ? win.state : 'floating',
           collapsed: Boolean(win.collapsed), pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
           groupId: win.groupId || null,
+          dock: win.dock || null,
           restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null, tabsSlot: null,
         };
         if (model.state === 'minimised') continue; // restored below as shelf-backed models
-        // Tabbed members restore with their group (rebuilt below); docked
-        // rects are stale across viewports and re-derive as floating.
-        if (model.state === 'docked') model.state = 'floating';
+        // Tabbed members restore with their group (rebuilt below). Docked
+        // windows stay docked durably: the stored edge re-derives geometry
+        // against current metrics (GPT Pro round-3 — docking must survive
+        // reload). A docked row without an edge downgrades honestly.
+        if (model.state === 'docked' && model.dock) {
+          model.rect = geo.dockRect ? geo.dockRect(model.dock, model.rect, metrics()) : model.rect;
+        } else if (model.state === 'docked') {
+          model.state = 'floating';
+        }
         windows.set(model.windowId, model);
         zTop = Math.max(zTop, model.zIndex);
         renderFrame(model);
@@ -770,6 +809,7 @@
           rect: clampRect({ x: win.x, y: win.y, width: win.width, height: win.height }, CreativeSurfaces.get(surfaceId)),
           zIndex: Number(win.zIndex) || 1,
           state: 'minimised',
+          dock: win.dock || null,
           collapsed: true, pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
           restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null, tabsSlot: null,
         };

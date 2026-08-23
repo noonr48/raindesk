@@ -27,15 +27,16 @@ const ID_RE = /^[A-Za-z0-9_-]{1,96}$/;
 const WINDOW_TYPES = new Set([
   'sheet', 'shot', 'comic_page', 'reference_board', 'character_canvas', 'note',
   'sequence_strip', 'layers_panel', 'beat_trail', 'partner_panel', 'generic_panel',
+  'take_stack', 'character_registry', 'notes_panel', 'partner_proposals',
 ]);
 const DOCKS = new Set(['top', 'right', 'bottom', 'left']);
 const SPACES = new Set(['screen', 'world']);
-const SCREEN_TYPES = new Set(['layers_panel', 'beat_trail', 'partner_panel', 'generic_panel', 'sequence_strip']);
+const SCREEN_TYPES = new Set(['layers_panel', 'beat_trail', 'partner_panel', 'generic_panel', 'sequence_strip', 'take_stack', 'character_registry', 'notes_panel', 'partner_proposals']);
 const STATES = new Set(['floating', 'tabbed', 'docked', 'minimised', 'maximised']);
 // Soft entity references: typed prefix + bounded id segment. Existing data
 // crosses prefixes (reference_board windows reference sheet: ids), so the
 // prefix set is permissive, not type-locked.
-const ENTITY_REF_RE = /^(sheet|shot|comic_page|character|note|board|partner|beats|layers|scenes|takes):[A-Za-z0-9_.-]{1,96}$/;
+const ENTITY_REF_RE = /^(sheet|shot|comic_page|character|characters|note|notes|board|partner|proposals|beats|layers|scenes|takes):[A-Za-z0-9_.-]{1,96}$/;
 const WINDOW_FIELDS = new Set([
   'windowId', 'type', 'space', 'entityRef', 'x', 'y', 'width', 'height',
   'rotation', 'scale', 'zIndex', 'state', 'groupId', 'collapsed', 'pinned', 'locked', 'dock',
@@ -80,6 +81,10 @@ function sanitizeWindow(input = {}, existing = null) {
   const extra = Object.keys(input).find((key) => !WINDOW_FIELDS.has(key));
   if (extra) throw new HttpError(400, `window contains unsupported field ${extra}`);
   const windowId = assertId(input.windowId || (existing && existing.windowId), 'window id');
+  // Unknown types are REJECTED, not coerced (GPT Pro round-3 critical): a
+  // silent generic_panel fallback once made four shipped surfaces vanish on
+  // reload (their rows stored a type no registered surface matched).
+  if (input.type !== undefined && !WINDOW_TYPES.has(input.type)) throw new HttpError(400, `unknown window type ${input.type}`);
   const type = WINDOW_TYPES.has(input.type) ? input.type : (existing && existing.type) || 'generic_panel';
   const inheritedSpace = existing && SPACES.has(existing.space) ? existing.space : defaultSpaceForType(type);
   const space = SPACES.has(input.space) ? input.space : inheritedSpace;
@@ -241,7 +246,25 @@ function read() {
   }
   if (!ws.shelf || !Array.isArray(ws.shelf.windowIds)) ws.shelf = { windowIds: [] };
   if (!ws.revision || !Number.isFinite(ws.revision)) ws.revision = 1;
+  repairLegacySurfaceTypes(ws);
   return ws;
+}
+
+/** One-time repair for rows written while four shipped surfaces used entity
+ * types the server coerced to generic_panel (GPT Pro round-3 critical). The
+ * registry windowIds are stable, so the canonical type is recoverable; rows
+ * are repaired in place and persisted by the next write. */
+const LEGACY_SURFACE_TYPE_BY_WINDOW_ID = {
+  window_takes: 'take_stack',
+  window_characters: 'character_registry',
+  window_notes: 'notes_panel',
+  window_proposals: 'partner_proposals',
+};
+function repairLegacySurfaceTypes(ws) {
+  for (const win of ws.windows || []) {
+    const canonical = LEGACY_SURFACE_TYPE_BY_WINDOW_ID[win.windowId];
+    if (canonical && win.type === 'generic_panel') win.type = canonical;
+  }
 }
 
 /** Client envelope for GET /api/workspace during migration: canonical v3

@@ -965,3 +965,111 @@ test('closing one grouped member never destroys the others', () => {
   assert.equal(after.windowIds.length, 1, 'last two members: survivor keeps its window');
   assert.ok(manager.state(c));
 });
+
+/* ----------------------- GPT Pro round-3 triage: durable dock + close + cancel */
+
+test('dock commit persists the durable edge; re-float clears it', async () => {
+  const persistCalls = [];
+  const root = makeNode('div');
+  let snap = { dock: 'left', rect: { x: 0, y: 0, width: 640, height: 800 } };
+  const api = {
+    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { edgeSnap: () => snap },
+  });
+  manager.open('layers');
+  const id = 'window_layers';
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 600, clientY: 110 });
+  fakeDocument.dispatch('pointermove', { clientX: 20, clientY: 130, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 20, clientY: 130 });
+  await new Promise((r) => setTimeout(r, 0));
+  const committed = persistCalls[persistCalls.length - 1];
+  assert.equal(committed.state, 'docked', 'commit persists the docked state');
+  assert.equal(committed.dock, 'left', 'commit persists the durable edge (was: omitted entirely)');
+  // Dragging off the edge re-floats AND clears the stored dock.
+  snap = null;
+  head.dispatch('pointerdown', { button: 0, clientX: 20, clientY: 110 });
+  fakeDocument.dispatch('pointermove', { clientX: 400, clientY: 130, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 400, clientY: 130 });
+  await new Promise((r) => setTimeout(r, 0));
+  const after = persistCalls[persistCalls.length - 1];
+  assert.equal(after.state, 'floating', 'drag-off-edge re-floats');
+  assert.equal(after.dock, null, 're-float clears the stored dock');
+});
+
+test('docked state survives reload: init keeps the edge and re-derives geometry', async () => {
+  const root = makeNode('div');
+  let dockRectCalls = 0;
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() {
+      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
+        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 400, height: 300, zIndex: 3, state: 'docked', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'left' },
+      ], groups: [], shelf: { windowIds: [] } });
+    },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { dockRect: (dock, rect) => { dockRectCalls += 1; return { ...rect, x: 16, y: 66 }; } },
+  });
+  await manager.init();
+  const st = manager.state('window_layers');
+  assert.equal(st.state, 'docked', 'docked survives reload when an edge is stored (was: downgraded to floating)');
+  assert.equal(dockRectCalls, 1, 'geometry re-derives from the stored edge');
+  assert.equal(st.rect.x, 16);
+  assert.equal(st.rect.y, 66);
+});
+
+test('close is authoritative server-side: the persisted row is deleted through the write chain', async () => {
+  const deletes = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    deleteWorkspaceWindow(windowId) { deletes.push(windowId); return Promise.resolve({ ok: true, revision: 9 }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references');
+  await new Promise((r) => setTimeout(r, 0)); // open()'s persist is async: model.persisted must be set before close
+  manager.close('window_references');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(deletes, ['window_references'], 'close deletes the persisted row (was: resurrected on reload)');
+});
+
+test('drag pointercancel is a terminal: geometry reverts, overlays clear, nothing persists', async () => {
+  const persistCalls = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { edgeSnap: () => ({ dock: 'left', rect: { x: 0, y: 0, width: 640, height: 800 } }) },
+  });
+  manager.open('layers');
+  await new Promise((r) => setTimeout(r, 0)); // open()'s async persist must land before the baseline snapshot
+  const id = 'window_layers';
+  const before = { ...manager.state(id).rect };
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 600, clientY: 110 });
+  fakeDocument.dispatch('pointermove', { clientX: 20, clientY: 130, buttons: 1 });
+  assert.notDeepEqual(manager.state(id).rect, before, 'drag moved the frame before cancellation');
+  fakeDocument.dispatch('pointercancel', { clientX: 20, clientY: 130 });
+  assert.deepEqual(manager.state(id).rect, before, 'cancellation restored the pre-gesture snapshot (was: committed)');
+  assert.ok(!root.children.some((c) => c.classList.contains('freeform-snap-preview')), 'preview cleared on cancel');
+  const zones = zoneHostIn(root);
+  assert.ok(!zones || !zones.classList.contains('on'), 'zones cleared on cancel');
+  const baseline = persistCalls.length;
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(persistCalls.length, baseline, 'cancellation persists nothing');
+});

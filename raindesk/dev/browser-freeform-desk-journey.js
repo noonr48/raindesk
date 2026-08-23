@@ -337,6 +337,12 @@ async function main() {
     const notesLeft = parseInt(notesRect.left, 10) || 0;
     await dragWindow(page, 'window_notes', -(notesLeft + 40), 0);
     await waitFor(page, `window.raindeskFreeform.state('window_notes').state==='docked'`, 'notes dock at left edge', 5_000);
+    // Docking must be durable: reload and prove the edge survived (GPT Pro
+    // round-3 — init() used to downgrade every docked window to floating).
+    try { page.ws.close(); } catch (_e) {}
+    page = await openPage(browserWsUrl, `${base}?freeform=1`);
+    await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'dock reload boot', 60_000);
+    await waitFor(page, `window.raindeskFreeform && window.raindeskFreeform.state('window_notes') && window.raindeskFreeform.state('window_notes').state==='docked'`, 'docked state survives reload', 10_000);
     await dragWindow(page, 'window_notes', 320, 0);
     await waitFor(page, `window.raindeskFreeform.state('window_notes').state==='floating'`, 'notes re-float off the edge', 5_000);
     if (await value(page, `document.querySelectorAll('.freeform-snap-preview').length`) !== 0) throw new Error('snap preview ghost leaked after gesture settled');

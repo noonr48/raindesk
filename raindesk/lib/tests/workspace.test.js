@@ -163,3 +163,34 @@ test('world objects never inherit screen-edge docking', () => {
   assert.equal(obj.dock, null);
   assert.throws(() => workspace.applyAction({ type: 'dock_panel', targetId: 'world_ref', payload: { dock: 'left' } }), /world objects/);
 });
+
+/* --------------------------------- GPT Pro round-3 critical: canonical types */
+
+test('canonical surface types and entityRef prefixes are accepted; unknown types are rejected', () => {
+  workspace.upsertObject({ id: 'window_takes', type: 'take_stack', entityRef: 'takes:main', x: 10, y: 10, width: 300, height: 200 });
+  workspace.upsertObject({ id: 'window_characters', type: 'character_registry', entityRef: 'characters:main', x: 20, y: 20, width: 300, height: 200 });
+  workspace.upsertObject({ id: 'window_notes', type: 'notes_panel', entityRef: 'notes:main', x: 30, y: 30, width: 300, height: 200 });
+  workspace.upsertObject({ id: 'window_proposals', type: 'partner_proposals', entityRef: 'proposals:main', x: 40, y: 40, width: 300, height: 200 });
+  const ws = workspace.read();
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_takes').type, 'take_stack');
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_characters').entityRef, 'characters:main');
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_notes').space, 'screen', 'panel types default to screen space');
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_proposals').type, 'partner_proposals');
+  // Reject, never coerce (the silent generic_panel fallback once made four
+  // shipped surfaces vanish on reload).
+  assert.throws(() => workspace.upsertObject({ id: 'bogus_type', type: 'not_a_real_type' }), /unknown window type/);
+});
+
+test('legacy generic_panel rows for canonical surfaces are repaired on read', () => {
+  const file = path.join(scratch, 'workspace.json');
+  const doc = { schemaVersion: 3, revision: 7, viewport: { x: 0, y: 0, zoom: 1 }, activeWindowId: null,
+    windows: [
+      { windowId: 'window_takes', type: 'generic_panel', space: 'screen', entityRef: 'takes:main', x: 0, y: 0, width: 300, height: 200, rotation: 0, scale: 1, zIndex: 1, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+      { windowId: 'window_proposals', type: 'generic_panel', space: 'screen', entityRef: 'proposals:main', x: 5, y: 5, width: 300, height: 200, rotation: 0, scale: 1, zIndex: 2, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+    ],
+    groups: [], shelf: { windowIds: [] } };
+  fs.writeFileSync(file, JSON.stringify(doc));
+  const out = workspace.read();
+  assert.equal(out.windows.find((w) => w.windowId === 'window_takes').type, 'take_stack', 'stored row repaired to canonical type');
+  assert.equal(out.windows.find((w) => w.windowId === 'window_proposals').type, 'partner_proposals');
+});
