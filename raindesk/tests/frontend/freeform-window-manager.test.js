@@ -1196,6 +1196,73 @@ test('close-delete classifies errors: 409 adopts and retries once, 404 anywhere 
   assert.equal(deleteCalls.length, 2, '404 on the retry path terminates as success');
 });
 
+test('close-delete warn path: a 5xx without workspace never retries and never silently settles', async () => {
+  const deleteCalls = [];
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const root = makeNode('div');
+    const api = {
+      upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+      deleteWorkspaceWindow(windowId) {
+        deleteCalls.push(windowId);
+        const boom = new Error('gateway exploded');
+        boom.status = 502; // transport-class failure: NO workspace, NOT 404
+        return Promise.reject(boom);
+      },
+      getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+    };
+    const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+    manager.open('references');
+    manager.close('window_references');
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(deleteCalls.length, 1, 'a 5xx is neither absent-success (no silent settle) nor conflict (no retry): one attempt');
+    assert.ok(warnings.some((w) => w.includes('window_references') && w.includes('close-delete failed')),
+      'uncertain failure stays visible through the warn path (GPT Pro round-5)');
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('registry deep-freeze: defaultPlacement and contextualTools reject mutation', () => {
+  const placement = { width: 500, height: 400, dock: null };
+  const tool = { id: 'note', label: 'Note' };
+  wm.CreativeSurfaces.register({ id: 'freeze_probe', title: 'Freeze Probe', entityType: 'generic_panel', defaultPlacement: placement, contextualTools: [tool] });
+  const def = wm.CreativeSurfaces.get('freeze_probe');
+  assert.throws(() => { def.defaultPlacement.width = 1; }, /read only|not extensible|Cannot assign/i, 'registered placement is a frozen clone');
+  assert.throws(() => { def.contextualTools[0].id = 'hijack'; }, /read only|not extensible|Cannot assign/i, 'registered tools are frozen clones');
+  assert.throws(() => { def.contextualTools.push({ id: 'inject' }); }, /read only|not extensible|Cannot add/i, 'the tools array is frozen');
+  // The CALLER's original references stay mutable but detached: mutating
+  // them must not affect the registered policy.
+  placement.width = 999; tool.id = 'mutated';
+  assert.equal(def.defaultPlacement.width, 500, 'retained source reference cannot rewrite the registered placement');
+  assert.equal(def.contextualTools[0].id, 'note', 'retained source reference cannot rewrite the registered tool');
+});
+
+test('init repairs a stale dock on a TABBED row while keeping the group', async () => {
+  const persistCalls = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() {
+      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
+        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 100, y: 100, width: 380, height: 280, zIndex: 3, state: 'tabbed', groupId: 'g_stale', collapsed: false, pinned: false, locked: false, dock: 'right' },
+        { windowId: 'window_references', type: 'reference_board', space: 'screen', entityRef: 'board:references', x: 100, y: 100, width: 380, height: 280, zIndex: 4, state: 'tabbed', groupId: 'g_stale', collapsed: false, pinned: false, locked: false, dock: null },
+      ], groups: [{ groupId: 'g_stale', windowIds: ['window_layers', 'window_references'], activeWindowId: 'window_references' }], shelf: { windowIds: [] } });
+    },
+    setWorkspaceGroups(groups) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups, shelf: { windowIds: [] } } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  const st = manager.state('window_layers');
+  assert.equal(st.state, 'tabbed', 'group membership is untouched by the repair');
+  assert.equal(st.dock, null, 'the stale dock on a tabbed member is cleared in memory');
+  const repair = persistCalls.find((p) => p.windowId === 'window_layers' && p.dock === null);
+  assert.ok(repair, 'and the tabbed-row repair is persisted (was: only floating rows were repaired)');
+});
+
 test('init repairs a stale dock on a floating row: no surprise re-dock later', async () => {
   const persistCalls = [];
   const root = makeNode('div');
