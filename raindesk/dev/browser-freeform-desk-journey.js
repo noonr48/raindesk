@@ -294,14 +294,20 @@ async function main() {
 
     // 18. Reload restores the group with its active member.
     step(18, 'reload restores the group');
+    const preReloadRect = await windowRect(page, 'window_scenes'); // captured BEFORE the reload for the step-19 equality check
     try { page.ws.close(); } catch (_e) {}
     page = await openPage(browserWsUrl, `${base}?freeform=1`);
     await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'reload boot', 60_000);
     await waitFor(page, `window.raindeskFreeform && window.raindeskFreeform.groups().length===1`, 'group restored', 20_000);
 
-    // 19. Restored geometry equals pre-reload geometry.
+    // 19. Restored geometry equals pre-reload geometry (GPT Pro round-4:
+    // the old step only labelled restoration without comparing values).
     step(19, 'geometry survives reload');
     await waitFor(page, `!!document.querySelector('.freeform-window[data-window-id="window_scenes"] .freeform-window-tab')`, 'tab strip restored', 10_000);
+    const postReloadRect = await windowRect(page, 'window_scenes');
+    if (JSON.stringify(postReloadRect) !== JSON.stringify(preReloadRect)) {
+      throw new Error(`geometry changed across reload: ${JSON.stringify({ preReloadRect, postReloadRect })}`);
+    }
 
     // 20. Takes surface opens with the honest empty state.
     step(20, 'takes surface empty state');
