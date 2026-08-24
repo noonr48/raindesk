@@ -295,6 +295,7 @@ async function main() {
     // 18. Reload restores the group with its active member.
     step(18, 'reload restores the group');
     const preReloadRect = await windowRect(page, 'window_scenes'); // captured BEFORE the reload for the step-19 equality check
+    const preReloadState = await value(page, `(()=>{const s=window.raindeskFreeform.state('window_scenes');return JSON.stringify({rect:s.rect,state:s.state,dock:s.dock});})()`, true);
     try { page.ws.close(); } catch (_e) {}
     page = await openPage(browserWsUrl, `${base}?freeform=1`);
     await waitFor(page, `document.documentElement?.dataset?.raindeskBoot==='ready'`, 'reload boot', 60_000);
@@ -307,6 +308,13 @@ async function main() {
     const postReloadRect = await windowRect(page, 'window_scenes');
     if (JSON.stringify(postReloadRect) !== JSON.stringify(preReloadRect)) {
       throw new Error(`geometry changed across reload: ${JSON.stringify({ preReloadRect, postReloadRect })}`);
+    }
+    // Full canonical witness (GPT Pro round-5): the DOM rect alone permits
+    // width/height drift; compare the manager's canonical {x,y,width,height}
+    // plus lifecycle state and dock.
+    const postReloadState = await value(page, `(()=>{const s=window.raindeskFreeform.state('window_scenes');return JSON.stringify({rect:s.rect,state:s.state,dock:s.dock});})()`, true);
+    if (postReloadState !== preReloadState) {
+      throw new Error(`canonical state changed across reload: ${JSON.stringify({ preReloadState, postReloadState })}`);
     }
 
     // 20. Takes surface opens with the honest empty state.

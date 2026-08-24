@@ -51,7 +51,7 @@
           width: Math.max(120, Number(surface.minimumSize && surface.minimumSize.width) || 280),
           height: Math.max(90, Number(surface.minimumSize && surface.minimumSize.height) || 180),
         }),
-        defaultPlacement: surface.defaultPlacement || { width: 460, height: 360, dock: null },
+        defaultPlacement: Object.freeze({ ...(surface.defaultPlacement || { width: 460, height: 360, dock: null }) }),
         // Every window snaps to the desk edges by default (owner reference:
         // all panels dock); a surface opts out by declaring its own list.
         // Frozen ARRAY, not a Set: a Set's contents are mutable through the
@@ -68,7 +68,10 @@
           (Array.isArray(surface.dockEdges) ? surface.dockEdges : ['left', 'right'])
             .filter((edge) => SNAP_ZONE_EDGES.includes(edge)),
         ),
-        contextualTools: Array.isArray(surface.contextualTools) ? surface.contextualTools.slice() : [],
+        contextualTools: Object.freeze(
+          (Array.isArray(surface.contextualTools) ? surface.contextualTools : []).slice()
+            .map((tool) => (tool && typeof tool === 'object' ? Object.freeze({ ...tool }) : tool)),
+        ),
       });
       registry.set(def.id, def);
       return def;
@@ -290,6 +293,7 @@
       if (surface && !ALWAYS_ALLOWED.has(next) && !surface.supportedStates.includes(next)) {
         throw new Error(`surface ${model.surfaceId} does not support state ${next}`);
       }
+      const prev = model.state;
       model.state = next;
       if (next === 'maximised' && !model.restoreRect) {
         model.restoreRect = { ...model.rect };
@@ -303,6 +307,12 @@
       }
       if (next === 'minimised') model.collapsed = true;
       if (next === 'floating' || next === 'maximised') model.collapsed = false;
+      // Dock lifecycle invariant (GPT Pro round-5): a stored edge means
+      // "this window is docked" — EXCEPT on the way to the shelf, which
+      // legitimately keeps it for the restore round trip. Any other exit
+      // from docked clears it, so {floating/tabbed, dock} rows cannot exist
+      // and a later minimise/restore can never surprise-redock.
+      if (prev === 'docked' && next !== 'minimised' && next !== 'docked') model.dock = null;
     }
 
     /* ------------------------------------------------------ gesture logic */
@@ -538,7 +548,7 @@
           const dir = grip.dataset.resizeDir || 'se';
           const surface = surfaceFor(current);
           const min = surface ? surface.minimumSize : { width: 200, height: 140 };
-          const start = { x: e.clientX, y: e.clientY, rect: { ...current.rect }, pointerId: e.pointerId };
+          const start = { x: e.clientX, y: e.clientY, rect: { ...current.rect }, state: current.state, dock: current.dock, collapsed: current.collapsed, pointerId: e.pointerId };
           // One gesture per window (kernel lock): a second contact on this
           // window must never steer or commit another contact's resize.
           // The lock is acquired BEFORE pointer capture so a refused second
@@ -586,7 +596,16 @@
             if (ev && ev.pointerId !== undefined && ev.pointerId !== start.pointerId) return; // foreign pointer
             session.end();
             try { grip.releasePointerCapture(start.pointerId); } catch (_e) {}
+            // Full-lifecycle rollback (GPT Pro round-5): a cancel after a
+            // mid-resize anchored-edge undock must restore state and dock
+            // too — rect alone left a floating model with the docked row on
+            // the server, visibly flipping again on reload.
             current.rect = { ...start.rect };
+            if (current.state !== start.state || current.dock !== start.dock || current.collapsed !== start.collapsed) {
+              current.dock = start.dock;
+              current.collapsed = start.collapsed;
+              transition(current, start.state);
+            }
             renderFrame(current);
             detach();
           };
@@ -697,6 +716,7 @@
       const surface = surfaceFor(model);
       const dockOk = Boolean(model.dock && surface && surface.supportedStates.includes('docked') && surface.dockEdges.includes(model.dock));
       transition(model, dockOk ? 'docked' : 'floating');
+      if (dockOk) model.collapsed = false; // shelf restore must show content, not a header-only rail (GPT Pro round-5)
       if (dockOk && geo.dockRect) model.rect = geo.dockRect(model.dock, model.rect, metrics());
       renderFrame(model);
       renderShelf();
@@ -753,6 +773,7 @@
         const pid = e.pointerId;
         const sx = e.clientX; const sy = e.clientY; let dragged = false;
         const detach = () => {
+          try { chip.releasePointerCapture(pid); } catch (_e) {}
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
         };
@@ -760,6 +781,9 @@
         // mutates only at up, so cancel = detach).
         const session = beginGesture(windowId, pid, detach);
         if (!session) return; // another gesture owns this window
+        // Pointer capture — same rationale as tab tear (GPT Pro round-5):
+        // a release outside the viewport must still terminate the session.
+        try { chip.setPointerCapture(pid); } catch (_e) {}
         const move = (ev) => {
           if (ev.pointerId !== pid) return;
           if (ev.buttons === 0) { session.end(); detach(); return; } // severed: never restore from a dead pointer (GPT Pro round-4)
@@ -849,6 +873,12 @@
             if (Number.isFinite(rev)) lastRevision = Math.max(lastRevision, rev);
           })
           .catch((error) => {
+            // Error classification (GPT Pro round-5): only a confirmed 404
+            // is idempotent success. A 409 adopts server state and retries
+            // once. Everything else — transport loss, auth, 5xx — stays
+            // rejected and visible instead of silently abandoning the row
+            // to resurrect on reload.
+            if (error && error.status === 404) return undefined;
             const ws = error && error.workspace;
             if (ws && Number.isFinite(ws.revision)) {
               // Conflict: adopt the server revision and retry once.
@@ -856,9 +886,12 @@
               return api.deleteWorkspaceWindow(windowId, { baseRevision: lastRevision }).then((res2) => {
                 const rev2 = res2 && res2.workspace && res2.workspace.revision;
                 if (Number.isFinite(rev2)) lastRevision = Math.max(lastRevision, rev2);
+              }).catch((retryError) => {
+                if (retryError && retryError.status === 404) return undefined; // gone on retry: success
+                throw retryError;
               });
             }
-            return undefined; // absent row or unrecoverable: handled below
+            throw error;
           })
           .catch((error) => {
             if (!model.closeDeleteFailed) {
@@ -874,7 +907,7 @@
       const model = windows.get(windowId);
       if (!model) return null;
       return { windowId, surfaceId: model.surfaceId, state: model.state, title: model.title,
-        rect: { ...model.rect }, zIndex: model.zIndex, collapsed: model.collapsed,
+        rect: { ...model.rect }, zIndex: model.zIndex, collapsed: model.collapsed, dock: model.dock || null,
         pinned: model.pinned, locked: model.locked, focused: model.windowId === focusedId };
     }
     function list() { return [...windows.keys()].map(state); }
@@ -928,6 +961,15 @@
             // immediately, or the same malformed row returns every session
             // (GPT Pro round-4).
             model.state = 'floating';
+            model.dock = null;
+            persist(model);
+          } else if (model.state !== 'minimised' && model.dock) {
+            // Stale dock on a non-docked row (GPT Pro round-5): only the
+            // shelf legitimately keeps an edge through 'minimised'; floating
+            // or tabbed rows carrying one would surprise-redock on a later
+            // minimise/restore. Clear and persist the repair. (Rows arriving
+            // here can only be legacy: the transition invariant prevents
+            // creating them at runtime.)
             model.dock = null;
             persist(model);
           }
@@ -1035,6 +1077,7 @@
         const pid = e.pointerId;
         const sx = e.clientX; const sy = e.clientY; let torn = false;
         const detach = () => {
+          try { tab.releasePointerCapture(pid); } catch (_e) {}
           document.removeEventListener('pointermove', move, true);
           document.removeEventListener('pointerup', up, true);
         };
@@ -1042,6 +1085,13 @@
         // cleanly (tab tear mutates only at up, so cancel = detach).
         const session = beginGesture(memberId, pid, detach);
         if (!session) return; // another gesture owns this window
+        // Pointer capture (GPT Pro round-5): without it, a release OUTSIDE
+        // the viewport never delivers pointerup to the document, stranding
+        // this session's listeners — a later same-pointerId gesture then
+        // feeds the stale session (and the per-window lock refuses the new
+        // one), tearing a tab at unrelated coordinates. Capture makes the
+        // terminal always-delivered.
+        try { tab.setPointerCapture(pid); } catch (_e) {}
         const move = (ev) => {
           if (ev.pointerId !== pid) return;
           if (ev.buttons === 0) { session.end(); detach(); return; } // severed: never tear from a dead pointer (GPT Pro round-4)

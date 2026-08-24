@@ -1161,6 +1161,131 @@ test('tab tear and shelf chip severed buttons abort without tearing or restoring
   assert.equal(manager.groups()[0].windowIds.length, 3, 'all three members still grouped');
 });
 
+/* --------------------- GPT Pro round-5 triage: error classes + invariants */
+
+test('close-delete classifies errors: 409 adopts and retries once, 404 anywhere is success', async () => {
+  const deleteCalls = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    deleteWorkspaceWindow(windowId) {
+      deleteCalls.push(windowId);
+      if (deleteCalls.length === 1) {
+        const conflict = new Error('stale baseRevision');
+        conflict.status = 409;
+        conflict.workspace = { revision: 7, windows: [], groups: [], shelf: { windowIds: [] } };
+        return Promise.reject(conflict);
+      }
+      if (deleteCalls.length === 2) {
+        const gone = new Error('unknown workspace window');
+        gone.status = 404; // the retry finds the row already absent: success
+        return Promise.reject(gone);
+      }
+      return Promise.resolve({ ok: true, workspace: { revision: 9 } });
+    },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references');
+  manager.close('window_references');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(deleteCalls.length, 2, '409 adopted the server revision and retried exactly once');
+  // A 404 on the retry path settled as idempotent success — no warning loop,
+  // no third call, no unhandled rejection.
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(deleteCalls.length, 2, '404 on the retry path terminates as success');
+});
+
+test('init repairs a stale dock on a floating row: no surprise re-dock later', async () => {
+  const persistCalls = [];
+  const root = makeNode('div');
+  const shelf = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() {
+      // {state: floating, dock: left} — the inconsistent hybrid GPT round-5
+      // flagged: a later minimise/restore surprise-redocks from it.
+      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
+        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 200, y: 200, width: 380, height: 280, zIndex: 3, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'left' },
+      ], groups: [], shelf: { windowIds: [] } });
+    },
+    setWorkspaceShelf(ids) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups: [], shelf: { windowIds: ids } } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  const repaired = persistCalls.find((p) => p.windowId === 'window_layers' && p.dock === null);
+  assert.ok(repaired, 'the stale dock on a floating row is cleared and persisted at init');
+  manager.attachShelf(shelf);
+  manager.minimise('window_layers');
+  manager.restore('window_layers');
+  assert.equal(manager.state('window_layers').state, 'floating', 'restore after repair floats: no surprise redock from a stale edge');
+});
+
+test('shelf restore to docked shows content: collapsed is cleared', async () => {
+  const root = makeNode('div');
+  const shelf = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() {
+      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
+        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 380, height: 600, zIndex: 3, state: 'minimised', groupId: null, collapsed: true, pinned: false, locked: false, dock: 'left' },
+      ], groups: [], shelf: { windowIds: ['window_layers'] } });
+    },
+    setWorkspaceShelf(ids) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups: [], shelf: { windowIds: ids } } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { dockRect: (dock, rect) => ({ ...rect, x: 16 }) },
+  });
+  await manager.init();
+  manager.attachShelf(shelf);
+  manager.restore('window_layers');
+  const st = manager.state('window_layers');
+  assert.equal(st.state, 'docked');
+  assert.equal(st.collapsed, false, 'dock restore renders the body, not a header-only rail (GPT Pro round-5)');
+});
+
+test('resize cancel after anchored-edge undock restores the full lifecycle', async () => {
+  const persistCalls = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { edgeSnap: () => ({ dock: 'left', rect: { x: 16, y: 66, width: 380, height: 600 } }) },
+  });
+  manager.open('layers', { rect: { x: 300, y: 120, width: 380, height: 280 } });
+  await new Promise((r) => setTimeout(r, 0));
+  const id = 'window_layers';
+  // Dock left via a header drag.
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === id);
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 400, clientY: 140 });
+  fakeDocument.dispatch('pointermove', { clientX: 30, clientY: 160, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 30, clientY: 160 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(manager.state(id).state, 'docked', 'sanity: window docked left');
+  const dockedRect = { ...manager.state(id).rect };
+  // Pull the anchored (west) edge: mid-resize the model undocks; cancel must
+  // restore rect AND state AND dock.
+  const westGrip = resizeHandleFor(frame, 'w');
+  westGrip.dispatch('pointerdown', { button: 0, clientX: 20, clientY: 300, pointerId: 9 });
+  westGrip.dispatch('pointermove', { clientX: 260, clientY: 300, pointerId: 9, buttons: 1 });
+  assert.equal(manager.state(id).state, 'floating', 'anchored-edge pull undocks mid-resize');
+  const persistBaseline = persistCalls.length;
+  westGrip.dispatch('pointercancel', { clientX: 260, clientY: 300, pointerId: 9 });
+  const st = manager.state(id);
+  assert.equal(st.state, 'docked', 'cancel restores the docked state');
+  assert.equal(st.dock, 'left', 'cancel restores the stored edge');
+  assert.deepEqual(st.rect, dockedRect, 'cancel restores the pre-gesture rect');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(persistCalls.length, persistBaseline, 'cancel persists nothing');
+});
+
 /* ------------------- phase: gesture kernel lock + dock-edge policies */
 
 test('gesture lock: a second contact on the same window is refused while a gesture is live', async () => {
