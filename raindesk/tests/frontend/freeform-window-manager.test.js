@@ -531,10 +531,13 @@ function edgeSnapManager(edgeResult) {
 }
 
 test('register defaults include docked so every window can snap; explicit lists stay opt-outs', () => {
-  assert.ok(wm.CreativeSurfaces.get('references').supportedStates.has('docked'),
+  assert.ok(wm.CreativeSurfaces.get('references').supportedStates.includes('docked'),
     "default supportedStates now carries 'docked'");
-  assert.ok(!wm.CreativeSurfaces.get('locked_only').supportedStates.has('docked'),
+  assert.ok(!wm.CreativeSurfaces.get('locked_only').supportedStates.includes('docked'),
     'a surface that declares its own list without docked stays a non-docking surface');
+  // Policy objects are frozen arrays, not mutable Sets (GPT Pro round-4):
+  // a controller must not be able to rewrite the declared policy.
+  assert.throws(() => { wm.CreativeSurfaces.get('references').supportedStates.push('docked'); }, /read only|not extensible|Cannot add/i);
 });
 
 test('resize: eight directions update the rect respecting per-surface minimums', () => {
@@ -1072,6 +1075,90 @@ test('drag pointercancel is a terminal: geometry reverts, overlays clear, nothin
   const baseline = persistCalls.length;
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(persistCalls.length, baseline, 'cancellation persists nothing');
+});
+
+/* ----------------- GPT Pro round-4 triage: close race, shelf docks, severed */
+
+test('close before the first persist lands still deletes: the upsert can never resurrect', async () => {
+  const deletes = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+    deleteWorkspaceWindow(windowId) { deletes.push(windowId); return Promise.resolve({ ok: true, workspace: { revision: 9 } }); },
+    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references');
+  manager.close('window_references'); // NO flush: the open() upsert is still queued on the write chain
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(deletes, ['window_references'], 'unconditional close-delete: the late upsert can never resurrect (GPT Pro round-4)');
+});
+
+test('minimise then restore returns a docked window to its stored edge', async () => {
+  const persistCalls = [];
+  const root = makeNode('div');
+  const shelf = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() {
+      // Seed a docked-left window that is ALSO on the shelf: restore must
+      // return it to the dock, not float it (GPT Pro round-4).
+      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
+        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 380, height: 600, zIndex: 3, state: 'minimised', groupId: null, collapsed: true, pinned: false, locked: false, dock: 'left' },
+      ], groups: [], shelf: { windowIds: ['window_layers'] } });
+    },
+    setWorkspaceShelf(ids) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups: [], shelf: { windowIds: ids } } }); },
+  };
+  const manager = wm.WindowManager({
+    root, document: fakeDocument, api,
+    viewportMetrics: () => ({ width: 1280, height: 800 }),
+    geometry: { dockRect: (dock, rect) => ({ ...rect, x: 16 }) },
+  });
+  await manager.init();
+  manager.attachShelf(shelf);
+  manager.restore('window_layers');
+  const st = manager.state('window_layers');
+  assert.equal(st.state, 'docked', 'shelf restore returns the window to its stored dock (was: always floated)');
+  assert.equal(st.rect.x, 16, 'docked geometry re-derives from the stored edge');
+});
+
+test('init repairs an out-of-policy docked row and persists the repair immediately', async () => {
+  const persistCalls = [];
+  const root = makeNode('div');
+  const api = {
+    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
+    getWorkspace() {
+      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
+        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 400, height: 300, zIndex: 3, state: 'docked', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'top' },
+      ], groups: [], shelf: { windowIds: [] } });
+    },
+  };
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  assert.equal(manager.state('window_layers').state, 'floating');
+  const repair = persistCalls.find((p) => p.windowId === 'window_layers');
+  assert.ok(repair, 'the repair is persisted immediately (was: malformed row returned every session)');
+  assert.equal(repair.state, 'floating');
+  assert.equal(repair.dock, null);
+});
+
+test('tab tear and shelf chip severed buttons abort without tearing or restoring', async () => {
+  const { manager, root } = groupingManager();
+  const [a, b, c] = openThree(manager);
+  manager.groupWindows([a, b, c], { activeWindowId: a });
+  const activeFrame = root.children.find((f) => f.dataset && f.dataset.windowId === a);
+  const strip = activeFrame.querySelector('.freeform-window-tabs');
+  strip._rect = { left: 0, top: 0, right: 1000, bottom: 40 };
+  const tabs = strip.querySelectorAll('.freeform-window-tab');
+  const tab = tabs[0];
+  tab._rect = { left: 0, top: 0, right: 100, bottom: 40 };
+  // Severed move (buttons lost) past the tear threshold: the session must
+  // end and the later pointerup must commit nothing.
+  tab.dispatch('pointerdown', { button: 0, clientX: 50, clientY: 20, pointerId: 1 });
+  fakeDocument.dispatch('pointermove', { clientX: 500, clientY: 500, buttons: 0, pointerId: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 500, clientY: 500, pointerId: 1 });
+  assert.equal(manager.groups().length, 1, 'severed tab drag never tears the member out');
+  assert.equal(manager.groups()[0].windowIds.length, 3, 'all three members still grouped');
 });
 
 /* ------------------- phase: gesture kernel lock + dock-edge policies */
