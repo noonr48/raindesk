@@ -1226,6 +1226,42 @@ test('close-delete warn path: a 5xx without workspace never retries and never si
   }
 });
 
+test('close-delete both-attempts-fail path: 409 then 5xx retries once, warns, never silently settles', async () => {
+  const deleteCalls = [];
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const root = makeNode('div');
+    const api = {
+      upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+      deleteWorkspaceWindow(windowId) {
+        deleteCalls.push(windowId);
+        if (deleteCalls.length === 1) {
+          const conflict = new Error('stale baseRevision');
+          conflict.status = 409;
+          conflict.workspace = { revision: 7, windows: [], groups: [], shelf: { windowIds: [] } };
+          return Promise.reject(conflict);
+        }
+        const boom = new Error('gateway exploded on retry');
+        boom.status = 502; // conflict adopted, retried, retry failed non-404
+        return Promise.reject(boom);
+      },
+      getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
+    };
+    const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+    manager.open('references');
+    manager.close('window_references');
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(deleteCalls.length, 2, 'exactly conflict + one retry: the 409 is adopted and retried once');
+    assert.ok(warnings.some((w) => w.includes('window_references') && w.includes('close-delete failed')),
+      'a non-404 retry failure stays visible through the warn catch (was: silently settled as absence)');
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
 test('registry deep-freeze: defaultPlacement and contextualTools reject mutation', () => {
   const placement = { width: 500, height: 400, dock: null };
   const tool = { id: 'note', label: 'Note' };
