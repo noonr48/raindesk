@@ -1055,6 +1055,12 @@
       }
       for (const model of windows.values()) {
         if (model.state === 'tabbed' && (!model.groupId || !groups.has(model.groupId))) {
+          // Loudness parity (GPT Pro round-6 adversarial finding): silent
+          // drift between this singleton gate (<2 live members) and the
+          // server's keep-alive policy let the next whole-array write erase
+          // surviving groups unnoticed. Full reconciliation lands with the
+          // Stage-1 intent protocol; until then this stays VISIBLE.
+          console.warn('[freeform] stranded tabbed window re-floated:', model.windowId);
           model.state = 'floating';
           model.groupId = null;
         }

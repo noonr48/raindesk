@@ -194,3 +194,79 @@ test('legacy generic_panel rows for canonical surfaces are repaired on read', ()
   assert.equal(out.windows.find((w) => w.windowId === 'window_takes').type, 'take_stack', 'stored row repaired to canonical type');
   assert.equal(out.windows.find((w) => w.windowId === 'window_proposals').type, 'partner_proposals');
 });
+
+test('legacy v2 board with grouped+shelved contradiction loads: migration converges before validation', () => {
+  // GPT Pro round-6 adversarial F1: v1/v2 chains run validateWorkspace over
+  // synthesized rows; without pre-validation normalization a legacy hidden
+  // screen panel carrying a synthesized group trips the tightened
+  // mutual-exclusion check and bricks every later read of that board.
+  const file = path.join(scratch, 'workspace.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 2,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    activeObjectId: null,
+    objects: [
+      { id: 'h_one', type: 'layers_panel', space: 'screen', x: 10, y: 10, width: 300, height: 200, visible: false, collapsed: true, zIndex: 4, groupId: 'grp_z' },
+      { id: 'h_two', type: 'partner_panel', space: 'screen', x: 20, y: 20, width: 300, height: 200, visible: false, collapsed: true, zIndex: 5, groupId: 'grp_z' },
+    ],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }));
+  const out = workspace.read(); // must not throw
+  assert.equal(out.schemaVersion, 3);
+  assert.deepEqual([...out.shelf.windowIds].sort(), ['h_one', 'h_two'], 'hidden screen panels still land on the shelf');
+  assert.equal(out.groups.length, 0, 'the shelf claims both refs; their synthesized group dissolves');
+  assert.equal(out.windows.find((w) => w.windowId === 'h_one').groupId, null);
+  assert.equal(out.windows.find((w) => w.windowId === 'h_two').groupId, null);
+});
+
+test('closing a GROUPED member through applyAction converges ownership instead of erroring', () => {
+  // GPT Pro round-6 adversarial F2: lifecycle actions bypass setShelf's
+  // transaction; a Partner-driven close of a grouped screen member used to
+  // trip mutual exclusion during validation.
+  const file = path.join(scratch, 'workspace.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 3,
+    revision: 50,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    activeWindowId: null,
+    windows: [
+      { windowId: 'c_left', type: 'note', space: 'screen', entityRef: 'note:cleft', x: 0, y: 0, width: 200, height: 150, rotation: 0, scale: 1, zIndex: 1, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+      { windowId: 'c_right', type: 'note', space: 'screen', entityRef: 'note:cright', x: 250, y: 0, width: 200, height: 150, rotation: 0, scale: 1, zIndex: 2, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+    ],
+    groups: [],
+    shelf: { windowIds: [] },
+  }));
+  const base = workspace.read().revision;
+  workspace.setGroups([{ groupId: 'g_cr', windowIds: ['c_left', 'c_right'], activeWindowId: 'c_right' }], { baseRevision: base });
+  const result = workspace.applyAction({ type: 'close_panel', targetId: 'c_left' });
+  assert.equal(result.object.state, 'minimised');
+  const out = workspace.read();
+  assert.ok(out.shelf.windowIds.includes('c_left'), 'the closed member sits on the shelf');
+  const pair = out.groups.find((g) => g.groupId === 'g_cr');
+  assert.ok(pair && pair.windowIds.length === 1 && pair.windowIds[0] === 'c_right', 'the survivor keeps the group');
+  assert.equal(out.windows.find((w) => w.windowId === 'c_left').groupId, null, 'group membership left canonically server-side');
+});
+
+test('open_panel inverse is always close_panel: reverting a shelf-origin open restores shelf membership', () => {
+  // GPT Pro round-6 adversarial F3: labeling open's inverse as open_panel
+  // made revert re-apply the open — panels stayed off the shelf forever.
+  const file = path.join(scratch, 'workspace.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 3,
+    revision: 60,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    activeWindowId: null,
+    windows: [
+      { windowId: 'solo_shelf', type: 'note', space: 'screen', entityRef: 'note:soloshelf', x: 0, y: 0, width: 200, height: 150, rotation: 0, scale: 1, zIndex: 1, state: 'minimised', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+    ],
+    groups: [],
+    shelf: { windowIds: ['solo_shelf'] },
+  }));
+  const opened = workspace.applyAction({ type: 'open_panel', targetId: 'solo_shelf' });
+  assert.equal(opened.inverse.type, 'close_panel', 'the undo label points back to closing');
+  assert.equal(workspace.read().shelf.windowIds.includes('solo_shelf'), false, 'the open removes shelf membership');
+  workspace.applyAction(opened.inverse);
+  const reverted = workspace.read();
+  assert.ok(reverted.shelf.windowIds.includes('solo_shelf'), 'revert RETURNS the panel to the shelf');
+  assert.equal(reverted.windows.find((w) => w.windowId === 'solo_shelf').state, 'minimised');
+});

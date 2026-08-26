@@ -286,6 +286,12 @@ function read() {
     try { fs.copyFileSync(WORKSPACE_PATH, `${WORKSPACE_PATH}.pre-v3.bak`); } catch (_e) { /* best-effort */ }
     if (ws.schemaVersion === 1) ws = migrateV1toV2(ws); // in-memory only; no disk write of the intermediate
     const migrated = migrateV2toV3(ws);
+    // Canonical ownership converges BEFORE validation on the legacy chain
+    // too (GPT Pro round-6 adversarial finding): v1/v2 boards synthesize
+    // groups and shelf from independent fields, so a legacy hidden-screen
+    // row carrying groupId would trip the tightened validator here and
+    // brick every read of a previously-loading board.
+    normalizeOwnership(migrated);
     validateWorkspace(migrated); // throws before anything touches disk if the legacy data is poison
     atomicWrite(migrated);
     return migrated;
@@ -518,7 +524,10 @@ function applyAction(action = {}) {
     win.dock = dock;
     if (win.state !== 'minimised') win.state = dock ? 'docked' : 'floating';
   } else if (type === 'open_panel') {
-    inverse = { type: win.state === 'minimised' || win.state === 'tabbed' ? 'open_panel' : 'close_panel', targetId, payload: { collapsed: win.collapsed } };
+    // Undo must RETURN a shelf-origin panel to the shelf (GPT Pro round-6):
+    // labeling the reverse of open as open_panel made revert re-apply the
+    // open instead — open's inverse is always close_panel.
+    inverse = { type: 'close_panel', targetId, payload: { collapsed: win.collapsed } };
     win.state = (win.space === 'screen' && win.dock) ? 'docked' : 'floating';
     win.collapsed = Boolean(payload.collapsed);
     ws.shelf.windowIds = ws.shelf.windowIds.filter((id) => id !== win.windowId);
@@ -535,6 +544,11 @@ function applyAction(action = {}) {
   }
 
   if (win) win.updatedAt = now();
+  // Ownership normalizes before validation here TOO (GPT Pro round-6
+  // adversarial finding): lifecycle actions bypass setShelf's transaction,
+  // so a GROUPED SCREEN member closed through a Partner action must leave
+  // its group canonically rather than trip the mutual-exclusion check.
+  normalizeOwnership(ws);
   validateWorkspace(ws);
   write(ws);
   return { workspace: ws, object: win ? toLegacyObject(win) : null, inverse };
