@@ -115,6 +115,33 @@ function sanitizeWindow(input = {}, existing = null) {
 }
 
 /** Whole-store referential integrity after any mutation, before write. */
+/** Canonical ownership normalization (GPT Pro round-6): every live window
+ * belongs to AT MOST ONE group, and never simultaneously to a group and the
+ * shelf. Precedence: the SHELF wins (a shelved window must stay recoverable
+ * from the shelf surface), then the FIRST claiming group in stored order.
+ * Deterministic shrink, never throws: boards written by older builds with
+ * contradictory rows converge here instead of failing validation forever. */
+function normalizeOwnership(ws) {
+  const windowsById = new Map(ws.windows.map((w) => [w.windowId, w]));
+  const shelved = new Set(Array.isArray(ws.shelf && ws.shelf.windowIds) ? ws.shelf.windowIds.filter((id) => windowsById.has(id)) : []);
+  const claimed = new Set();
+  for (const group of ws.groups) {
+    const members = Array.isArray(group.windowIds) ? group.windowIds : [];
+    const kept = [];
+    for (const id of members) {
+      if (!windowsById.has(id) || shelved.has(id) || claimed.has(id)) continue;
+      claimed.add(id);
+      kept.push(id);
+    }
+    group.windowIds = kept;
+    group.activeWindowId = group.windowIds.includes(group.activeWindowId) ? group.activeWindowId : (kept[0] || null);
+  }
+  ws.groups = ws.groups.filter((group) => group.windowIds.length > 0);
+  const ownerOf = new Map();
+  for (const group of ws.groups) for (const id of group.windowIds) ownerOf.set(id, group.groupId);
+  for (const win of ws.windows) win.groupId = ownerOf.get(win.windowId) || null;
+}
+
 function validateWorkspace(ws) {
   const ids = new Set();
   for (const win of ws.windows) {
@@ -140,9 +167,31 @@ function validateWorkspace(ws) {
     if (win.groupId != null && !seenGroups.has(win.groupId)) {
       throw new HttpError(500, `window ${win.windowId} references unknown group ${win.groupId}`);
     }
+    // Exact bidirectional membership (GPT Pro round-6): a reverse pointer
+    // must name a group whose member list actually contains the window —
+    // no silent "last processed group wins" divergence.
+    if (win.groupId != null) {
+      const group = ws.groups.find((g) => g.groupId === win.groupId);
+      if (!group || !group.windowIds.includes(win.windowId)) {
+        throw new HttpError(500, `window ${win.windowId} claims group membership it does not hold`);
+      }
+    }
   }
   const shelf = ws.shelf && Array.isArray(ws.shelf.windowIds) ? ws.shelf.windowIds : [];
   if (new Set(shelf).size !== shelf.length) throw new HttpError(500, 'workspace shelf contains duplicates');
+  // Shelf/group mutual exclusion (GPT Pro round-6): minimised membership is
+  // owned by the shelf alone — a ref must never sit in a group and on the
+  // shelf, and never in two groups.
+  const groupedSet = new Set();
+  for (const group of ws.groups) {
+    for (const id of group.windowIds) {
+      if (groupedSet.has(id)) throw new HttpError(500, `window ${id} claims multiple groups`);
+      groupedSet.add(id);
+    }
+  }
+  for (const id of shelf) {
+    if (groupedSet.has(id)) throw new HttpError(500, `window ${id} cannot be both grouped and shelved`);
+  }
   for (const id of shelf) {
     if (!ids.has(id)) throw new HttpError(500, `workspace shelf references unknown window ${id}`);
   }
@@ -247,6 +296,10 @@ function read() {
   if (!ws.shelf || !Array.isArray(ws.shelf.windowIds)) ws.shelf = { windowIds: [] };
   if (!ws.revision || !Number.isFinite(ws.revision)) ws.revision = 1;
   repairLegacySurfaceTypes(ws);
+  // Canonical ownership converges on read too (GPT Pro round-6): legacy
+  // contradictory membership normalizes in memory so the NEXT structural
+  // write lands canonically instead of propagating the malformation.
+  normalizeOwnership(ws);
   return ws;
 }
 
@@ -286,8 +339,13 @@ function upsertWindow(input, options = {}) {
   const existing = getWindow(ws, windowId);
   const next = sanitizeWindow(input, existing);
   if (existing) Object.assign(existing, next); else ws.windows.push(next);
+  // Ownership derives from the canonical collections (GPT Pro round-6):
+  // an unpersisted reverse pointer injected through a stale upsert can
+  // never disagree with the groups.
+  normalizeOwnership(ws);
   validateWorkspace(ws);
   write(ws);
+  if (existing) next.groupId = existing.groupId; // returned clone mirrors the normalized stored row
   return next;
 }
 
@@ -335,11 +393,11 @@ function setGroups(groups, options = {}) {
       throw new HttpError(400, `groups reference unknown active window ${group.activeWindowId}`);
     }
   }
-  // Windows not named by any group lose their groupId; named windows gain it.
-  const membership = new Map();
-  for (const group of clean) for (const id of group.windowIds) membership.set(id, group.groupId);
-  for (const win of ws.windows) win.groupId = membership.get(win.windowId) || null;
+  // Canonical ownership (GPT Pro round-6): one group per window, the shelf
+  // wins overlaps, duplicate claims resolve by stored order, reverse
+  // pointers derive from the canonical collections.
   ws.groups = clean;
+  normalizeOwnership(ws);
   validateWorkspace(ws);
   write(ws);
   return ws;
@@ -365,6 +423,19 @@ function setShelf(windowIds, options = {}) {
     }
   }
   ws.shelf = { windowIds: ids };
+  // The shelf transaction OWNS the mutual exclusion it creates (GPT Pro
+  // round-6): shelved refs leave their groups atomically server-side — not
+  // via best-effort client bookkeeping — so a reload can never resurrect
+  // the grouped+minimised hybrid.
+  for (const group of ws.groups) {
+    const before = group.windowIds.length;
+    group.windowIds = group.windowIds.filter((id) => !shelfSet.has(id));
+    if (group.windowIds.length !== before) {
+      group.activeWindowId = group.windowIds.includes(group.activeWindowId) ? group.activeWindowId : (group.windowIds[0] || null);
+    }
+  }
+  ws.groups = ws.groups.filter((group) => group.windowIds.length > 0);
+  normalizeOwnership(ws);
   validateWorkspace(ws);
   write(ws);
   return ws;

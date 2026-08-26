@@ -35,6 +35,22 @@
   const registry = new Map();
   const SUPPORTED_STATES = new Set(['floating', 'tabbed', 'docked', 'minimised', 'maximised']);
 
+  // True recursive freeze for declarative policy data (GPT Pro round-6):
+  // shallow clones left nested objects mutable through retained sources AND
+  // through the exposed definition. Clone-and-freeze every level.
+  function deepFreeze(value) {
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+      Object.freeze(value);
+      for (const key of Object.keys(value)) deepFreeze(value[key]);
+    }
+    return value;
+  }
+  function frozenClone(value) {
+    return value && typeof value === 'object'
+      ? deepFreeze(Array.isArray(value) ? value.slice() : { ...value })
+      : value;
+  }
+
   const CreativeSurfaces = {
     register(surface) {
       if (!surface || typeof surface !== 'object') throw new Error('surface definition is required');
@@ -51,7 +67,7 @@
           width: Math.max(120, Number(surface.minimumSize && surface.minimumSize.width) || 280),
           height: Math.max(90, Number(surface.minimumSize && surface.minimumSize.height) || 180),
         }),
-        defaultPlacement: Object.freeze({ ...(surface.defaultPlacement || { width: 460, height: 360, dock: null }) }),
+        defaultPlacement: frozenClone(surface.defaultPlacement || { width: 460, height: 360, dock: null }),
         // Every window snaps to the desk edges by default (owner reference:
         // all panels dock); a surface opts out by declaring its own list.
         // Frozen ARRAY, not a Set: a Set's contents are mutable through the
@@ -69,8 +85,8 @@
             .filter((edge) => SNAP_ZONE_EDGES.includes(edge)),
         ),
         contextualTools: Object.freeze(
-          (Array.isArray(surface.contextualTools) ? surface.contextualTools : []).slice()
-            .map((tool) => (tool && typeof tool === 'object' ? Object.freeze({ ...tool }) : tool)),
+          (Array.isArray(surface.contextualTools) ? surface.contextualTools : [])
+            .map((tool) => frozenClone(tool)),
         ),
       });
       registry.set(def.id, def);
@@ -815,14 +831,20 @@
         if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision, ws.revision);
         shelfWarned = false;
       }).catch((error) => {
-        const ws = error && error.workspace;
-        if (!ws || !Number.isFinite(ws.revision)) {
+        // Conflict classification (GPT Pro round-6): ONLY a 409 carrying a
+        // valid canonical conflict payload is adoptable. Transport loss,
+        // auth, 5xx — or any other status attaching diagnostic workspace
+        // state — must warn WITHOUT retry: replaying a whole-collection
+        // write after an uncertain failure could clobber another client's
+        // disjoint edit.
+        if (!(error && error.status === 409 && error.workspace && Number.isFinite(error.workspace.revision))) {
           if (!shelfWarned) {
             shelfWarned = true;
             console.warn('[freeform] shelf is not persisting:', error && error.message || error);
           }
           return;
         }
+        const ws = error.workspace;
         // Same adoption-on-conflict as groups: stale tokens die here.
         lastRevision = Math.max(lastRevision, ws.revision);
         if (baseRevision !== null && !shelfWarned) {
@@ -879,7 +901,11 @@
             // rejected and visible instead of silently abandoning the row
             // to resurrect on reload.
             if (error && error.status === 404) return undefined;
-            const ws = error && error.workspace;
+            // Round-6 rule shared by every structural write: adopt-and-retry
+            // ONLY a genuine 409 carrying canonical conflict state. Any other
+            // failure that happens to attach diagnostic workspace data must
+            // not be mistaken for a conflict.
+            const ws = error && error.status === 409 && error.workspace;
             if (ws && Number.isFinite(ws.revision)) {
               // Conflict: adopt the server revision and retry once.
               lastRevision = Math.max(lastRevision, ws.revision);
@@ -1290,14 +1316,16 @@
         if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision, ws.revision);
         groupsWarned = false;
       }).catch((error) => {
-        const ws = error && error.workspace;
-        if (!ws || !Number.isFinite(ws.revision)) {
+        // Same round-6 rule as the shelf path: only a 409 with a canonical
+        // payload adopts-and-retries; uncertain failures stay visible.
+        if (!(error && error.status === 409 && error.workspace && Number.isFinite(error.workspace.revision))) {
           if (!groupsWarned) {
             groupsWarned = true;
             console.warn('[freeform] window groups are not persisting:', error && error.message || error);
           }
           return;
         }
+        const ws = error.workspace;
         // Adopt even when the retry is latched off: a stale token must never
         // outlive a conflict we chose not to retry.
         lastRevision = Math.max(lastRevision, ws.revision);

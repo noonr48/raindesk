@@ -762,8 +762,11 @@ test('two desks on one store: gated writes stay revision-protected after init se
       if (groupsAttempts === 1) {
         // Simulate a foreign writer (the other desk) landing between our
         // send and server-handle: 409 carrying the post-conflict state.
+        // Faithful to the real ApiError shape (GPT Pro round-6): status
+        // rides ON the error — a workspace payload without status===409
+        // must never adopt-and-retry (that's the classifier contract).
         store.revision += 1;
-        return Promise.reject(Object.assign(new Error('workspace changed since this edit'), { workspace: { revision: store.revision, windows: [], groups: [], shelf: { windowIds: [] } } }));
+        return Promise.reject(Object.assign(new Error('workspace changed since this edit'), { status: 409, workspace: { revision: store.revision, windows: [], groups: [], shelf: { windowIds: [] } } }));
       }
       store.revision += 1;
       store.groups = groups.map((g) => ({ ...g }));
@@ -1460,4 +1463,50 @@ test('init downgrades a persisted docked row whose edge is outside the surface p
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   await manager.init();
   assert.equal(manager.state('window_layers').state, 'floating', 'top-docked layers row downgrades: top is outside its dock policy');
+});
+
+test('registry policy data is frozen through nesting: retained sources cannot rewrite nested values', () => {
+  // GPT Pro round-6 minor: shallow clones left nested configuration mutable
+  // through BOTH the retained source and the exposed definition.
+  const placement = { width: 500, height: 400, dock: null, meta: { tag: 'keep' } };
+  const tool = { id: 'note', label: 'Note', payload: { keybind: 'n' } };
+  wm.CreativeSurfaces.register({ id: 'freeze_deep_probe', title: 'Freeze Deep Probe', entityType: 'generic_panel', defaultPlacement: placement, contextualTools: [tool] });
+  const def = wm.CreativeSurfaces.get('freeze_deep_probe');
+  assert.throws(() => { def.defaultPlacement.meta.tag = 'rewrite'; }, /read only|not extensible|Cannot assign/i, 'nested placement metadata is frozen');
+  assert.throws(() => { tool.payload.keybind = 'hijack'; }, /read only|not extensible|Cannot assign/i, 'the SOURCE nested object was cloned, not aliased');
+  assert.equal(def.defaultPlacement.meta.tag, 'keep');
+  assert.equal(def.contextualTools[0].payload.keybind, 'n');
+});
+
+test('structural writes retry ONLY genuine 409 conflicts: diagnostics riding other statuses warn instead', async () => {
+  // GPT Pro round-6 minor: close/shelf/groups classified conflict by payload
+  // presence, so any error attaching workspace data could masquerade as an
+  // adoptable conflict. The wire contract: ApiError carries status — 409 only.
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    let shelfAttempts = 0;
+    const root = makeNode('div');
+    const api = {
+      upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
+      getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 9, windows: [], groups: [], shelf: { windowIds: [] } }); },
+      setWorkspaceShelf(windowIds) {
+        shelfAttempts += 1;
+        const boom = new Error('gateway exploded');
+        boom.status = 503; // transport-class failure that ALSO carries diagnostics
+        boom.workspace = { revision: 12, windows: [], groups: [], shelf: { windowIds: [] } };
+        return Promise.reject(boom);
+      },
+    };
+    const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+    manager.open('references');
+    manager.minimise('window_references');
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(shelfAttempts, 1, 'diagnostics on a non-409 must never adopt-and-retry');
+    assert.ok(warnings.some((w) => w.includes('shelf is not persisting')), 'uncertain structural failure stays visible through the warn path');
+  } finally {
+    console.warn = origWarn;
+  }
 });
