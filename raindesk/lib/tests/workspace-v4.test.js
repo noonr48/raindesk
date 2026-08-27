@@ -229,8 +229,10 @@ test('create retries survive receipt compaction via incarnation echo (never doub
   for (let n = 1; n <= 505; n++) {
     v4.applyIntent({ actorId: 'evict', intentId: `evict-${n}`, op: { kind: 'focus.set', window: null } });
   }
+  assert.equal(v4.getReceipt('evict', 'evict-0'), null, 'PRECONDITION: the receipt really was compacted (evictOldest must not be dead code)');
   const echo = v4.applyIntent({ actorId: 'evict', intentId: 'evict-0', op: { kind: 'window.create', windowId: 'w_echo', incarnationId: inc, type: 'note' } });
   assert.equal(echo.ok, true, 'compacted-receipt retry echoes SUCCESS, not a mint');
+  assert.equal(echo.duplicate, false, 'echo path taken, not the receipt-replay path');
   const rows = v4.readV4().windows.filter((w) => w.ref.windowId === 'w_echo');
   assert.equal(rows.length, 1, 'exactly one live row despite the compacted receipt');
   assert.equal(echo.changed.windows[0].ref.incarnationId, inc);
@@ -251,4 +253,46 @@ test('create retry of an ALREADY-CLOSED incarnation cannot resurrect (410 even w
   // Deliberate reopen with a NEW incarnation remains legal.
   const reopened = v4.applyIntent({ actorId: 'dead', intentId: 'dead-c-new', op: { kind: 'window.create', windowId: 'w_dead', incarnationId: inc + 'x' } });
   assert.equal(reopened.changed.windows[0].ref.generation, 2);
+});
+
+test('spatial mutationId dedupe is scoped per window+generation (cross-window reuse cannot replay)', () => {
+  const incA = freshIncarnation('mutA');
+  const incB = freshIncarnation('mutB');
+  v4.applyIntent({ actorId: 'mut', intentId: 'mA', op: { kind: 'window.create', windowId: 'w_mut_a', incarnationId: incA, type: 'note' } });
+  v4.applyIntent({ actorId: 'mut', intentId: 'mB', op: { kind: 'window.create', windowId: 'w_mut_b', incarnationId: incB, type: 'note' } });
+  const first = v4.applySpatial('w_mut_a', 1, { incarnationId: incA, mutationId: 'shared-mid', patch: { x: 11 } });
+  assert.equal(first.window.ref.windowId, 'w_mut_a');
+  // The SAME mutationId on a DIFFERENT window must NOT replay w_mut_a's success.
+  const second = v4.applySpatial('w_mut_b', 1, { incarnationId: incB, mutationId: 'shared-mid', patch: { x: 22 } });
+  assert.equal(second.window.ref.windowId, 'w_mut_b');
+  assert.equal(second.window.spatial.x, 22);
+  assert.ok(!('duplicate' in second));
+  // Same window + generation + mutationId still dedupes (lost-response replay).
+  const replay = v4.applySpatial('w_mut_a', 1, { incarnationId: incA, mutationId: 'shared-mid', patch: { x: 99 } });
+  assert.equal(replay.duplicate, true);
+  assert.equal(replay.window.spatial.x, 11, 'replays the ORIGINAL outcome, not the new patch');
+});
+
+test('control characters in idempotency key components are refused (no receipt-slot collisions)', () => {
+  assert.throws(() => v4.applyIntent({ actorId: 'a\u001fb', intentId: 'x', op: { kind: 'focus.set', window: null } }), (e) => e.status === 400);
+  assert.throws(() => v4.applyIntent({ actorId: 'ok', intentId: 'x\u001fy', op: { kind: 'focus.set', window: null } }), (e) => e.status === 400);
+});
+
+test('viewport.set bumps only viewportRevision and persists', () => {
+  const before = v4.readV4();
+  const out = v4.applyIntent({ actorId: 'view', intentId: 'v1', op: { kind: 'viewport.set', viewport: { pan: { x: 30, y: -12 }, zoom: 1.25 } } });
+  assert.equal(out.viewportRevision, before.viewportRevision + 1);
+  assert.equal(out.structuralRevision, before.structuralRevision, 'viewport traffic never moves structuralRevision');
+  const after = v4.readV4();
+  assert.deepEqual(after.viewport, { pan: { x: 30, y: -12 }, zoom: 1.25 });
+  assert.equal(after.viewportRevision, before.viewportRevision + 1);
+});
+
+test('a spatial patch with a late invalid key mutates NOTHING (validate-then-apply)', () => {
+  const incC = freshIncarnation('mutC');
+  v4.applyIntent({ actorId: 'mut', intentId: 'mC', op: { kind: 'window.create', windowId: 'w_mut_c', incarnationId: incC, type: 'note' } });
+  assert.throws(() => v4.applySpatial('w_mut_c', 1, { incarnationId: incC, patch: { x: 77, y: 'bogus' } }), (e) => e.status === 400);
+  const row = v4.readV4().windows.find((w) => w.ref.windowId === 'w_mut_c');
+  assert.equal(row.spatial.x, 0, 'x never applied despite being valid');
+  assert.equal(row.spatialVersion, 1, 'no phantom version bump from a failed patch');
 });

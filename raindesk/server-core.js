@@ -377,10 +377,13 @@ async function handleApi(req, res, url, deps) {
     // logical id (tombstone + no live incarnation), ungated legacy upserts
     // must NOT resurrect it — the stale-tab resurrection race this program
     // exists to kill. Ids v4 has never tombstoned flow through unchanged.
-    if (body && typeof body.id === 'string') {
+    const legacyId = body && (typeof body.id === 'string' ? body.id : typeof body.windowId === 'string' ? body.windowId : null);
+    if (legacyId !== null) {
       // Typed envelope even on the LEGACY route: a tombstone refusal is a
       // protocol conflict — the caller gets code + tombstone, not a bare 500.
-      try { workspaceV4.assertLegacyWriteAllowed(body.id); }
+      // BOTH client shapes are guarded: upsertObject maps id -> windowId, so
+      // checking only body.id let {windowId:...} payloads resurrect rows.
+      try { workspaceV4.assertLegacyWriteAllowed(legacyId); }
       catch (error) {
         if (error instanceof HttpError && error.code) return v4Envelope(res, error);
         throw error;

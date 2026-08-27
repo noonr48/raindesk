@@ -139,6 +139,7 @@ function seedFromV3() {
     groups,
     shelf: { version: 1, members: shelfMembers },
     focus: (v3 && v3.activeWindowId) ? findIn(windows, v3.activeWindowId) : null,
+    viewport: { pan: { x: 0, y: 0 }, zoom: 1 },
     structuralRevision: 1,
     spatialRevision: 1,
     viewportRevision: 1,
@@ -236,11 +237,25 @@ const MUTATION_LIMIT = 200;
 
 function receiptKey(actorId, intentId) { return `${actorId}\u001f${intentId}`; }
 
-function evictOldest(map, limit) {
-  while (map.size > limit) {
-    const oldest = map.keys().next().value;
-    map.delete(oldest);
+/** Receipt/mutation keys join components with \u001f — a component carrying
+ * that separator (or any control char) could collide two logical keys into
+ * one slot. Refuse control characters outright. */
+function assertSafeKeyComponent(kind, value, max) {
+  for (const ch of value) {
+    const code = ch.codePointAt(0);
+    if (code <= 0x1f || code === 0x7f) throw httpError(400, `${kind} must not contain control characters`);
   }
+  return value;
+}
+
+function evictOldest(map, limit) {
+  // Plain-object ledger: string keys preserve insertion order, so drop the
+  // first (oldest) entries once over the cap. The old `while (map.size >
+  // limit)` was Map-thinking — `size` is undefined on plain objects, the
+  // loop never ran, and both caps were silently dead.
+  const keys = Object.keys(map);
+  const overflow = keys.length - limit;
+  for (let i = 0; i < overflow; i++) delete map[keys[i]];
 }
 
 /** Group-level helpers shared by several ops. */
@@ -370,7 +385,7 @@ const OPS = {
       if (!row.beforeMaximise) row.beforeMaximise = { ...row.presentation };
       row.presentation = { kind: 'maximised' };
     } else if (mode === 'restore') {
-      if (!row.beforeMaximise) throw httpError(409, 'nothing to restore: not maximised', { code: 'GROUP_CHANGED' });
+      if (!row.beforeMaximise) throw httpError(409, 'nothing to restore: not maximised', { code: 'NOT_MAXIMISED' });
       row.presentation = { ...row.beforeMaximise };
       row.beforeMaximise = null;
     } else if (mode === 'docked') {
@@ -590,6 +605,18 @@ const OPS = {
     return group;
   },
 
+  'viewport.set'(ws, op, affected) {
+    if (!op.viewport || typeof op.viewport !== 'object' || Array.isArray(op.viewport)) throw httpError(400, 'viewport.set requires a viewport object');
+    const pan = op.viewport.pan && typeof op.viewport.pan === 'object' && !Array.isArray(op.viewport.pan)
+      ? { x: Number.isFinite(op.viewport.pan.x) ? op.viewport.pan.x : ws.viewport.pan.x, y: Number.isFinite(op.viewport.pan.y) ? op.viewport.pan.y : ws.viewport.pan.y }
+      : { ...ws.viewport.pan };
+    const zoom = Number.isFinite(op.viewport.zoom) ? op.viewport.zoom : ws.viewport.zoom;
+    if (zoom <= 0) throw httpError(400, 'viewport.zoom must be > 0');
+    ws.viewport = { pan, zoom };
+    ws.viewportRevision += 1; // viewport traffic never moves structural/spatial revisions
+    affected.kind = 'viewport.set';
+  },
+
   'focus.set'(ws, op, affected) {
     if (op.window == null) { ws.focus = null; }
     else { const row = resolveLive(ws, op.window, 'window'); ws.focus = { ...row.ref }; }
@@ -605,6 +632,8 @@ function applyIntent(input) {
   const actorId = input && typeof input.actorId === 'string' && input.actorId.length <= 64 ? input.actorId : null;
   const intentId = input && typeof input.intentId === 'string' && input.intentId.length <= 64 ? input.intentId : null;
   if (!actorId || !intentId) throw httpError(400, 'actorId and intentId are required (<=64 chars each)');
+  assertSafeKeyComponent('actorId', actorId, 64);
+  assertSafeKeyComponent('intentId', intentId, 64);
   const op = input.op;
   if (!op || typeof op.kind !== 'string') throw httpError(400, 'op.kind is required');
   const handler = OPS[op.kind];
@@ -668,8 +697,12 @@ function getReceipt(actorId, intentId) {
 function applySpatial(windowId, generation, body) {
   const ws = read();
   const mutationId = body && typeof body.mutationId === 'string' && body.mutationId.length <= 64 ? body.mutationId : null;
-  if (mutationId && ws.mutations[mutationId]) {
-    const cached = JSON.parse(ws.mutations[mutationId].responseJson);
+  if (mutationId) assertSafeKeyComponent('mutationId', mutationId, 64);
+  // Dedupe scope is (windowId, generation, mutationId): a bare mutationId is
+  // global — one window's retry could replay ANOTHER window's cached success.
+  const mutationKey = mutationId ? `${windowId}\u001f${generation}\u001f${mutationId}` : null;
+  if (mutationKey && ws.mutations[mutationKey]) {
+    const cached = JSON.parse(ws.mutations[mutationKey].responseJson);
     cached.duplicate = true;
     return cached;
   }
@@ -687,11 +720,12 @@ function applySpatial(windowId, generation, body) {
     throw httpError(409, `INCARNATION_REPLACED ${windowId}`, { code: 'INCARNATION_REPLACED', live: { ...row.ref } });
   }
   const patch = body.patch || {};
-  for (const key of ['x', 'y', 'width', 'height', 'rotation', 'scale', 'zIndex']) {
-    if (patch[key] !== undefined) {
-      if (!Number.isFinite(patch[key])) throw httpError(400, `patch.${key} must be finite`);
-      row.spatial[key] = patch[key];
-    }
+  const SPATIAL_KEYS = ['x', 'y', 'width', 'height', 'rotation', 'scale', 'zIndex'];
+  for (const key of SPATIAL_KEYS) { // pass 1: validate ALL keys before ANY mutation
+    if (patch[key] !== undefined && !Number.isFinite(patch[key])) throw httpError(400, `patch.${key} must be finite`);
+  }
+  for (const key of SPATIAL_KEYS) { // pass 2: apply — a late invalid key can never half-apply
+    if (patch[key] !== undefined) row.spatial[key] = patch[key];
   }
   row.spatialVersion += 1;
   ws.spatialRevision += 1; // STRUCTURAL revision deliberately untouched
@@ -702,8 +736,8 @@ function applySpatial(windowId, generation, body) {
     structuralRevision: ws.structuralRevision,
     window: { ...row },
   };
-  if (mutationId) {
-    ws.mutations[mutationId] = { windowId, generation, responseJson: JSON.stringify(response), createdAt: now() };
+  if (mutationKey) {
+    ws.mutations[mutationKey] = { windowId, generation, mutationId, responseJson: JSON.stringify(response), createdAt: now() };
     evictOldest(ws.mutations, MUTATION_LIMIT);
   }
   save();
@@ -739,6 +773,7 @@ function readV4() {
     groups: ws.groups.map((g) => ({ groupId: g.groupId, version: g.version, members: g.members.map((m) => ({ ...m })), active: g.active ? { ...g.active } : null })),
     shelf: { version: ws.shelf.version, members: ws.shelf.members.map((m) => ({ ...m })) },
     focus: ws.focus ? { ...ws.focus } : null,
+    viewport: ws.viewport ? JSON.parse(JSON.stringify(ws.viewport)) : null,
     identities: JSON.parse(JSON.stringify(ws.identities)),
     tombstones: JSON.parse(JSON.stringify(ws.tombstones)),
     structuralRevision: ws.structuralRevision,
