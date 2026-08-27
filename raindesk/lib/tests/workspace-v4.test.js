@@ -314,6 +314,7 @@ test('viewport.set echoes the applied viewport and refuses non-finite values', (
   const incE = freshIncarnation('view2');
   v4.applyIntent({ actorId: 'view2', intentId: 'w1', op: { kind: 'window.create', windowId: 'w_view2', incarnationId: incE, type: 'note' } });
   assert.throws(() => v4.applyIntent({ actorId: 'view2', intentId: 'vNaN', op: { kind: 'viewport.set', viewport: { pan: { x: Number.NaN, y: 0 } } } }), (e) => e.status === 400);
+  assert.throws(() => v4.applyIntent({ actorId: 'view2', intentId: 'vZoom', op: { kind: 'viewport.set', viewport: { zoom: 0 } } }), (e) => e.status === 400, 'zoom must be > 0');
   const vpBefore = v4.readV4().viewport; // order-independent: pan carries over on the shared store
   const out = v4.applyIntent({ actorId: 'view2', intentId: 'v2', op: { kind: 'viewport.set', viewport: { zoom: 1.5 } } });
   assert.deepEqual(out.changed.viewport, { pan: vpBefore.pan, zoom: 1.5 }, 'response echoes exactly what applied');
