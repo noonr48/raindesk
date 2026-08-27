@@ -319,3 +319,31 @@ test('viewport.set echoes the applied viewport and refuses non-finite values', (
   const out = v4.applyIntent({ actorId: 'view2', intentId: 'v2', op: { kind: 'viewport.set', viewport: { zoom: 1.5 } } });
   assert.deepEqual(out.changed.viewport, { pan: vpBefore.pan, zoom: 1.5 }, 'response echoes exactly what applied');
 });
+
+test('shelf.restore: floating mode re-floats at the given point; resume keeps the latent dock edge', () => {
+  const incA = freshIncarnation('shra');
+  const a = v4.applyIntent({ actorId: 'shr', intentId: 'a1', op: { kind: 'window.create', windowId: 'w_shr_a', incarnationId: incA, type: 'note' } });
+  const refA = a.changed.windows[0].ref;
+  v4.applyIntent({ actorId: 'shr', intentId: 'a2', op: { kind: 'shelf.minimise', window: refA } });
+  const outA = v4.applyIntent({ actorId: 'shr', intentId: 'a3', op: { kind: 'shelf.restore', window: refA, mode: 'floating', floatingAt: { x: 44, y: 55 } } });
+  assert.equal(outA.changed.windows[0].presentation.kind, 'floating');
+  assert.deepEqual(outA.changed.windows[0].presentation.at, { x: 44, y: 55 });
+  assert.ok(!v4.readV4().shelf.members.some((m) => m.windowId === 'w_shr_a'), 'restore strips shelf membership');
+
+  const incB = freshIncarnation('shrb');
+  const b = v4.applyIntent({ actorId: 'shr', intentId: 'b1', op: { kind: 'window.create', windowId: 'w_shr_b', incarnationId: incB, type: 'note' } });
+  const refB = b.changed.windows[0].ref;
+  v4.applyIntent({ actorId: 'shr', intentId: 'b2', op: { kind: 'window.setPresentation', window: refB, mode: 'docked', edge: 'left' } });
+  v4.applyIntent({ actorId: 'shr', intentId: 'b3', op: { kind: 'shelf.minimise', window: refB } });
+  const outB = v4.applyIntent({ actorId: 'shr', intentId: 'b4', op: { kind: 'shelf.restore', window: refB, mode: 'resume' } });
+  assert.equal(outB.changed.windows[0].presentation.kind, 'docked', 'resume keeps the latent presentation');
+  assert.equal(outB.changed.windows[0].presentation.edge, 'left');
+  assert.ok(!v4.readV4().shelf.members.some((m) => m.windowId === 'w_shr_b'));
+});
+
+test('restore without a prior maximise refuses 409 NOT_MAXIMISED (never a silent no-op)', () => {
+  const incC = freshIncarnation('resto');
+  const made = v4.applyIntent({ actorId: 'resto', intentId: 'r1', op: { kind: 'window.create', windowId: 'w_resto', incarnationId: incC, type: 'note' } });
+  assert.throws(() => v4.applyIntent({ actorId: 'resto', intentId: 'r2', op: { kind: 'window.setPresentation', window: made.changed.windows[0].ref, mode: 'restore' } }),
+    (e) => e.status === 409 && e.code === 'NOT_MAXIMISED');
+});

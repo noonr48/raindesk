@@ -97,3 +97,19 @@ test('workspace structural routes reject malformed payloads and unknown windows'
     assert.equal(res.status, 400, 'non-array groups payload is rejected');
   });
 });
+
+test('v4 tombstone guard on legacy object route: both id shapes refuse with typed 410', async (t) => {
+  await withServer(t, async (base) => {
+    const mk = (intentId, op) => post(base, '/api/workspace/v4/intents', { actorId: 'guard', intentId, op });
+    const created = await (await mk('g1', { kind: 'window.create', windowId: 'window_guarded', incarnationId: 'inc-guard00001', type: 'note' })).json();
+    const ref = created.changed.windows[0].ref;
+    await mk('g2', { kind: 'window.close', window: ref });
+    const byWindowId = await post(base, '/api/workspace/object', { windowId: 'window_guarded', type: 'note', entityRef: 'note:guarded', x: 1, y: 1 });
+    assert.equal(byWindowId.status, 410);
+    const body = await byWindowId.json();
+    assert.equal(body.code, 'WINDOW_GENERATION_GONE');
+    assert.ok(body.tombstone, 'typed envelope carries the tombstone');
+    const byId = await post(base, '/api/workspace/object', { id: 'window_guarded', type: 'note', entityRef: 'note:guarded', x: 1, y: 1 });
+    assert.equal(byId.status, 410, 'the id shape is guarded identically');
+  });
+});
