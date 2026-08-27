@@ -105,7 +105,9 @@ test('split revisions: spatial traffic never moves structuralRevision; mutationI
   assert.equal(mid.structuralRevision, before.structuralRevision, 'structural domain untouched by spatial traffic');
   assert.equal(mid.spatialRevision - before.spatialRevision, 1);
   assert.equal(r1.window.spatial.x, 42);
-  const r2 = v4.applySpatial(target.ref.windowId, target.ref.generation, { incarnationId: target.ref.incarnationId, mutationId, patch: { x: 999 } });
+  // bodyHash discipline: same key + IDENTICAL body replays; a divergent body
+  // under a used key refuses 409 MUTATION_ID_REUSED (dedicated test below).
+  const r2 = v4.applySpatial(target.ref.windowId, target.ref.generation, { incarnationId: target.ref.incarnationId, mutationId, patch: { x: 42, zIndex: 9 } });
   assert.equal(r2.duplicate, true, 'lost-response retry with same mutationId replays');
   assert.equal(r2.window.spatial.x, 42, 'the replayed body carries the ORIGINAL outcome');
   // Generation mismatch is a 410 (the world moved on), not a silent merge:
@@ -268,7 +270,7 @@ test('spatial mutationId dedupe is scoped per window+generation (cross-window re
   assert.equal(second.window.spatial.x, 22);
   assert.ok(!('duplicate' in second));
   // Same window + generation + mutationId still dedupes (lost-response replay).
-  const replay = v4.applySpatial('w_mut_a', 1, { incarnationId: incA, mutationId: 'shared-mid', patch: { x: 99 } });
+  const replay = v4.applySpatial('w_mut_a', 1, { incarnationId: incA, mutationId: 'shared-mid', patch: { x: 11 } });
   assert.equal(replay.duplicate, true);
   assert.equal(replay.window.spatial.x, 11, 'replays the ORIGINAL outcome, not the new patch');
 });
@@ -295,4 +297,24 @@ test('a spatial patch with a late invalid key mutates NOTHING (validate-then-app
   const row = v4.readV4().windows.find((w) => w.ref.windowId === 'w_mut_c');
   assert.equal(row.spatial.x, 0, 'x never applied despite being valid');
   assert.equal(row.spatialVersion, 1, 'no phantom version bump from a failed patch');
+});
+
+test('spatial mutationId reuse with a DIFFERENT patch refuses 409 (no lying ack)', () => {
+  const incD = freshIncarnation('mutd');
+  v4.applyIntent({ actorId: 'mut2', intentId: 'mA2', op: { kind: 'window.create', windowId: 'w_mut_d', incarnationId: incD, type: 'note' } });
+  v4.applySpatial('w_mut_d', 1, { incarnationId: incD, mutationId: 'hash-mid', patch: { x: 5 } });
+  assert.throws(() => v4.applySpatial('w_mut_d', 1, { incarnationId: incD, mutationId: 'hash-mid', patch: { x: 6 } }),
+    (e) => e.status === 409 && e.code === 'MUTATION_ID_REUSED',
+    'same key + divergent patch is a client bug, never a silent ack');
+  const row = v4.readV4().windows.find((w) => w.ref.windowId === 'w_mut_d');
+  assert.equal(row.spatial.x, 5, 'the divergent patch never applied');
+});
+
+test('viewport.set echoes the applied viewport and refuses non-finite values', () => {
+  const incE = freshIncarnation('view2');
+  v4.applyIntent({ actorId: 'view2', intentId: 'w1', op: { kind: 'window.create', windowId: 'w_view2', incarnationId: incE, type: 'note' } });
+  assert.throws(() => v4.applyIntent({ actorId: 'view2', intentId: 'vNaN', op: { kind: 'viewport.set', viewport: { pan: { x: Number.NaN, y: 0 } } } }), (e) => e.status === 400);
+  const vpBefore = v4.readV4().viewport; // order-independent: pan carries over on the shared store
+  const out = v4.applyIntent({ actorId: 'view2', intentId: 'v2', op: { kind: 'viewport.set', viewport: { zoom: 1.5 } } });
+  assert.deepEqual(out.changed.viewport, { pan: vpBefore.pan, zoom: 1.5 }, 'response echoes exactly what applied');
 });

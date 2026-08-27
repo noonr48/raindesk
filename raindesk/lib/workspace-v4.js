@@ -240,7 +240,7 @@ function receiptKey(actorId, intentId) { return `${actorId}\u001f${intentId}`; }
 /** Receipt/mutation keys join components with \u001f — a component carrying
  * that separator (or any control char) could collide two logical keys into
  * one slot. Refuse control characters outright. */
-function assertSafeKeyComponent(kind, value, max) {
+function assertSafeKeyComponent(kind, value) {
   for (const ch of value) {
     const code = ch.codePointAt(0);
     if (code <= 0x1f || code === 0x7f) throw httpError(400, `${kind} must not contain control characters`);
@@ -607,14 +607,20 @@ const OPS = {
 
   'viewport.set'(ws, op, affected) {
     if (!op.viewport || typeof op.viewport !== 'object' || Array.isArray(op.viewport)) throw httpError(400, 'viewport.set requires a viewport object');
+    const finiteOr = (name, value, fallback) => {
+      if (value === undefined) return fallback;
+      if (!Number.isFinite(value)) throw httpError(400, `viewport.${name} must be finite`);
+      return value;
+    };
     const pan = op.viewport.pan && typeof op.viewport.pan === 'object' && !Array.isArray(op.viewport.pan)
-      ? { x: Number.isFinite(op.viewport.pan.x) ? op.viewport.pan.x : ws.viewport.pan.x, y: Number.isFinite(op.viewport.pan.y) ? op.viewport.pan.y : ws.viewport.pan.y }
+      ? { x: finiteOr('pan.x', op.viewport.pan.x, ws.viewport.pan.x), y: finiteOr('pan.y', op.viewport.pan.y, ws.viewport.pan.y) }
       : { ...ws.viewport.pan };
-    const zoom = Number.isFinite(op.viewport.zoom) ? op.viewport.zoom : ws.viewport.zoom;
+    const zoom = finiteOr('zoom', op.viewport.zoom, ws.viewport.zoom);
     if (zoom <= 0) throw httpError(400, 'viewport.zoom must be > 0');
     ws.viewport = { pan, zoom };
     ws.viewportRevision += 1; // viewport traffic never moves structural/spatial revisions
     affected.kind = 'viewport.set';
+    affected.viewport = { pan: { ...pan }, zoom }; // echo exactly what applied
   },
 
   'focus.set'(ws, op, affected) {
@@ -632,8 +638,8 @@ function applyIntent(input) {
   const actorId = input && typeof input.actorId === 'string' && input.actorId.length <= 64 ? input.actorId : null;
   const intentId = input && typeof input.intentId === 'string' && input.intentId.length <= 64 ? input.intentId : null;
   if (!actorId || !intentId) throw httpError(400, 'actorId and intentId are required (<=64 chars each)');
-  assertSafeKeyComponent('actorId', actorId, 64);
-  assertSafeKeyComponent('intentId', intentId, 64);
+  assertSafeKeyComponent('actorId', actorId);
+  assertSafeKeyComponent('intentId', intentId);
   const op = input.op;
   if (!op || typeof op.kind !== 'string') throw httpError(400, 'op.kind is required');
   const handler = OPS[op.kind];
@@ -696,17 +702,24 @@ function getReceipt(actorId, intentId) {
 
 function applySpatial(windowId, generation, body) {
   const ws = read();
+  assertValidId(windowId, 'windowId');
+  if (!Number.isInteger(generation)) throw httpError(400, 'generation path segment must be an integer');
   const mutationId = body && typeof body.mutationId === 'string' && body.mutationId.length <= 64 ? body.mutationId : null;
-  if (mutationId) assertSafeKeyComponent('mutationId', mutationId, 64);
+  if (mutationId) assertSafeKeyComponent('mutationId', mutationId);
   // Dedupe scope is (windowId, generation, mutationId): a bare mutationId is
   // global — one window's retry could replay ANOTHER window's cached success.
   const mutationKey = mutationId ? `${windowId}\u001f${generation}\u001f${mutationId}` : null;
+  const mutationHash = bodyHash({ incarnationId: body && body.incarnationId, patch: body && body.patch });
   if (mutationKey && ws.mutations[mutationKey]) {
+    if (ws.mutations[mutationKey].bodyHash !== mutationHash) {
+      // Same discipline as receipts: a used key with a DIFFERENT body is a
+      // client bug — refuse loudly instead of acking a patch never applied.
+      throw httpError(409, 'MUTATION_ID_REUSED', { code: 'MUTATION_ID_REUSED', mutationId });
+    }
     const cached = JSON.parse(ws.mutations[mutationKey].responseJson);
     cached.duplicate = true;
     return cached;
   }
-  if (!Number.isInteger(generation)) throw httpError(400, 'generation path segment must be an integer');
   const tomb = ws.tombstones[windowId];
   const row = ws.windows.find((w) => w.ref.windowId === windowId);
   if (!row) {
@@ -737,7 +750,7 @@ function applySpatial(windowId, generation, body) {
     window: { ...row },
   };
   if (mutationKey) {
-    ws.mutations[mutationKey] = { windowId, generation, mutationId, responseJson: JSON.stringify(response), createdAt: now() };
+    ws.mutations[mutationKey] = { windowId, generation, mutationId, bodyHash: mutationHash, responseJson: JSON.stringify(response), createdAt: now() };
     evictOldest(ws.mutations, MUTATION_LIMIT);
   }
   save();
