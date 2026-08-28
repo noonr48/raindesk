@@ -31,10 +31,10 @@ test('approved spatial action executes through bounded workspace API and can be 
   actions.approve(proposal.id);
   const done = actions.execute(proposal.id);
   assert.equal(done.status, 'completed');
-  assert.equal(workspace.read().objects.find((o) => o.id === 'refs_panel').x, 880);
+  assert.equal(workspace.read().windows.find((w) => w.windowId === 'refs_panel').x, 880);
   assert.ok(done.inverse);
   const accepted = actions.accept(proposal.id);
   assert.equal(accepted.status, 'accepted');
   actions.revert(proposal.id);
-  assert.equal(workspace.read().objects.find((o) => o.id === 'refs_panel').x, 20);
+  assert.equal(workspace.read().windows.find((w) => w.windowId === 'refs_panel').x, 20);
 });

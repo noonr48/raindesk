@@ -54,6 +54,7 @@ const blobs = require('./lib/blobs');
 const shotDocuments = require('./lib/shot-documents');
 const sheetDocuments = require('./lib/sheet-documents');
 const workspace = require('./lib/workspace');
+const workspaceV4 = require('./lib/workspace-v4');
 const partnerActions = require('./lib/partner-actions');
 const jobStore = require('./lib/job-store');
 const takes = require('./lib/takes');
@@ -388,15 +389,117 @@ async function handleApi(req, res, url, deps) {
 
   /* Spatial workspace: stable world-space objects shared by UI and Partner. */
   if (method === 'GET' && route === '/api/workspace') {
-    return sendJson(res, 200, workspace.read());
+    return sendJson(res, 200, workspace.readClient());
+  }
+  /* STAGE-1 identity/intent protocol surface (GPT Pro round-6 STAGE-1
+   * DESIGN). Typed conflict envelopes expose the machine-readable code plus
+   * whatever canonical records the caller must adopt. */
+  const v4Envelope = (res, error) => {
+    const payload = { error: error.message };
+    for (const key of ['code', 'tombstone', 'live', 'shelf', 'group']) {
+      if (error[key] !== undefined) payload[key] = error[key];
+    }
+    return sendJson(res, error.status || 500, payload);
+  };
+  if (method === 'GET' && route === '/api/workspace/v4') {
+    return sendJson(res, 200, workspaceV4.readV4());
+  }
+  if (method === 'POST' && route === '/api/workspace/v4/intents') {
+    const body = await readJson(req, 64 * 1024);
+    try {
+      return sendJson(res, 200, workspaceV4.applyIntent(body));
+    } catch (error) {
+      if (error instanceof HttpError) return v4Envelope(res, error);
+      throw error;
+    }
+  }
+  const v4ReceiptMatch = route.match(/^\/api\/workspace\/v4\/intents\/([^/]+)\/([^/]+)$/);
+  if (v4ReceiptMatch && method === 'GET') {
+    const actorId = decodeSeg(v4ReceiptMatch[1]);
+    const intentId = decodeSeg(v4ReceiptMatch[2]);
+    if (actorId === null || intentId === null) throw new HttpError(404, 'not found');
+    const receipt = workspaceV4.getReceipt(actorId, intentId);
+    if (!receipt) throw new HttpError(404, 'no such intent receipt');
+    return sendJson(res, 200, receipt);
+  }
+  const v4SpatialMatch = route.match(/^\/api\/workspace\/v4\/windows\/([^/]+)\/(\d+)\/spatial$/);
+  if (v4SpatialMatch && method === 'PATCH') {
+    const windowId = decodeSeg(v4SpatialMatch[1]);
+    if (windowId === null) throw new HttpError(404, 'not found');
+    const generation = Number.parseInt(v4SpatialMatch[2], 10);
+    const body = await readJson(req, 64 * 1024);
+    try {
+      return sendJson(res, 200, workspaceV4.applySpatial(windowId, generation, body));
+    } catch (error) {
+      if (error instanceof HttpError) return v4Envelope(res, error);
+      throw error;
+    }
   }
   if (method === 'POST' && route === '/api/workspace/object') {
     const body = await readJson(req, 256 * 1024);
-    return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body) });
+    // STAGE-1 tombstone guard: once the identity protocol has CLOSED a
+    // logical id (tombstone + no live incarnation), ungated legacy upserts
+    // must NOT resurrect it — the stale-tab resurrection race this program
+    // exists to kill. Ids v4 has never tombstoned flow through unchanged.
+    const legacyId = body && (typeof body.id === 'string' ? body.id : typeof body.windowId === 'string' ? body.windowId : null);
+    if (legacyId !== null) {
+      // Typed envelope even on the LEGACY route: a tombstone refusal is a
+      // protocol conflict — the caller gets code + tombstone, not a bare 500.
+      // BOTH client shapes are guarded: upsertObject maps id -> windowId, so
+      // checking only body.id let {windowId:...} payloads resurrect rows.
+      try { workspaceV4.assertLegacyWriteAllowed(legacyId); }
+      catch (error) {
+        if (error instanceof HttpError && error.code) return v4Envelope(res, error);
+        throw error;
+      }
+    }
+    // Revision rides along so freeform clients keep lastRevision in sync with
+    // ungated upserts (each upsert bumps it; without adoption every later
+    // gated structural write 409s).
+    return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body), revision: workspace.read().revision });
   }
   if (method === 'POST' && route === '/api/workspace/viewport') {
     const body = await readJson(req, 64 * 1024);
     return sendJson(res, 200, { ok: true, viewport: workspace.setViewport(body) });
+  }
+  /* Freeform desk structural API: groups, shelf, window deletion. These are
+   * revision-gated (baseRevision -> 409 with the current workspace attached)
+   * because a lost update here is structural, not spatial. */
+  if (method === 'POST' && route === '/api/workspace/groups') {
+    const body = await readJson(req, 256 * 1024);
+    try {
+      const ws = workspace.setGroups(body && body.groups, { baseRevision: body && body.baseRevision });
+      return sendJson(res, 200, { ok: true, workspace: ws });
+    } catch (error) {
+      if (error instanceof HttpError && error.workspace) {
+        return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
+      }
+      throw error;
+    }
+  }
+  if (method === 'POST' && route === '/api/workspace/shelf') {
+    const body = await readJson(req, 64 * 1024);
+    try {
+      const ws = workspace.setShelf(body && body.windowIds, { baseRevision: body && body.baseRevision });
+      return sendJson(res, 200, { ok: true, workspace: ws });
+    } catch (error) {
+      if (error instanceof HttpError && error.workspace) {
+        return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
+      }
+      throw error;
+    }
+  }
+  if (method === 'POST' && route === '/api/workspace/window/delete') {
+    const body = await readJson(req, 64 * 1024);
+    try {
+      const ws = workspace.deleteWindow(body && body.windowId, { baseRevision: body && body.baseRevision });
+      return sendJson(res, 200, { ok: true, workspace: ws });
+    } catch (error) {
+      if (error instanceof HttpError && error.workspace) {
+        return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
+      }
+      throw error;
+    }
   }
 
   /* Creative sheets: content is revisioned separately from world placement. */

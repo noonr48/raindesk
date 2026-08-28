@@ -1,11 +1,18 @@
 'use strict';
 
 /**
- * Persistent spatial workspace model for the future endless Raindesk desk.
+ * Persistent spatial workspace model for the freeform Raindesk desk (v3).
  *
- * This is intentionally visual-style agnostic. It stores stable object IDs,
- * world transforms and floating/docked/minimised state so the UI and Partner
- * can refer to the same things without pixel-coordinate guessing.
+ * Visual-style agnostic. The workspace owns SPATIAL state only — window
+ * frames, groups, shelf, viewport, focus. Creative content (strokes, images,
+ * beats, candidates) lives in the document systems and is referenced softly
+ * through `entityRef`; the workspace never verifies targets exist.
+ *
+ * v3 (freeform desk): windows[] + groups[] + shelf + monotonic `revision`.
+ * Structural writes (window create/delete, group/shelf changes) accept
+ * `baseRevision` and fail 409 with the current state when stale; spatial
+ * updates stay last-write-wins. Migration is server-side in read() with a
+ * one-time .bak backup; unknown schema versions fail closed.
  */
 
 const fs = require('fs');
@@ -17,21 +24,34 @@ const DATA_DIR = process.env.RAINDESK_DATA_DIR
   : path.join(__dirname, '..', 'data');
 const WORKSPACE_PATH = path.join(DATA_DIR, 'workspace.json');
 const ID_RE = /^[A-Za-z0-9_-]{1,96}$/;
-const OBJECT_TYPES = new Set([
+const WINDOW_TYPES = new Set([
   'sheet', 'shot', 'comic_page', 'reference_board', 'character_canvas', 'note',
   'sequence_strip', 'layers_panel', 'beat_trail', 'partner_panel', 'generic_panel',
+  'take_stack', 'character_registry', 'notes_panel', 'partner_proposals',
 ]);
 const DOCKS = new Set(['top', 'right', 'bottom', 'left']);
 const SPACES = new Set(['screen', 'world']);
-const SCREEN_TYPES = new Set(['layers_panel', 'beat_trail', 'partner_panel', 'generic_panel', 'sequence_strip']);
+const SCREEN_TYPES = new Set(['layers_panel', 'beat_trail', 'partner_panel', 'generic_panel', 'sequence_strip', 'take_stack', 'character_registry', 'notes_panel', 'partner_proposals']);
+const STATES = new Set(['floating', 'tabbed', 'docked', 'minimised', 'maximised']);
+// Soft entity references: typed prefix + bounded id segment. Existing data
+// crosses prefixes (reference_board windows reference sheet: ids), so the
+// prefix set is permissive, not type-locked.
+const ENTITY_REF_RE = /^(sheet|shot|comic_page|character|characters|note|notes|board|partner|proposals|beats|layers|scenes|takes):[A-Za-z0-9_.-]{1,96}$/;
+const WINDOW_FIELDS = new Set([
+  'windowId', 'type', 'space', 'entityRef', 'x', 'y', 'width', 'height',
+  'rotation', 'scale', 'zIndex', 'state', 'groupId', 'collapsed', 'pinned', 'locked', 'dock',
+]);
 
 function now() { return new Date().toISOString(); }
 function emptyWorkspace() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    revision: 1,
     viewport: { x: 0, y: 0, zoom: 1 },
-    activeObjectId: null,
-    objects: [],
+    activeWindowId: null,
+    windows: [],
+    groups: [],
+    shelf: { windowIds: [] },
     createdAt: now(), updatedAt: now(),
   };
 }
@@ -41,6 +61,213 @@ function atomicWrite(value) {
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, WORKSPACE_PATH);
 }
+function write(ws) { ws.revision = (ws.revision || 1) + 1; ws.updatedAt = now(); atomicWrite(ws); return ws; }
+
+/* ------------------------------------------------------------- validation */
+
+function assertId(id, what = 'workspace id') {
+  if (typeof id !== 'string' || !ID_RE.test(id)) throw new HttpError(400, `bad ${what}`);
+  return id;
+}
+function finite(value, fallback, min = -10000000, max = 10000000) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+}
+
+/** Strict v3 window sanitizer: unknown structural fields are REJECTED (the
+ * v2 sanitizer silently dropped them, which loses group/shelf writes). */
+function sanitizeWindow(input = {}, existing = null) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'window must be an object');
+  const extra = Object.keys(input).find((key) => !WINDOW_FIELDS.has(key));
+  if (extra) throw new HttpError(400, `window contains unsupported field ${extra}`);
+  const windowId = assertId(input.windowId || (existing && existing.windowId), 'window id');
+  // Unknown types are REJECTED, not coerced (GPT Pro round-3 critical): a
+  // silent generic_panel fallback once made four shipped surfaces vanish on
+  // reload (their rows stored a type no registered surface matched).
+  if (input.type !== undefined && !WINDOW_TYPES.has(input.type)) throw new HttpError(400, `unknown window type ${input.type}`);
+  const type = WINDOW_TYPES.has(input.type) ? input.type : (existing && existing.type) || 'generic_panel';
+  const inheritedSpace = existing && SPACES.has(existing.space) ? existing.space : defaultSpaceForType(type);
+  const space = SPACES.has(input.space) ? input.space : inheritedSpace;
+  const rawRef = input.entityRef !== undefined ? input.entityRef : (existing && existing.entityRef) || null;
+  if (rawRef != null && !ENTITY_REF_RE.test(String(rawRef))) throw new HttpError(400, 'window entityRef is not a typed reference');
+  const rawState = input.state !== undefined ? input.state : (existing && existing.state) || 'floating';
+  if (!STATES.has(rawState)) throw new HttpError(400, 'window state must be floating|tabbed|docked|minimised|maximised');
+  const rawGroup = input.groupId !== undefined ? input.groupId : (existing && existing.groupId) || null;
+  if (rawGroup != null && !ID_RE.test(String(rawGroup))) throw new HttpError(400, 'bad window groupId');
+  return {
+    windowId, type, space,
+    entityRef: rawRef == null ? null : String(rawRef),
+    x: finite(input.x, existing ? existing.x : 0),
+    y: finite(input.y, existing ? existing.y : 0),
+    width: finite(input.width, existing ? existing.width : 360, 40, 20000),
+    height: finite(input.height, existing ? existing.height : 260, 40, 20000),
+    rotation: finite(input.rotation, existing ? existing.rotation : 0, -360000, 360000),
+    scale: finite(input.scale, existing ? existing.scale : 1, 0.05, 64),
+    zIndex: finite(input.zIndex, existing ? existing.zIndex : 0, -100000, 100000),
+    state: rawState,
+    groupId: rawGroup == null ? null : String(rawGroup),
+    collapsed: input.collapsed !== undefined ? Boolean(input.collapsed) : Boolean(existing && existing.collapsed),
+    pinned: input.pinned !== undefined ? Boolean(input.pinned) : Boolean(existing && existing.pinned),
+    locked: input.locked !== undefined ? Boolean(input.locked) : Boolean(existing && existing.locked),
+    dock: space === 'world' ? null : (input.dock === null ? null : (DOCKS.has(input.dock) ? input.dock : (existing && existing.dock) || null)),
+    updatedAt: now(),
+  };
+}
+
+/** Whole-store referential integrity after any mutation, before write. */
+/** Canonical ownership normalization (GPT Pro round-6): every live window
+ * belongs to AT MOST ONE group, and never simultaneously to a group and the
+ * shelf. Precedence: the SHELF wins (a shelved window must stay recoverable
+ * from the shelf surface), then the FIRST claiming group in stored order.
+ * Deterministic shrink, never throws: boards written by older builds with
+ * contradictory rows converge here instead of failing validation forever. */
+function normalizeOwnership(ws) {
+  const windowsById = new Map(ws.windows.map((w) => [w.windowId, w]));
+  const shelved = new Set(Array.isArray(ws.shelf && ws.shelf.windowIds) ? ws.shelf.windowIds.filter((id) => windowsById.has(id)) : []);
+  const claimed = new Set();
+  for (const group of ws.groups) {
+    const members = Array.isArray(group.windowIds) ? group.windowIds : [];
+    const kept = [];
+    for (const id of members) {
+      if (!windowsById.has(id) || shelved.has(id) || claimed.has(id)) continue;
+      claimed.add(id);
+      kept.push(id);
+    }
+    group.windowIds = kept;
+    group.activeWindowId = group.windowIds.includes(group.activeWindowId) ? group.activeWindowId : (kept[0] || null);
+  }
+  ws.groups = ws.groups.filter((group) => group.windowIds.length > 0);
+  const ownerOf = new Map();
+  for (const group of ws.groups) for (const id of group.windowIds) ownerOf.set(id, group.groupId);
+  for (const win of ws.windows) win.groupId = ownerOf.get(win.windowId) || null;
+}
+
+function validateWorkspace(ws) {
+  const ids = new Set();
+  for (const win of ws.windows) {
+    if (!win || !ID_RE.test(win.windowId)) throw new HttpError(500, 'workspace window identity is malformed');
+    if (ids.has(win.windowId)) throw new HttpError(500, 'workspace window ids are not unique');
+    ids.add(win.windowId);
+  }
+  const seenGroups = new Set();
+  for (const group of ws.groups) {
+    if (!group || !ID_RE.test(group.groupId)) throw new HttpError(500, 'workspace group identity is malformed');
+    if (seenGroups.has(group.groupId)) throw new HttpError(500, 'workspace group ids are not unique');
+    seenGroups.add(group.groupId);
+    const members = Array.isArray(group.windowIds) ? group.windowIds : [];
+    if (!members.length || new Set(members).size !== members.length) throw new HttpError(500, 'workspace group membership is empty or duplicated');
+    for (const id of members) {
+      if (!ids.has(id)) throw new HttpError(500, `workspace group references unknown window ${id}`);
+    }
+    if (group.activeWindowId != null && !members.includes(group.activeWindowId)) {
+      throw new HttpError(500, 'workspace group active window is not a member');
+    }
+  }
+  for (const win of ws.windows) {
+    if (win.groupId != null && !seenGroups.has(win.groupId)) {
+      throw new HttpError(500, `window ${win.windowId} references unknown group ${win.groupId}`);
+    }
+    // Exact bidirectional membership (GPT Pro round-6): a reverse pointer
+    // must name a group whose member list actually contains the window —
+    // no silent "last processed group wins" divergence.
+    if (win.groupId != null) {
+      const group = ws.groups.find((g) => g.groupId === win.groupId);
+      if (!group || !group.windowIds.includes(win.windowId)) {
+        throw new HttpError(500, `window ${win.windowId} claims group membership it does not hold`);
+      }
+    }
+  }
+  const shelf = ws.shelf && Array.isArray(ws.shelf.windowIds) ? ws.shelf.windowIds : [];
+  if (new Set(shelf).size !== shelf.length) throw new HttpError(500, 'workspace shelf contains duplicates');
+  // Shelf/group mutual exclusion (GPT Pro round-6): minimised membership is
+  // owned by the shelf alone — a ref must never sit in a group and on the
+  // shelf, and never in two groups.
+  const groupedSet = new Set();
+  for (const group of ws.groups) {
+    for (const id of group.windowIds) {
+      if (groupedSet.has(id)) throw new HttpError(500, `window ${id} claims multiple groups`);
+      groupedSet.add(id);
+    }
+  }
+  for (const id of shelf) {
+    if (groupedSet.has(id)) throw new HttpError(500, `window ${id} cannot be both grouped and shelved`);
+  }
+  for (const id of shelf) {
+    if (!ids.has(id)) throw new HttpError(500, `workspace shelf references unknown window ${id}`);
+  }
+  if (ws.activeWindowId != null && !ids.has(ws.activeWindowId)) {
+    throw new HttpError(500, 'workspace active window does not exist');
+  }
+}
+
+function assertBaseRevision(ws, options = {}) {
+  if (options && options.baseRevision != null && Number(options.baseRevision) !== ws.revision) {
+    throw Object.assign(new HttpError(409, 'workspace changed since this edit'), { workspace: ws });
+  }
+}
+
+/* ------------------------------------------------------------- migration */
+
+function defaultSpaceForType(type) { return SCREEN_TYPES.has(type) ? 'screen' : 'world'; }
+
+function migrateV1toV2(ws) {
+  ws.schemaVersion = 2;
+  ws.objects = (ws.objects || []).map((obj) => ({
+    ...obj,
+    space: obj && obj.space === 'world' ? 'world' : defaultSpaceForType(obj && obj.type),
+  }));
+  return ws;
+}
+
+/** v2 objects → v3 windows. Put-away world sheets become `tabbed` (they live
+ * in the desk tab strip); hidden screen panels become `minimised` (shelf).
+ * Existing groupIds synthesize groups; dock and activeObjectId carry over.
+ * NOTE: builds and returns the migrated object; does NOT write — the caller
+ * validates then persists exactly once. */
+function migrateV2toV3(ws) {
+  const windows = (ws.objects || []).map((obj) => {
+    const space = obj.space === 'world' ? 'world' : 'screen';
+    let state = 'floating';
+    if (obj.visible === false) state = space === 'world' ? 'tabbed' : 'minimised';
+    else if (space === 'screen' && obj.dock && DOCKS.has(obj.dock)) state = 'docked';
+    return {
+      windowId: assertId(obj.id, 'window id'),
+      type: WINDOW_TYPES.has(obj.type) ? obj.type : 'generic_panel',
+      space,
+      entityRef: obj.entityRef || null,
+      x: finite(obj.x, 0), y: finite(obj.y, 0),
+      width: finite(obj.width, 360, 40, 20000), height: finite(obj.height, 260, 40, 20000),
+      rotation: finite(obj.rotation, 0, -360000, 360000), scale: finite(obj.scale, 1, 0.05, 64),
+      zIndex: finite(obj.zIndex, 0, -100000, 100000),
+      state,
+      groupId: obj.groupId || null,
+      collapsed: Boolean(obj.collapsed),
+      pinned: false,
+      locked: Boolean(obj.locked),
+      dock: space === 'screen' && obj.dock && DOCKS.has(obj.dock) ? obj.dock : null,
+      updatedAt: now(),
+    };
+  });
+  const groupMap = new Map();
+  for (const win of windows) {
+    if (win.groupId == null) continue;
+    if (!groupMap.has(win.groupId)) groupMap.set(win.groupId, []);
+    groupMap.get(win.groupId).push(win.windowId);
+  }
+  const groups = [...groupMap.entries()].map(([groupId, windowIds]) => ({ groupId, windowIds, activeWindowId: windowIds[windowIds.length - 1] }));
+  const migrated = {
+    schemaVersion: 3,
+    revision: 1,
+    viewport: ws.viewport || { x: 0, y: 0, zoom: 1 },
+    activeWindowId: ws.activeObjectId || null,
+    windows,
+    groups,
+    shelf: { windowIds: windows.filter((w) => w.state === 'minimised').map((w) => w.windowId) },
+    createdAt: ws.createdAt || now(), updatedAt: now(),
+  };
+  return migrated;
+}
+
 function read() {
   let raw;
   try { raw = fs.readFileSync(WORKSPACE_PATH, 'utf8'); }
@@ -50,72 +277,176 @@ function read() {
   }
   let ws;
   try { ws = JSON.parse(raw); } catch (_e) { throw new HttpError(500, 'workspace state is corrupt'); }
-  if (!ws || !Array.isArray(ws.objects) || !ws.viewport) {
+  if (!ws || typeof ws !== 'object' || !ws.viewport) throw new HttpError(500, 'workspace state is malformed');
+  if (ws.schemaVersion === 2 || ws.schemaVersion === 1) {
+    // Back up the ORIGINAL pre-migration file exactly once per migration —
+    // a poison-pill v1/v2 file that throws mid-chain must never destroy the
+    // only copy (adversarial-review repair: v1 files previously skipped the
+    // backup entirely and could brick every later read).
+    try { fs.copyFileSync(WORKSPACE_PATH, `${WORKSPACE_PATH}.pre-v3.bak`); } catch (_e) { /* best-effort */ }
+    if (ws.schemaVersion === 1) ws = migrateV1toV2(ws); // in-memory only; no disk write of the intermediate
+    const migrated = migrateV2toV3(ws);
+    // Canonical ownership converges BEFORE validation on the legacy chain
+    // too (GPT Pro round-6 adversarial finding): v1/v2 boards synthesize
+    // groups and shelf from independent fields, so a legacy hidden-screen
+    // row carrying groupId would trip the tightened validator here and
+    // brick every read of a previously-loading board.
+    normalizeOwnership(migrated);
+    validateWorkspace(migrated); // throws before anything touches disk if the legacy data is poison
+    atomicWrite(migrated);
+    return migrated;
+  }
+  if (ws.schemaVersion !== 3 || !Array.isArray(ws.windows) || !Array.isArray(ws.groups)) {
     throw new HttpError(500, 'workspace state is malformed');
   }
-  if (ws.schemaVersion === 1) {
-    // v1 mixed utility-panel screen coordinates and future creative-world
-    // coordinates implicitly. Existing v1 objects are all from the utility
-    // shell except creative object types that were only used by tests/prototypes.
-    ws.schemaVersion = 2;
-    ws.objects = ws.objects.map((obj) => ({
-      ...obj,
-      space: obj && obj.space === 'world' ? 'world' : defaultSpaceForType(obj && obj.type),
-    }));
-    write(ws);
-  }
-  if (ws.schemaVersion !== 2 || ws.objects.some((obj) => !obj || !SPACES.has(obj.space || defaultSpaceForType(obj.type)))) {
-    throw new HttpError(500, 'workspace state is malformed');
-  }
+  if (!ws.shelf || !Array.isArray(ws.shelf.windowIds)) ws.shelf = { windowIds: [] };
+  if (!ws.revision || !Number.isFinite(ws.revision)) ws.revision = 1;
+  repairLegacySurfaceTypes(ws);
+  // Canonical ownership converges on read too (GPT Pro round-6): legacy
+  // contradictory membership normalizes in memory so the NEXT structural
+  // write lands canonically instead of propagating the malformation.
+  normalizeOwnership(ws);
   return ws;
 }
-function write(ws) { ws.updatedAt = now(); atomicWrite(ws); return ws; }
-function defaultSpaceForType(type) {
-  return SCREEN_TYPES.has(type) ? 'screen' : 'world';
+
+/** One-time repair for rows written while four shipped surfaces used entity
+ * types the server coerced to generic_panel (GPT Pro round-3 critical). The
+ * registry windowIds are stable, so the canonical type is recoverable; rows
+ * are repaired in place and persisted by the next write. */
+const LEGACY_SURFACE_TYPE_BY_WINDOW_ID = {
+  window_takes: 'take_stack',
+  window_characters: 'character_registry',
+  window_notes: 'notes_panel',
+  window_proposals: 'partner_proposals',
+};
+function repairLegacySurfaceTypes(ws) {
+  for (const win of ws.windows || []) {
+    const canonical = LEGACY_SURFACE_TYPE_BY_WINDOW_ID[win.windowId];
+    if (canonical && win.type === 'generic_panel') win.type = canonical;
+  }
 }
-function assertId(id) {
-  if (typeof id !== 'string' || !ID_RE.test(id)) throw new HttpError(400, 'bad workspace object id');
-  return id;
-}
-function finite(value, fallback, min = -10000000, max = 10000000) {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
-}
-function sanitizeObject(input = {}, existing = null) {
-  const id = assertId(input.id || (existing && existing.id));
-  const type = OBJECT_TYPES.has(input.type) ? input.type : (existing && existing.type) || 'generic_panel';
-  const inheritedSpace = existing && SPACES.has(existing.space) ? existing.space : defaultSpaceForType(type);
-  const space = SPACES.has(input.space) ? input.space : inheritedSpace;
-  return {
-    id,
-    type,
-    space,
-    entityRef: input.entityRef !== undefined ? (input.entityRef == null ? null : String(input.entityRef).slice(0, 256)) : (existing && existing.entityRef) || null,
-    x: finite(input.x, existing ? existing.x : 0),
-    y: finite(input.y, existing ? existing.y : 0),
-    width: finite(input.width, existing ? existing.width : 360, 40, 20000),
-    height: finite(input.height, existing ? existing.height : 260, 40, 20000),
-    rotation: finite(input.rotation, existing ? existing.rotation : 0, -360000, 360000),
-    scale: finite(input.scale, existing ? existing.scale : 1, 0.05, 64),
-    zIndex: finite(input.zIndex, existing ? existing.zIndex : 0, -100000, 100000),
-    collapsed: input.collapsed !== undefined ? Boolean(input.collapsed) : Boolean(existing && existing.collapsed),
-    visible: input.visible !== undefined ? Boolean(input.visible) : (existing ? existing.visible !== false : true),
-    locked: input.locked !== undefined ? Boolean(input.locked) : Boolean(existing && existing.locked),
-    dock: space === 'world' ? null : (input.dock === null ? null : (DOCKS.has(input.dock) ? input.dock : (existing && existing.dock) || null)),
-    groupId: input.groupId !== undefined ? (input.groupId == null ? null : String(input.groupId).slice(0, 96)) : (existing && existing.groupId) || null,
-    updatedAt: now(),
-  };
-}
-function getObject(ws, id) { return ws.objects.find((o) => o.id === id) || null; }
-function upsertObject(input) {
+
+/** Client envelope for GET /api/workspace during migration: canonical v3
+ * shape plus a derived v2 `objects` projection so pre-v3 clients
+ * (WorkspaceShell, CreativeDesk) keep working unchanged. */
+function readClient() {
   const ws = read();
-  const id = assertId(input && input.id);
-  const existing = getObject(ws, id);
-  const next = sanitizeObject(input, existing);
-  if (existing) Object.assign(existing, next); else ws.objects.push(next);
+  return { ...ws, objects: legacyObjects(ws) };
+}
+
+/* --------------------------------------------------------------- v3 API */
+
+function getWindow(ws, windowId) { return ws.windows.find((w) => w && w.windowId === windowId) || null; }
+
+function upsertWindow(input, options = {}) {
+  const ws = read();
+  assertBaseRevision(ws, options);
+  const windowId = assertId(input && input.windowId, 'window id');
+  const existing = getWindow(ws, windowId);
+  const next = sanitizeWindow(input, existing);
+  if (existing) Object.assign(existing, next); else ws.windows.push(next);
+  // Ownership derives from the canonical collections (GPT Pro round-6):
+  // an unpersisted reverse pointer injected through a stale upsert can
+  // never disagree with the groups.
+  normalizeOwnership(ws);
+  validateWorkspace(ws);
   write(ws);
+  if (existing) next.groupId = existing.groupId; // returned clone mirrors the normalized stored row
   return next;
 }
+
+function deleteWindow(windowId, options = {}) {
+  const ws = read();
+  assertBaseRevision(ws, options);
+  const id = assertId(windowId, 'window id');
+  const before = ws.windows.length;
+  ws.windows = ws.windows.filter((w) => w.windowId !== id);
+  if (ws.windows.length === before) throw new HttpError(404, `unknown workspace window "${id}"`);
+  for (const group of ws.groups) {
+    group.windowIds = group.windowIds.filter((wid) => wid !== id);
+    if (group.activeWindowId === id) group.activeWindowId = group.windowIds[0] || null;
+  }
+  ws.groups = ws.groups.filter((group) => group.windowIds.length > 0);
+  ws.shelf.windowIds = ws.shelf.windowIds.filter((wid) => wid !== id);
+  if (ws.activeWindowId === id) ws.activeWindowId = null;
+  validateWorkspace(ws);
+  write(ws);
+  return ws;
+}
+
+function setGroups(groups, options = {}) {
+  const ws = read();
+  assertBaseRevision(ws, options);
+  if (!Array.isArray(groups)) throw new HttpError(400, 'groups must be an array');
+  const clean = groups.map((group) => {
+    if (!group || typeof group !== 'object') throw new HttpError(400, 'group must be an object');
+    const extra = Object.keys(group).find((key) => !['groupId', 'windowIds', 'activeWindowId'].includes(key));
+    if (extra) throw new HttpError(400, `group contains unsupported field ${extra}`);
+    const groupId = assertId(group.groupId, 'group id');
+    if (!Array.isArray(group.windowIds) || !group.windowIds.length) throw new HttpError(400, 'group windowIds must be a non-empty array');
+    const windowIds = group.windowIds.map((id) => assertId(id, 'group window id'));
+    if (group.activeWindowId != null) assertId(group.activeWindowId, 'group active window id');
+    return { groupId, windowIds, activeWindowId: group.activeWindowId || null };
+  });
+  // Group membership is API input: unknown windows are a 400 here, not a
+  // store-integrity 500 later (route-test repair).
+  const known = new Set(ws.windows.map((w) => w.windowId));
+  for (const group of clean) {
+    for (const id of group.windowIds) {
+      if (!known.has(id)) throw new HttpError(400, `groups reference unknown window ${id}`);
+    }
+    if (group.activeWindowId != null && !known.has(group.activeWindowId)) {
+      throw new HttpError(400, `groups reference unknown active window ${group.activeWindowId}`);
+    }
+  }
+  // Canonical ownership (GPT Pro round-6): one group per window, the shelf
+  // wins overlaps, duplicate claims resolve by stored order, reverse
+  // pointers derive from the canonical collections.
+  ws.groups = clean;
+  normalizeOwnership(ws);
+  validateWorkspace(ws);
+  write(ws);
+  return ws;
+}
+
+function setShelf(windowIds, options = {}) {
+  const ws = read();
+  assertBaseRevision(ws, options);
+  if (!Array.isArray(windowIds)) throw new HttpError(400, 'shelf windowIds must be an array');
+  const ids = windowIds.map((id) => assertId(id, 'shelf window id'));
+  // Shelf membership IS the minimised state: members become minimised
+  // (rect preserved for restore); windows leaving the shelf float again.
+  const known = new Set(ws.windows.map((w) => w.windowId));
+  for (const id of ids) {
+    if (!known.has(id)) throw new HttpError(400, `shelf references unknown window ${id}`);
+  }
+  const shelfSet = new Set(ids);
+  for (const win of ws.windows) {
+    if (shelfSet.has(win.windowId)) {
+      if (win.state !== 'minimised') win.state = 'minimised';
+    } else if (win.state === 'minimised') {
+      win.state = win.space === 'screen' && win.dock ? 'docked' : 'floating';
+    }
+  }
+  ws.shelf = { windowIds: ids };
+  // The shelf transaction OWNS the mutual exclusion it creates (GPT Pro
+  // round-6): shelved refs leave their groups atomically server-side — not
+  // via best-effort client bookkeeping — so a reload can never resurrect
+  // the grouped+minimised hybrid.
+  for (const group of ws.groups) {
+    const before = group.windowIds.length;
+    group.windowIds = group.windowIds.filter((id) => !shelfSet.has(id));
+    if (group.windowIds.length !== before) {
+      group.activeWindowId = group.windowIds.includes(group.activeWindowId) ? group.activeWindowId : (group.windowIds[0] || null);
+    }
+  }
+  ws.groups = ws.groups.filter((group) => group.windowIds.length > 0);
+  normalizeOwnership(ws);
+  validateWorkspace(ws);
+  write(ws);
+  return ws;
+}
+
 function setViewport(patch = {}) {
   const ws = read();
   ws.viewport = {
@@ -125,54 +456,107 @@ function setViewport(patch = {}) {
   write(ws); return ws.viewport;
 }
 
-/** Apply a reversible, workspace-only action and return its inverse. */
+/* --------------------------------------------- v2-compatible object layer */
+
+/** Legacy object projection for pre-v3 clients (WorkspaceShell, CreativeDesk,
+ * Partner actions). Derived, never stored. */
+function toLegacyObject(win) {
+  return {
+    ...win,
+    id: win.windowId,
+    visible: win.state !== 'minimised' && win.state !== 'tabbed',
+    collapsed: win.state === 'minimised' ? true : win.collapsed,
+  };
+}
+function legacyObjects(ws) { return ws.windows.map(toLegacyObject); }
+
+/** Legacy upsert: accepts v2 field names (id, visible, collapsed) and maps
+ * them onto v3 window state. Keeps old clients functional during migration. */
+function upsertObject(input = {}) {
+  const mapped = { ...input };
+  if (mapped.id !== undefined) { mapped.windowId = mapped.id; delete mapped.id; }
+  if (mapped.visible !== undefined || mapped.collapsed !== undefined) {
+    const existing = getWindow(read(), mapped.windowId);
+    const space = mapped.space || (existing && existing.space) || defaultSpaceForType(mapped.type || (existing && existing.type));
+    if (mapped.visible === false) mapped.state = space === 'world' ? 'tabbed' : 'minimised';
+    else if (mapped.visible === true) mapped.state = (space === 'screen' && mapped.dock && DOCKS.has(mapped.dock)) ? 'docked' : 'floating';
+    delete mapped.visible;
+    if (mapped.collapsed === undefined && mapped.state === 'minimised') mapped.collapsed = true;
+  }
+  // Legacy clients may send unknown-to-v3 keys implicitly via spread — strip
+  // nothing silently for structural fields; allow only the known legacy set.
+  const LEGACY_IN = new Set([...WINDOW_FIELDS, 'id', 'visible']);
+  const unexpected = Object.keys(mapped).find((key) => !LEGACY_IN.has(key));
+  if (unexpected) throw new HttpError(400, `workspace object contains unsupported field ${unexpected}`);
+  return toLegacyObject(upsertWindow(mapped));
+}
+
+/** Apply a reversible, workspace-only action and return its inverse.
+ * v2 action names retained; they operate on v3 windows. */
 function applyAction(action = {}) {
   const type = action.type;
   const ws = read();
   const targetId = action.targetId ? assertId(action.targetId) : null;
   const payload = action.payload && typeof action.payload === 'object' ? action.payload : {};
-  let obj = targetId ? getObject(ws, targetId) : null;
+  let win = targetId ? getWindow(ws, targetId) : null;
 
-  if (['move_panel', 'dock_panel', 'open_panel', 'close_panel'].includes(type) && !obj) {
+  if (['move_panel', 'dock_panel', 'open_panel', 'close_panel'].includes(type) && !win) {
     throw new HttpError(404, `unknown workspace object "${targetId || ''}"`);
   }
-  if (obj && obj.locked && type === 'move_panel') throw new HttpError(409, 'workspace object is locked');
+  if (win && win.locked && type === 'move_panel') throw new HttpError(409, 'workspace object is locked');
 
   let inverse;
   if (type === 'move_panel') {
-    inverse = { type, targetId, payload: { x: obj.x, y: obj.y, width: obj.width, height: obj.height, rotation: obj.rotation, scale: obj.scale, dock: obj.dock } };
+    inverse = { type, targetId, payload: { x: win.x, y: win.y, width: win.width, height: win.height, rotation: win.rotation, scale: win.scale, dock: win.dock } };
     for (const key of ['x', 'y', 'width', 'height', 'rotation', 'scale']) {
-      if (payload[key] !== undefined) obj[key] = finite(payload[key], obj[key], key === 'width' || key === 'height' ? 40 : (key === 'scale' ? 0.05 : -10000000), key === 'scale' ? 64 : 10000000);
+      if (payload[key] !== undefined) win[key] = finite(payload[key], win[key], key === 'width' || key === 'height' ? 40 : (key === 'scale' ? 0.05 : -10000000), key === 'scale' ? 64 : 10000000);
     }
-    if (payload.dock === undefined) obj.dock = null;
-    else if (payload.dock === null || DOCKS.has(payload.dock)) obj.dock = payload.dock;
+    if (payload.dock === undefined) win.dock = null;
+    else if (payload.dock === null || DOCKS.has(payload.dock)) win.dock = payload.dock;
     else throw new HttpError(400, 'invalid dock position');
+    if (win.space === 'screen' && win.dock && win.state !== 'minimised') win.state = 'docked';
+    else if (!win.dock && win.state === 'docked') win.state = 'floating';
   } else if (type === 'dock_panel') {
-    if (obj.space === 'world') throw new HttpError(400, 'world objects do not use screen-edge docking');
-    inverse = { type, targetId, payload: { dock: obj.dock } };
+    if (win.space === 'world') throw new HttpError(400, 'world objects do not use screen-edge docking');
+    inverse = { type, targetId, payload: { dock: win.dock } };
     const dock = payload.dock == null ? null : payload.dock;
     if (dock !== null && !DOCKS.has(dock)) throw new HttpError(400, 'invalid dock position');
-    obj.dock = dock;
+    win.dock = dock;
+    if (win.state !== 'minimised') win.state = dock ? 'docked' : 'floating';
   } else if (type === 'open_panel') {
-    inverse = { type: obj.visible ? 'open_panel' : 'close_panel', targetId, payload: { collapsed: obj.collapsed } };
-    obj.visible = true; obj.collapsed = Boolean(payload.collapsed);
+    // Undo must RETURN a shelf-origin panel to the shelf (GPT Pro round-6):
+    // labeling the reverse of open as open_panel made revert re-apply the
+    // open instead — open's inverse is always close_panel.
+    inverse = { type: 'close_panel', targetId, payload: { collapsed: win.collapsed } };
+    win.state = (win.space === 'screen' && win.dock) ? 'docked' : 'floating';
+    win.collapsed = Boolean(payload.collapsed);
+    ws.shelf.windowIds = ws.shelf.windowIds.filter((id) => id !== win.windowId);
   } else if (type === 'close_panel') {
-    inverse = { type: 'open_panel', targetId, payload: { collapsed: obj.collapsed } };
-    obj.visible = false;
+    inverse = { type: 'open_panel', targetId, payload: { collapsed: win.collapsed } };
+    win.state = win.space === 'world' ? 'tabbed' : 'minimised';
+    if (win.space === 'screen' && !ws.shelf.windowIds.includes(win.windowId)) ws.shelf.windowIds.push(win.windowId);
   } else if (type === 'focus') {
-    inverse = { type: 'focus', targetId: ws.activeObjectId, payload: {} };
-    if (targetId && !obj) throw new HttpError(404, `unknown workspace object "${targetId}"`);
-    ws.activeObjectId = targetId;
+    inverse = { type: 'focus', targetId: ws.activeWindowId, payload: {} };
+    if (targetId && !win) throw new HttpError(404, `unknown workspace object "${targetId}"`);
+    ws.activeWindowId = targetId;
   } else {
     throw new HttpError(400, `workspace cannot execute action "${type}"`);
   }
 
-  if (obj) obj.updatedAt = now();
+  if (win) win.updatedAt = now();
+  // Ownership normalizes before validation here TOO (GPT Pro round-6
+  // adversarial finding): lifecycle actions bypass setShelf's transaction,
+  // so a GROUPED SCREEN member closed through a Partner action must leave
+  // its group canonically rather than trip the mutual-exclusion check.
+  normalizeOwnership(ws);
+  validateWorkspace(ws);
   write(ws);
-  return { workspace: ws, object: obj, inverse };
+  return { workspace: ws, object: win ? toLegacyObject(win) : null, inverse };
 }
 
 module.exports = {
-  DATA_DIR, WORKSPACE_PATH, OBJECT_TYPES, DOCKS, SPACES, SCREEN_TYPES, defaultSpaceForType, emptyWorkspace, read, write,
-  upsertObject, setViewport, applyAction,
+  DATA_DIR, WORKSPACE_PATH, OBJECT_TYPES: WINDOW_TYPES, WINDOW_TYPES, DOCKS, SPACES, SCREEN_TYPES, STATES, ENTITY_REF_RE, WINDOW_FIELDS,
+  defaultSpaceForType, emptyWorkspace, read, readClient, write, validateWorkspace,
+  upsertWindow, deleteWindow, setGroups, setShelf, setViewport,
+  toLegacyObject, legacyObjects, upsertObject, applyAction,
 };

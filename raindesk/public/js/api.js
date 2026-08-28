@@ -26,12 +26,13 @@
   const GEN_MAX_ATTEMPTS = 6;     // consecutive transport failures tolerated
 
   class ApiError extends Error {
-    constructor(message, { status = 0, cause = null, friendly = '' } = {}) {
+    constructor(message, { status = 0, cause = null, friendly = '', workspace = null } = {}) {
       super(message);
       this.name = 'ApiError';
       this.status = status;
       this.cause = cause;
       this.friendly = friendly || friendlyFor(status, message);
+      this.workspace = workspace || null;
     }
   }
 
@@ -58,7 +59,9 @@
     } catch (_e) { /* non-JSON (never happens for /api) */ }
     if (!res.ok) {
       const msg = body && body.error ? body.error : `HTTP ${res.status}`;
-      throw new ApiError(msg, { status: res.status });
+      // Structural 409s carry the current workspace for adopt-and-retry;
+      // keep it on the error or the client's self-heal never sees it.
+      throw new ApiError(msg, { status: res.status, workspace: (body && body.workspace) || null });
     }
     return body;
   }
@@ -285,6 +288,15 @@
   function getWorkspace() { return GET('/api/workspace'); }
   function upsertWorkspaceObject(object) { return POST('/api/workspace/object', object); }
   function setWorkspaceViewport(viewport) { return POST('/api/workspace/viewport', viewport); }
+  function setWorkspaceGroups(groups, { baseRevision = null } = {}) {
+    return POST('/api/workspace/groups', { groups, baseRevision: baseRevision || undefined });
+  }
+  function setWorkspaceShelf(windowIds, { baseRevision = null } = {}) {
+    return POST('/api/workspace/shelf', { windowIds, baseRevision: baseRevision || undefined });
+  }
+  function deleteWorkspaceWindow(windowId, { baseRevision = null } = {}) {
+    return POST('/api/workspace/window/delete', { windowId, baseRevision: baseRevision || undefined });
+  }
 
   /* ---------------------------------------------------- creative sheets */
 
@@ -375,6 +387,7 @@
     getShot, uploadLayer, shotImageUrl,
     uploadBlob, blobUrl, getShotDocument, saveShotDocument, getShotRevisions, getShotRevision, restoreShotRevision,
     getWorkspace, upsertWorkspaceObject, setWorkspaceViewport,
+    setWorkspaceGroups, setWorkspaceShelf, deleteWorkspaceWindow,
     listSheets, createSheet, getSheet, saveSheet, getSheetRevisions, getSheetRevision, restoreSheetRevision,
     listPartnerActions, mutatePartnerAction,
     sendChat,

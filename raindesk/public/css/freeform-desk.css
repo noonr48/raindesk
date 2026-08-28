@@ -1,0 +1,279 @@
+/* Freeform Creative Desk v2 — window chrome + paper-desk visual language.
+ * Phase 5 layers the visual tokens (warm ivory materials, shadows, snap
+ * preview, reduced-motion) over the Phase 1 structural mechanics. */
+
+/* Paper-desk tokens — scoped to the freeform host so the page's own
+ * palette stays untouched; every consumer carries a fallback. */
+.freeform-desk-windows {
+  --paper: #f7f3e9;
+  --paper-raised: #fffdf7;
+  --paper-edge: #d8d2c4;
+  --paper-edge-strong: #c9c1af;
+  --ink: #231e18;
+  --ink-soft: rgba(35, 30, 24, 0.62);
+  --desk-accent: #c16c2a;
+  --desk-accent-wash: rgba(193, 108, 42, 0.14);
+  --sheet-shadow: 0 2px 10px rgba(35, 30, 24, 0.10), 0 1px 2px rgba(35, 30, 24, 0.06);
+  --sheet-shadow-raised: 0 6px 22px rgba(35, 30, 24, 0.18), 0 2px 6px rgba(35, 30, 24, 0.08);
+  --desk-motion: 140ms ease;
+}
+
+.freeform-desk-windows {
+  position: relative;
+}
+
+.freeform-window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  min-height: 120px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 247, 0.55), rgba(255, 253, 247, 0) 48px),
+    var(--paper, #f6f2e8);
+  color: var(--ink, inherit);
+  border: 1px solid var(--paper-edge, #d8d2c4);
+  border-radius: 10px;
+  box-shadow: var(--sheet-shadow, 0 2px 10px rgba(35, 30, 24, 0.10));
+  overflow: hidden;
+  transition: box-shadow var(--desk-motion, 140ms ease), border-color var(--desk-motion, 140ms ease);
+}
+
+.freeform-window-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: grab;
+  user-select: none;
+  border-bottom: 1px solid var(--paper-edge, #e4ddcf);
+  background: linear-gradient(180deg, var(--paper-raised, rgba(255, 253, 247, 0.6)), rgba(255, 253, 247, 0));
+  touch-action: none;
+}
+
+.freeform-window-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  outline: none;
+}
+
+.freeform-window-title[contenteditable="true"] {
+  cursor: text;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.freeform-window-actions { display: flex; gap: 4px; }
+
+.freeform-window-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: inherit;
+  opacity: 0.72;
+}
+.freeform-window-btn:hover { opacity: 1; background: rgba(35, 30, 24, 0.08); }
+
+.freeform-window-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.freeform-window-collapsed .freeform-window-body { display: none; }
+
+/* 8-way resize handles: thin edge strips + corner pads. The se corner
+ * keeps the classic generous pad; edges sit slightly outside the frame so
+ * a steep pointer never misses them. */
+.freeform-window-resize {
+  position: absolute;
+  touch-action: none;
+  z-index: 6;
+}
+.freeform-window-resize.n  { top: -4px; left: 12px; right: 12px; height: 9px; cursor: ns-resize; }
+.freeform-window-resize.s  { bottom: -4px; left: 12px; right: 12px; height: 9px; cursor: ns-resize; }
+.freeform-window-resize.e  { right: -4px; top: 12px; bottom: 12px; width: 9px; cursor: ew-resize; }
+.freeform-window-resize.w  { left: -4px; top: 12px; bottom: 12px; width: 9px; cursor: ew-resize; }
+.freeform-window-resize.ne { top: -4px; right: -4px; width: 15px; height: 15px; cursor: nesw-resize; }
+.freeform-window-resize.nw { top: -4px; left: -4px; width: 15px; height: 15px; cursor: nwse-resize; }
+.freeform-window-resize.se { right: -4px; bottom: -4px; width: 15px; height: 15px; cursor: nwse-resize; }
+.freeform-window-resize.sw { bottom: -4px; left: -4px; width: 15px; height: 15px; cursor: nesw-resize; }
+
+.freeform-window-focused {
+  box-shadow: var(--sheet-shadow-raised, 0 6px 22px rgba(35, 30, 24, 0.18));
+  border-color: var(--paper-edge-strong, #c9c1af);
+}
+
+/* Phase 5: the live dock preview shown during a drag — a calm accent
+ * ghost of where the window would settle, never a moving clone. */
+.freeform-snap-preview {
+  position: absolute;
+  border: 1.5px dashed var(--desk-accent, #c16c2a);
+  background: var(--desk-accent-wash, rgba(193, 108, 42, 0.14));
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 0; /* beneath every window; the desk edge is its stage */
+  opacity: 1;
+  transition: opacity 120ms ease;
+}
+.freeform-snap-preview.freeform-snap-preview-hidden { opacity: 0; }
+
+/* Phase 6: visible edge drop zones while a docking-capable window is
+ * dragged — four calm paper washes over the desk edges; the zone
+ * snapPlace() would settle into carries the accent emphasis. The layer
+ * is display:none unless a drag switches it on. */
+.freeform-snap-zones {
+  display: none;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0; /* beneath every window, beside the preview */
+}
+.freeform-snap-zones.on { display: block; }
+.freeform-snap-zone {
+  position: absolute;
+  border-radius: 10px;
+  background: rgba(35, 30, 24, 0.04);
+  box-shadow: inset 0 0 0 1px var(--paper-edge, #d8d2c4);
+}
+.freeform-snap-zone.left   { left: 0; top: 0; bottom: 0; width: 32%; }
+.freeform-snap-zone.right  { right: 0; top: 0; bottom: 0; width: 32%; }
+.freeform-snap-zone.top    { left: 0; right: 0; top: 0; height: 32%; }
+.freeform-snap-zone.bottom { left: 0; right: 0; bottom: 0; height: 32%; }
+.freeform-snap-zone.active {
+  background: var(--desk-accent-wash, rgba(193, 108, 42, 0.14));
+  box-shadow: inset 0 0 0 1.5px var(--desk-accent, #c16c2a);
+}
+.freeform-snap-zone.blocked { display: none; } /* edge outside the surface's dock policy: not a target */
+
+.freeform-window-maximised {
+  border-radius: 0;
+  border: none;
+}
+
+/* Reduced motion: the desk calms fully — no shadow/border transitions,
+ * no preview fade. Geometry stays instant everywhere (it already is). */
+@media (prefers-reduced-motion: reduce) {
+  .freeform-window,
+  .freeform-window-btn,
+  .freeform-window-tab,
+  .freeform-shelf-chip,
+  .freeform-snap-preview,
+  .freeform-snap-zone {
+    transition: none !important;
+  }
+}
+
+.freeform-window-locked .freeform-window-head { cursor: default; }
+
+/* Window tab strip (grouped windows). Structural only — Phase 5 owns the
+ * paper-desk materials. */
+.freeform-window-tabs {
+  display: none;
+  gap: 2px;
+  padding: 3px 6px 0;
+}
+.freeform-window-grouped .freeform-window-tabs { display: flex; }
+.freeform-window-tab {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: inherit;
+  opacity: 0.7;
+  touch-action: none;
+}
+.freeform-window-tab:hover { opacity: 1; background: rgba(35, 30, 24, 0.07); }
+.freeform-window-tab.active { opacity: 1; background: rgba(193, 108, 42, 0.16); }
+
+/* Window shelf: calm, low chrome; invisible when empty. */
+.freeform-shelf {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: rgba(255, 253, 247, 0.78);
+  border: 1px solid var(--line, #e4ddcf);
+  box-shadow: 0 2px 8px rgba(35, 30, 24, 0.08);
+  z-index: 400;
+  max-width: calc(100% - 32px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.freeform-shelf:empty { display: none; }
+.freeform-shelf-chip {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  color: inherit;
+  touch-action: none;
+}
+.freeform-shelf-chip:hover { background: rgba(193, 108, 42, 0.14); }
+
+/* First-surface content rows (structural; theming in Phase 5). */
+.freeform-scene-rows, .freeform-layer-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.freeform-scene-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.freeform-scene-row:hover { background: rgba(35, 30, 24, 0.06); }
+.freeform-scene-row.active { background: rgba(193, 108, 42, 0.14); }
+
+.freeform-layer {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.freeform-layer:hover { background: rgba(35, 30, 24, 0.05); }
+.freeform-layer.on { background: rgba(193, 108, 42, 0.12); }
+.freeform-layer .eye { border: none; background: transparent; cursor: pointer; font-size: 12px; }
+
+.freeform-add-layer {
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px dashed var(--line, #d8d2c4);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.freeform-add-layer:hover { background: rgba(35, 30, 24, 0.05); }

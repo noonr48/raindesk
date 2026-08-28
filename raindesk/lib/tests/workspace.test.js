@@ -10,39 +10,57 @@ const workspace = require('../../lib/workspace');
 
 test('workspace persists stable world transforms and floating/minimised state', () => {
   workspace.upsertObject({ id: 'character_mara', type: 'character_canvas', entityRef: 'character:mara', x: 800, y: 120, width: 420, height: 560, rotation: -2 });
-  workspace.upsertObject({ id: 'references', type: 'reference_board', x: 1260, y: 200, collapsed: true });
+  workspace.upsertObject({ id: 'references', type: 'reference_board', entityRef: 'board:references', x: 1260, y: 200, collapsed: true });
   const ws = workspace.read();
-  assert.equal(ws.objects.length, 2);
-  assert.equal(ws.objects[0].rotation, -2);
-  assert.equal(ws.objects[1].collapsed, true);
+  assert.equal(ws.schemaVersion, 3);
+  assert.equal(ws.windows.length, 2);
+  const mara = ws.windows.find((w) => w.windowId === 'character_mara');
+  const refs = ws.windows.find((w) => w.windowId === 'references');
+  assert.equal(mara.rotation, -2);
+  assert.equal(refs.collapsed, true);
+  assert.equal(mara.state, 'floating');
+  assert.equal(mara.entityRef, 'character:mara');
 });
 
 test('workspace move/dock/focus actions return executable inverses across world + screen objects', () => {
   const moved = workspace.applyAction({ type: 'move_panel', targetId: 'character_mara', payload: { x: 1000, y: 260, width: 500 } });
   assert.equal(moved.object.x, 1000);
   assert.equal(moved.inverse.payload.x, 800);
-  workspace.upsertObject({ id: 'screen_partner', type: 'partner_panel', space: 'screen', x: 900, y: 80, width: 300, height: 500 });
+  workspace.upsertObject({ id: 'screen_partner', type: 'partner_panel', entityRef: 'partner:main', x: 900, y: 80, width: 300, height: 500 });
   const docked = workspace.applyAction({ type: 'dock_panel', targetId: 'screen_partner', payload: { dock: 'right' } });
   assert.equal(docked.object.dock, 'right');
+  assert.equal(workspace.read().windows.find((w) => w.windowId === 'screen_partner').state, 'docked');
   workspace.applyAction(docked.inverse);
-  assert.equal(workspace.read().objects.find((o) => o.id === 'screen_partner').dock, null);
+  assert.equal(workspace.read().windows.find((w) => w.windowId === 'screen_partner').dock, null);
   const focus = workspace.applyAction({ type: 'focus', targetId: 'references' });
-  assert.equal(focus.workspace.activeObjectId, 'references');
+  assert.equal(focus.workspace.activeWindowId, 'references');
 });
 
 test('move action inverse restores a pre-existing dock instead of only old coordinates', () => {
-  workspace.upsertObject({ id: 'dock_restore', type: 'partner_panel', x: 900, y: 80, width: 300, height: 500, dock: 'right' });
+  workspace.upsertObject({ id: 'dock_restore', type: 'partner_panel', entityRef: 'partner:restore', x: 900, y: 80, width: 300, height: 500, dock: 'right' });
   const moved = workspace.applyAction({ type: 'move_panel', targetId: 'dock_restore', payload: { x: 500, y: 180 } });
   assert.equal(moved.object.dock, null);
   assert.equal(moved.inverse.payload.dock, 'right');
   workspace.applyAction(moved.inverse);
-  const restored = workspace.read().objects.find((o) => o.id === 'dock_restore');
+  const restored = workspace.read().windows.find((w) => w.windowId === 'dock_restore');
   assert.equal(restored.x, 900);
   assert.equal(restored.y, 80);
   assert.equal(restored.dock, 'right');
 });
 
-test('workspace schema v1 migrates existing utility panels to screen space and creative canvases to world space', () => {
+test('close/open panel cycles map onto v3 states with shelf membership', () => {
+  workspace.upsertObject({ id: 'screen_layers', type: 'layers_panel', entityRef: 'layers:main', x: 40, y: 80, width: 300, height: 400 });
+  workspace.applyAction({ type: 'close_panel', targetId: 'screen_layers' });
+  let ws = workspace.read();
+  assert.equal(ws.windows.find((w) => w.windowId === 'screen_layers').state, 'minimised');
+  assert.ok(ws.shelf.windowIds.includes('screen_layers'), 'minimised screen window joins the shelf');
+  workspace.applyAction({ type: 'open_panel', targetId: 'screen_layers' });
+  ws = workspace.read();
+  assert.equal(ws.windows.find((w) => w.windowId === 'screen_layers').state, 'floating');
+  assert.equal(ws.shelf.windowIds.includes('screen_layers'), false, 'open removes it from the shelf');
+});
+
+test('workspace schema v1 migrates through the chain to v3 preserving spaces and viewport', () => {
   fs.writeFileSync(workspace.WORKSPACE_PATH, JSON.stringify({
     schemaVersion: 1,
     viewport: { x: 12, y: -8, zoom: 0.75 },
@@ -54,15 +72,201 @@ test('workspace schema v1 migrates existing utility panels to screen space and c
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   }), 'utf8');
   const ws = workspace.read();
-  assert.equal(ws.schemaVersion, 2);
-  assert.equal(ws.objects.find((o) => o.id === 'old_partner').space, 'screen');
-  assert.equal(ws.objects.find((o) => o.id === 'old_character').space, 'world');
+  assert.equal(ws.schemaVersion, 3);
+  assert.equal(ws.windows.find((w) => w.windowId === 'old_partner').space, 'screen');
+  assert.equal(ws.windows.find((w) => w.windowId === 'old_character').space, 'world');
   assert.equal(ws.viewport.zoom, 0.75);
+  assert.ok(fs.existsSync(`${workspace.WORKSPACE_PATH}.pre-v3.bak`), 'migration leaves a pre-v3 backup of the original file');
+});
+
+test('v2 workspace migrates to v3: hidden world sheets become tabbed, hidden screen panels minimised, groupIds synthesize groups', () => {
+  fs.writeFileSync(workspace.WORKSPACE_PATH, JSON.stringify({
+    schemaVersion: 2,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    activeObjectId: 'active_panel',
+    objects: [
+      { id: 'sheet_a', type: 'sheet', space: 'world', entityRef: 'sheet:a', x: 0, y: 0, width: 400, height: 300, visible: false, collapsed: true, zIndex: 3 },
+      { id: 'panel_util', type: 'layers_panel', space: 'screen', x: 10, y: 10, width: 300, height: 200, visible: false, collapsed: true, zIndex: 4 },
+      { id: 'panel_docked', type: 'partner_panel', space: 'screen', x: 900, y: 0, width: 300, height: 500, visible: true, dock: 'right', zIndex: 5 },
+      { id: 'win_g1', type: 'note', space: 'world', entityRef: 'note:g1', x: 5, y: 5, width: 200, height: 150, groupId: 'grp1', zIndex: 6 },
+      { id: 'win_g2', type: 'note', space: 'world', entityRef: 'note:g2', x: 250, y: 5, width: 200, height: 150, groupId: 'grp1', zIndex: 7 },
+      { id: 'active_panel', type: 'generic_panel', space: 'screen', x: 0, y: 0, width: 200, height: 100, zIndex: 8 },
+    ],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }), 'utf8');
+  const ws = workspace.read();
+  assert.equal(ws.schemaVersion, 3);
+  assert.equal(ws.windows.find((w) => w.windowId === 'sheet_a').state, 'tabbed');
+  assert.equal(ws.windows.find((w) => w.windowId === 'panel_util').state, 'minimised');
+  assert.deepEqual(ws.shelf.windowIds, ['panel_util']);
+  assert.equal(ws.windows.find((w) => w.windowId === 'panel_docked').state, 'docked');
+  const grp = ws.groups.find((g) => g.groupId === 'grp1');
+  assert.deepEqual(grp.windowIds, ['win_g1', 'win_g2']);
+  assert.equal(ws.activeWindowId, 'active_panel');
+  assert.equal(ws.revision, 1);
+});
+
+test('structural writes are revision-gated: stale baseRevision fails 409 with current state', () => {
+  const ws = workspace.read();
+  workspace.upsertWindow({ windowId: 'rev_probe', type: 'note', entityRef: 'note:rev', x: 0, y: 0, width: 200, height: 150 });
+  let stale = null;
+  try { workspace.setShelf(['rev_probe'], { baseRevision: ws.revision }); } catch (e) { stale = e; }
+  assert.ok(stale && stale.status === 409, 'stale baseRevision is rejected with 409');
+  assert.ok(stale.workspace && Array.isArray(stale.workspace.windows), '409 carries the current workspace state');
+  // Fresh revision is accepted and bumps the counter.
+  const fresh = workspace.read();
+  const next = workspace.setShelf(['rev_probe'], { baseRevision: fresh.revision });
+  assert.equal(next.revision, fresh.revision + 1);
+});
+
+test('validation rejects unknown structural fields, bad refs, and dangling referential integrity', () => {
+  assert.throws(() => workspace.upsertWindow({ windowId: 'bad_field', type: 'note', x: 0, y: 0, width: 100, height: 100, surprise: true }), /unsupported field/);
+  assert.throws(() => workspace.upsertWindow({ windowId: 'bad_ref', type: 'note', entityRef: 'not-typed', x: 0, y: 0, width: 100, height: 100 }), /typed reference/);
+  assert.throws(() => workspace.upsertWindow({ windowId: 'bad_state', type: 'note', state: 'levitating', x: 0, y: 0, width: 100, height: 100 }), /floating\|tabbed\|docked\|minimised\|maximised/);
+  workspace.upsertWindow({ windowId: 'grp_only', type: 'note', entityRef: 'note:only', x: 0, y: 0, width: 100, height: 100 });
+  assert.throws(() => workspace.setGroups([{ groupId: 'ghost', windowIds: ['no_such_window'] }]), /unknown window/);
+  assert.throws(() => workspace.setShelf(['no_such_window']), /unknown window/);
+});
+
+test('v3 window API round-trips groups, shelf and delete cascades', () => {
+  workspace.upsertWindow({ windowId: 'w_alpha', type: 'note', entityRef: 'note:alpha', x: 0, y: 0, width: 200, height: 150 });
+  workspace.upsertWindow({ windowId: 'w_beta', type: 'note', entityRef: 'note:beta', x: 250, y: 0, width: 200, height: 150 });
+  workspace.setGroups([{ groupId: 'g_ab', windowIds: ['w_alpha', 'w_beta'], activeWindowId: 'w_beta' }]);
+  let ws = workspace.read();
+  assert.equal(ws.windows.find((w) => w.windowId === 'w_alpha').groupId, 'g_ab');
+  assert.equal(ws.groups[0].activeWindowId, 'w_beta');
+  // Deleting ONE member keeps the group with the survivor; deleting the last dissolves it.
+  workspace.deleteWindow('w_beta');
+  ws = workspace.read();
+  assert.equal(ws.groups.length, 1, 'group survives the loss of one member');
+  assert.deepEqual(ws.groups[0].windowIds, ['w_alpha']);
+  assert.equal(ws.windows.find((w) => w.windowId === 'w_alpha').groupId, 'g_ab');
+  workspace.deleteWindow('w_alpha');
+  ws = workspace.read();
+  assert.equal(ws.groups.length, 0, 'group dissolves when the last member leaves');
+  assert.equal(ws.activeWindowId === 'w_beta', false, 'active window cannot dangle after delete');
+});
+
+test('legacy object projection keeps pre-v3 clients functional', () => {
+  workspace.upsertObject({ id: 'legacy_probe', type: 'reference_board', entityRef: 'board:legacy', x: 10, y: 20, width: 320, height: 260 });
+  workspace.upsertObject({ id: 'legacy_probe', visible: false });
+  const client = workspace.readClient();
+  const legacy = client.objects.find((o) => o.id === 'legacy_probe');
+  assert.ok(legacy, 'client envelope exposes objects[] with ids');
+  assert.equal(legacy.visible, false);
+  assert.equal(legacy.state, 'tabbed', 'world put-away maps to the tabbed state');
 });
 
 test('world objects never inherit screen-edge docking', () => {
-  const obj = workspace.upsertObject({ id: 'world_ref', type: 'reference_board', space: 'world', x: 10, y: 20, dock: 'right' });
+  const obj = workspace.upsertObject({ id: 'world_ref', type: 'reference_board', space: 'world', entityRef: 'board:world', x: 10, y: 20, dock: 'right' });
   assert.equal(obj.space, 'world');
   assert.equal(obj.dock, null);
   assert.throws(() => workspace.applyAction({ type: 'dock_panel', targetId: 'world_ref', payload: { dock: 'left' } }), /world objects/);
+});
+
+/* --------------------------------- GPT Pro round-3 critical: canonical types */
+
+test('canonical surface types and entityRef prefixes are accepted; unknown types are rejected', () => {
+  workspace.upsertObject({ id: 'window_takes', type: 'take_stack', entityRef: 'takes:main', x: 10, y: 10, width: 300, height: 200 });
+  workspace.upsertObject({ id: 'window_characters', type: 'character_registry', entityRef: 'characters:main', x: 20, y: 20, width: 300, height: 200 });
+  workspace.upsertObject({ id: 'window_notes', type: 'notes_panel', entityRef: 'notes:main', x: 30, y: 30, width: 300, height: 200 });
+  workspace.upsertObject({ id: 'window_proposals', type: 'partner_proposals', entityRef: 'proposals:main', x: 40, y: 40, width: 300, height: 200 });
+  const ws = workspace.read();
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_takes').type, 'take_stack');
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_characters').entityRef, 'characters:main');
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_notes').space, 'screen', 'panel types default to screen space');
+  assert.equal(ws.windows.find((w) => w.windowId === 'window_proposals').type, 'partner_proposals');
+  // Reject, never coerce (the silent generic_panel fallback once made four
+  // shipped surfaces vanish on reload).
+  assert.throws(() => workspace.upsertObject({ id: 'bogus_type', type: 'not_a_real_type' }), /unknown window type/);
+});
+
+test('legacy generic_panel rows for canonical surfaces are repaired on read', () => {
+  const file = path.join(scratch, 'workspace.json');
+  const doc = { schemaVersion: 3, revision: 7, viewport: { x: 0, y: 0, zoom: 1 }, activeWindowId: null,
+    windows: [
+      { windowId: 'window_takes', type: 'generic_panel', space: 'screen', entityRef: 'takes:main', x: 0, y: 0, width: 300, height: 200, rotation: 0, scale: 1, zIndex: 1, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+      { windowId: 'window_proposals', type: 'generic_panel', space: 'screen', entityRef: 'proposals:main', x: 5, y: 5, width: 300, height: 200, rotation: 0, scale: 1, zIndex: 2, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+    ],
+    groups: [], shelf: { windowIds: [] } };
+  fs.writeFileSync(file, JSON.stringify(doc));
+  const out = workspace.read();
+  assert.equal(out.windows.find((w) => w.windowId === 'window_takes').type, 'take_stack', 'stored row repaired to canonical type');
+  assert.equal(out.windows.find((w) => w.windowId === 'window_proposals').type, 'partner_proposals');
+});
+
+test('legacy v2 board with grouped+shelved contradiction loads: migration converges before validation', () => {
+  // GPT Pro round-6 adversarial F1: v1/v2 chains run validateWorkspace over
+  // synthesized rows; without pre-validation normalization a legacy hidden
+  // screen panel carrying a synthesized group trips the tightened
+  // mutual-exclusion check and bricks every later read of that board.
+  const file = path.join(scratch, 'workspace.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 2,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    activeObjectId: null,
+    objects: [
+      { id: 'h_one', type: 'layers_panel', space: 'screen', x: 10, y: 10, width: 300, height: 200, visible: false, collapsed: true, zIndex: 4, groupId: 'grp_z' },
+      { id: 'h_two', type: 'partner_panel', space: 'screen', x: 20, y: 20, width: 300, height: 200, visible: false, collapsed: true, zIndex: 5, groupId: 'grp_z' },
+    ],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }));
+  const out = workspace.read(); // must not throw
+  assert.equal(out.schemaVersion, 3);
+  assert.deepEqual([...out.shelf.windowIds].sort(), ['h_one', 'h_two'], 'hidden screen panels still land on the shelf');
+  assert.equal(out.groups.length, 0, 'the shelf claims both refs; their synthesized group dissolves');
+  assert.equal(out.windows.find((w) => w.windowId === 'h_one').groupId, null);
+  assert.equal(out.windows.find((w) => w.windowId === 'h_two').groupId, null);
+});
+
+test('closing a GROUPED member through applyAction converges ownership instead of erroring', () => {
+  // GPT Pro round-6 adversarial F2: lifecycle actions bypass setShelf's
+  // transaction; a Partner-driven close of a grouped screen member used to
+  // trip mutual exclusion during validation.
+  const file = path.join(scratch, 'workspace.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 3,
+    revision: 50,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    activeWindowId: null,
+    windows: [
+      { windowId: 'c_left', type: 'note', space: 'screen', entityRef: 'note:cleft', x: 0, y: 0, width: 200, height: 150, rotation: 0, scale: 1, zIndex: 1, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+      { windowId: 'c_right', type: 'note', space: 'screen', entityRef: 'note:cright', x: 250, y: 0, width: 200, height: 150, rotation: 0, scale: 1, zIndex: 2, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+    ],
+    groups: [],
+    shelf: { windowIds: [] },
+  }));
+  const base = workspace.read().revision;
+  workspace.setGroups([{ groupId: 'g_cr', windowIds: ['c_left', 'c_right'], activeWindowId: 'c_right' }], { baseRevision: base });
+  const result = workspace.applyAction({ type: 'close_panel', targetId: 'c_left' });
+  assert.equal(result.object.state, 'minimised');
+  const out = workspace.read();
+  assert.ok(out.shelf.windowIds.includes('c_left'), 'the closed member sits on the shelf');
+  const pair = out.groups.find((g) => g.groupId === 'g_cr');
+  assert.ok(pair && pair.windowIds.length === 1 && pair.windowIds[0] === 'c_right', 'the survivor keeps the group');
+  assert.equal(out.windows.find((w) => w.windowId === 'c_left').groupId, null, 'group membership left canonically server-side');
+});
+
+test('open_panel inverse is always close_panel: reverting a shelf-origin open restores shelf membership', () => {
+  // GPT Pro round-6 adversarial F3: labeling open's inverse as open_panel
+  // made revert re-apply the open — panels stayed off the shelf forever.
+  const file = path.join(scratch, 'workspace.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 3,
+    revision: 60,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    activeWindowId: null,
+    windows: [
+      { windowId: 'solo_shelf', type: 'note', space: 'screen', entityRef: 'note:soloshelf', x: 0, y: 0, width: 200, height: 150, rotation: 0, scale: 1, zIndex: 1, state: 'minimised', groupId: null, collapsed: false, pinned: false, locked: false, dock: null },
+    ],
+    groups: [],
+    shelf: { windowIds: ['solo_shelf'] },
+  }));
+  const opened = workspace.applyAction({ type: 'open_panel', targetId: 'solo_shelf' });
+  assert.equal(opened.inverse.type, 'close_panel', 'the undo label points back to closing');
+  assert.equal(workspace.read().shelf.windowIds.includes('solo_shelf'), false, 'the open removes shelf membership');
+  workspace.applyAction(opened.inverse);
+  const reverted = workspace.read();
+  assert.ok(reverted.shelf.windowIds.includes('solo_shelf'), 'revert RETURNS the panel to the shelf');
+  assert.equal(reverted.windows.find((w) => w.windowId === 'solo_shelf').state, 'minimised');
 });

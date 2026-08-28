@@ -324,6 +324,11 @@
         }
       } catch (_e) { /* fall through to painted base */ }
       if (!loaded) paintLocalBase();
+    } else if (!shot && !state.offline) {
+      // Empty project: no stock artwork, no fake storyboard. A calm blank
+      // paper base the artist can draw over immediately (acceptance journey
+      // steps 1-2).
+      paintBlankBase();
     } else {
       paintLocalBase();
       if (state.offline) toast('offline — demo mode 🌧️ gen needs the server');
@@ -418,6 +423,11 @@
     $('scenesClose').addEventListener('click', () => $('scenesPanel').classList.remove('open'));
 
     state.workspaceUI = WSPACE.WorkspaceShell({ api: API, shelf: $('panelShelf') });
+    // Freeform-desk routing flag, computed once so the Beats panel can be
+    // retired from the bespoke shell on the desktop path while the legacy
+    // experience keeps it everywhere else.
+    const useFreeformDesk = new URLSearchParams(location.search).get('freeform') === '1' &&
+      Boolean(window.RaindeskWindowManager && window.RaindeskFreeformSurfaces);
     state.workspaceUI.registerPanel({
       id: 'panel_layers', key: 'layers', type: 'layers_panel', label: 'Layers',
       element: $('layersPanel'), handle: $('layersPanel').querySelector('h4'),
@@ -432,14 +442,18 @@
       open: () => { $('scenesPanel').classList.add('open'); renderScenesPanel(); },
       close: () => $('scenesPanel').classList.remove('open'),
     });
-    state.workspaceUI.registerPanel({
-      id: 'panel_beats', key: 'beats', type: 'beat_trail', label: 'Beats',
-      element: $('beatTrail'), handle: $('beatTrail').querySelector('.beat-trail-head'),
-      visibilityTarget: $('beatTrail'), visibleClass: 'open',
-      isOpen: () => state.beatTrail && state.beatTrail.isOpen(),
-      open: () => state.beatTrail && state.beatTrail.open(),
-      close: () => state.beatTrail && state.beatTrail.close(),
-    });
+    // Phase 3 migration: when the registry desk mounts, the bespoke Beats
+    // shell is not registered — window_beats owns the surface instead.
+    if (!useFreeformDesk) {
+      state.workspaceUI.registerPanel({
+        id: 'panel_beats', key: 'beats', type: 'beat_trail', label: 'Beats',
+        element: $('beatTrail'), handle: $('beatTrail').querySelector('.beat-trail-head'),
+        visibilityTarget: $('beatTrail'), visibleClass: 'open',
+        isOpen: () => state.beatTrail && state.beatTrail.isOpen(),
+        open: () => state.beatTrail && state.beatTrail.open(),
+        close: () => state.beatTrail && state.beatTrail.close(),
+      });
+    }
     state.workspaceUI.registerPanel({
       id: 'panel_partner', key: 'partner', type: 'partner_panel', label: 'Partner',
       element: $('drawer').querySelector('.chat-panel'), handle: $('drawer').querySelector('.chat-tabs'),
@@ -455,11 +469,180 @@
       stage: $('stage'),
       world: $('creativeWorld'),
       tabs: $('creativeTabs'),
+      seedBuiltinSheets: Boolean(state.shot),
       getMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
       onViewportChange: () => markDirty(),
       onContextChange: () => {},
     });
     await state.creativeDesk.init(state.shot);
+
+    // Freeform Creative Desk v2 (flag-gated): mount the shared window
+    // manager over the stage when the page runs with ?freeform=1. The
+    // default experience is unchanged until the freeform desk is proven;
+    // the registry surfaces own only their window content.
+    try {
+      if (useFreeformDesk) {
+        window.RaindeskFreeformSurfaces.installSurfaces({
+          surfaces: window.RaindeskWindowManager.CreativeSurfaces,
+          deps: {
+            getBoard: () => (state.board && Array.isArray(state.board.shots) ? state.board.shots : []),
+            getActiveShotId: () => (state.shot && state.shot.id) || null,
+            openShot: (id) => { openShot(id); },
+            getLayers: () => core.layers,
+            getActiveLayerId: () => core.activeLayerId,
+            setActiveLayer: (id) => {
+              try { core.setActiveLayer(id); } catch (_e) { return false; }
+              markDirty(); scheduleShotSave('active layer'); return true;
+            },
+            addLayer: (spec) => {
+              core.addLayer(spec); markDirty(); scheduleShotSave('add pen layer');
+            },
+            toggleLayerVisible: (layer) => {
+              layer.visible = !layer.visible; markDirty(); scheduleShotSave('layer visibility');
+            },
+            getTakeState: () => {
+              const s = core.session;
+              return s && s.takes.length ? { count: s.takes.length, index: s.takeIndex } : { count: 0, index: -1 };
+            },
+            prevTake: () => { if (core.prevTake()) { markDirty(); } },
+            nextTake: () => { if (core.nextTake()) { markDirty(); } },
+            commitTake: () => { onCommit(); },
+            discardTakes: () => { core.discardTakes(); state.takeMeta = []; markDirty(); },
+            // Registry hosting of the EXISTING trail (Phase 3 unit 2):
+            // beats.js keeps owning rendering; this seam only mounts a fresh
+            // BeatTrail into the window body and hands its lifecycle to the
+            // window controller contract.
+            mountBeatTrail: (host) => {
+              const trailRoot = document.createElement('div');
+              host.appendChild(trailRoot);
+              const trail = BEATS.BeatTrail(trailRoot, {
+                api: API,
+                direction: DIR,
+                shot: state.shot,
+                contextProvider: partnerCanvasContext,
+                onPartnerMessage: (message, moves) => {
+                  if (state.drawer && state.drawer.addPartnerNote) state.drawer.addPartnerNote(message, moves);
+                },
+                onActiveBeatChange: (beat) => {
+                  state.activeBeatId = beat && beat.id || null;
+                  markDirty();
+                },
+                onCaptureFrame: (slot, context) => captureDirectionFrame(slot, context),
+              });
+              trail.open();
+              // The floating window chrome owns closing; leaving the inline
+              // minimiser would freeze refreshes inside a visible window.
+              const inlineClose = typeof trailRoot.querySelector === 'function'
+                ? trailRoot.querySelector('.beat-trail-close') : null;
+              if (inlineClose && inlineClose.style) inlineClose.style.display = 'none';
+              // One live trail at a time: Partner canvas context, shot
+              // switches and drawer-turn refreshes all read state.beatTrail.
+              state.beatTrail = trail;
+              return {
+                render() { if (trail.isOpen()) trail.refresh(); },
+                destroy() {
+                  if (state.beatTrail === trail) state.beatTrail = null;
+                  trail.close();
+                  trailRoot.innerHTML = '';
+                  host.innerHTML = '';
+                },
+              };
+            },
+            getNotes: () => {
+              try { return window.localStorage.getItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`) || ''; } catch (_e) { return ''; }
+            },
+            setNotes: (text) => {
+              try { window.localStorage.setItem(`raindesk.notes.v1.${(state.shot && state.shot.id) || 'project'}`, String(text || '')); } catch (_e) {
+                // Warn once per session: per-keystroke spam helps nobody.
+                if (!state.notesStorageWarned) { state.notesStorageWarned = true; console.warn('[freeform] notes could not be saved (storage unavailable)'); }
+              }
+            },
+            getProposals: () => state.freeformProposals || [],
+            refreshCast: () => { loadCast(); },
+            refreshProposals: () => { loadProposals(); },
+            applyProposal: async (id) => {
+              if (!API.mutatePartnerAction) return;
+              try {
+                // Reversible chain: approve -> execute (stores inverse) -> accept.
+                await API.mutatePartnerAction(id, 'approve');
+                await API.mutatePartnerAction(id, 'execute');
+                await API.mutatePartnerAction(id, 'accept');
+                await loadProposals();
+              } catch (_e) {
+                // Partial failure must not strand the action invisible:
+                // cancel recovers proposed/approved states (a completed
+                // action keeps its inverse for artist-owned revert).
+                try { await API.mutatePartnerAction(id, 'cancel'); } catch (_e2) { /* already final */ }
+                await loadProposals();
+                toast('proposal needs the local server');
+              }
+            },
+            cancelProposal: async (id) => {
+              if (!API.mutatePartnerAction) return;
+              try {
+                await API.mutatePartnerAction(id, 'cancel');
+                await loadProposals();
+              } catch (_e) { toast('proposal needs the local server'); }
+            },
+            getCastState: () => state.freeformCast || null,
+            toggleBound: async (id) => {
+              if (!state.shot || !API.setShotCharacters) return;
+              const cur = state.freeformCast || { boundIds: [] };
+              const next = cur.boundIds.includes(id) ? cur.boundIds.filter((x) => x !== id) : [...cur.boundIds, id];
+              try {
+                const ctx = await API.setShotCharacters(state.shot.id, next);
+                state.freeformCast = { ...cur, shotId: state.shot.id, boundIds: (ctx && Array.isArray(ctx.characterIds) ? ctx.characterIds : next) };
+                if (state.freeform) state.freeform.refreshAll();
+              } catch (_e) { toast('cast binding needs the local server'); }
+            },
+          },
+        });
+        state.freeform = window.RaindeskWindowManager.WindowManager({
+          root: $('stage'), document, api: API,
+          viewportMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
+          geometry: window.RaindeskWorkspaceUI || {},
+        });
+        // The tab shelf: calm restore surface for minimised windows (Phase 2).
+        const shelfEl = document.createElement('nav');
+        shelfEl.className = 'freeform-shelf';
+        shelfEl.setAttribute('aria-label', 'window shelf');
+        $('stage').appendChild(shelfEl);
+        state.freeform.attachShelf(shelfEl);
+        // Dev-journey affordance: the native smokes drive the manager directly.
+        window.raindeskFreeform = state.freeform;
+        const loadCast = async () => {
+          if (!API.listCharacters || !state.shot) return;
+          try {
+            const chars = await API.listCharacters();
+            const ctx = await API.getShotCharacters(state.shot.id).catch(() => null);
+            state.freeformCast = {
+              shotId: state.shot.id,
+              characters: (chars && Array.isArray(chars.characters) ? chars.characters : []),
+              boundIds: (ctx && Array.isArray(ctx.characterIds) ? ctx.characterIds : []),
+            };
+            if (state.freeform) state.freeform.refreshAll();
+          } catch (_e) { /* character registry needs the local server */ }
+        };
+        const loadProposals = async () => {
+          if (!API.listPartnerActions) return;
+          try {
+            const res = await API.listPartnerActions(20);
+            const items = (res && Array.isArray(res.actions) ? res.actions : []);
+            // Only actionable-by-artist ones surface here: pending proposals.
+            state.freeformProposals = items.filter((a) => a && a.status === 'proposed');
+            if (state.freeform) state.freeform.refreshAll();
+          } catch (_e) { /* proposals need the local server */ }
+        };
+        state.freeform.init().then(() => {
+          if (!state.freeform.list().length) {
+            state.freeform.open('scenes');
+            state.freeform.open('layers');
+          }
+          loadCast();
+          loadProposals();
+        }).catch(() => {});
+      }
+    } catch (_freeformError) { /* the freeform desk is additive; never block boot */ }
 
     $('drawerHandle').addEventListener('click', () => {
       if (state.drawer.isOpen()) state.drawer.close();
@@ -498,6 +681,17 @@
     const got = t2.getImageData(0, 0, CANVAS_W, CANVAS_H);
     core.setLayerBuffer(base.id, new Uint8ClampedArray(got.data));
     t2.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  }
+
+  function paintBlankBase() {
+    // Calm blank paper base for empty projects — the desk ivory tone so the
+    // untouched desk reads as an open page, never as missing artwork.
+    const base = core.ensureBase('base · blank page');
+    const rgba = new Uint8ClampedArray(CANVAS_W * CANVAS_H * 4);
+    for (let i = 0; i < rgba.length; i += 4) {
+      rgba[i] = 246; rgba[i + 1] = 242; rgba[i + 2] = 232; rgba[i + 3] = 255;
+    }
+    core.setLayerBuffer(base.id, rgba);
   }
 
   function updateTitle() {
@@ -719,6 +913,44 @@
     dctx.restore();
   }
 
+  /* ------------------------------------------------ beats surface routing */
+  // Phase 3 migration: the freeform registry owns the desktop Beats window;
+  // the bespoke beat-trail shell stays the fallback wherever the freeform
+  // desk did not mount (default experience, no ?freeform=1).
+
+  function beatsWindowId() { return 'window_beats'; }
+
+  function beatsWindowState() {
+    return state.freeform ? state.freeform.state(beatsWindowId()) : null;
+  }
+
+  /** Desktop Beats entry point: open / restore / minimise the registry
+   * window (toggle parity with the old bespoke shell). Returns false when
+   * the freeform desk is absent so callers fall back to the legacy path. */
+  function toggleBeatsSurface() {
+    const win = beatsWindowState();
+    if (!win) {
+      if (!state.freeform) return false;
+      // Stable entityRef keeps Partner move_panel compatibility inside the
+      // documented beats: namespace (workspace schema v3 ENTITY_REF_RE).
+      state.freeform.open('beats', { entityRef: 'beats:active_shot' });
+      return true;
+    }
+    if (win.state === 'minimised' || win.state === 'tabbed') state.freeform.restore(win.windowId);
+    else state.freeform.minimise(win.windowId);
+    return true;
+  }
+
+  /** Escape-style dismissal: minimise (never destroy) so the trail instance
+   * keeps tracking shot changes while hidden. Returns false when there is
+   * no registry window to dismiss. */
+  function closeBeatsSurface() {
+    const win = beatsWindowState();
+    if (!win || win.state === 'minimised') return Boolean(win);
+    state.freeform.minimise(win.windowId);
+    return true;
+  }
+
   /* ------------------------------------------------------------ chrome */
 
   function bindChrome() {
@@ -727,7 +959,7 @@
       btn.addEventListener('click', () => {
         const t = btn.dataset.tool;
         if (t === 'layers') { togglePanel(); return; }
-        if (t === 'beats') { if (state.beatTrail) state.beatTrail.toggle(); return; }
+        if (t === 'beats') { if (!toggleBeatsSurface() && state.beatTrail) state.beatTrail.toggle(); return; }
         if (t === 'pen' && state.tool === 'pen') { togglePenPop(); return; }
         setTool(t);
       });
@@ -784,7 +1016,7 @@
         $('penpop').classList.remove('open');
         $('layersPanel').classList.remove('open');
         $('scenesPanel').classList.remove('open');
-        if (state.beatTrail) state.beatTrail.close();
+        if (!closeBeatsSurface() && state.beatTrail) state.beatTrail.close();
         if (state.drawer) state.drawer.close();
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); onUndo(); }
@@ -1038,6 +1270,9 @@
       $('prevTake').disabled = s.takeIndex <= 0;
       $('nextTake').disabled = s.takeIndex >= s.takes.length - 1;
     }
+    // Phase 3: the freeform Takes window refreshes from the same seam the
+    // bespoke dock uses — every take-changing site already calls syncDock.
+    if (state.freeform && typeof state.freeform.refreshAll === 'function') state.freeform.refreshAll();
   }
 
   async function onCommit() {
@@ -1281,7 +1516,13 @@
     markDirty();
   }
 
-  function markDirty() { state.dirty = true; }
+  function markDirty() {
+    state.dirty = true;
+    // Freeform surfaces ride the same invalidation: board/layer edits must
+    // reach the registry windows, not just the shot canvas (adversarial
+    // repair: stale surface lists).
+    if (state.freeform && typeof state.freeform.refreshAll === 'function') state.freeform.refreshAll();
+  }
 
   function tick() {
     if (state.dirty) {
