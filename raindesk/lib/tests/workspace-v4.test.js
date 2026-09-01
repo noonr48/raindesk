@@ -357,3 +357,43 @@ test('applySpatial body.space true-up: the ONE declarative-space writer (validat
   mk(2);
   assert.throws(() => v4.applySpatial('w_tu_2', 1, { incarnationId: 'inc_tu_20001', patch: {}, space: 'galaxy' }), (e) => e.status === 400, 'bad space values refuse');
 });
+
+test('Stage-4 G1: group.create derives the canonical frame from the first member (or accepts an explicit one)', () => {
+  v4.applyIntent({ actorId: 'gf', intentId: 'c1', op: { kind: 'window.create', windowId: 'w_gf_a', incarnationId: 'inc_gfa000001', type: 'note', space: 'world', x: 120, y: 80, width: 400, height: 300 } });
+  v4.applyIntent({ actorId: 'gf', intentId: 'c2', op: { kind: 'window.create', windowId: 'w_gf_b', incarnationId: 'inc_gfb000001', type: 'note', space: 'world', x: -999, y: -999, width: 200, height: 150 } });
+  const made = v4.applyIntent({ actorId: 'gf', intentId: 'g1', op: { kind: 'group.create', members: [{ windowId: 'w_gf_a', generation: 1, incarnationId: 'inc_gfa000001' }, { windowId: 'w_gf_b', generation: 1, incarnationId: 'inc_gfb000001' }] } });
+  const g = made.changed.createdGroup;
+  assert.ok(g.frame, 'group carries a frame');
+  assert.deepEqual(g.frame.rect, { x: 120, y: 80, width: 400, height: 300 }, 'frame derived from the FIRST member — never the second member\'s different geometry');
+  assert.equal(g.frame.presentation.kind, 'floating');
+  const made2 = v4.applyIntent({ actorId: 'gf', intentId: 'g2', op: { kind: 'group.create', members: [{ windowId: 'w_gf_a', generation: 1, incarnationId: 'inc_gfa000001' }], frame: { rect: { x: 5, y: 6, width: 460, height: 360 }, presentation: { kind: 'docked', edge: 'left' }, zIndex: 42 } } });
+  assert.equal(made2.changed.createdGroup.frame.rect.x, 5, 'explicit frame wins');
+  assert.equal(made2.changed.createdGroup.frame.presentation.edge, 'left');
+  assert.equal(made2.changed.createdGroup.frame.zIndex, 42);
+  assert.equal(v4.readV4().groups.find((row) => row.groupId === g.groupId).frame.rect.x, 120, 'readV4 exposes the frame');
+});
+
+test('Stage-4 G1: group.setFrame mutates ONLY the frame — member spatial untouched; version discipline enforced', () => {
+  v4.applyIntent({ actorId: 'gsf', intentId: 'd1', op: { kind: 'window.create', windowId: 'w_gsf_a', incarnationId: 'inc_gsfa00001', type: 'note', space: 'world', x: 10, y: 20, width: 300, height: 220 } });
+  v4.applyIntent({ actorId: 'gsf', intentId: 'd2', op: { kind: 'window.create', windowId: 'w_gsf_b', incarnationId: 'inc_gsfb00001', type: 'note', space: 'world', x: 50, y: 60, width: 280, height: 200 } });
+  const made = v4.applyIntent({ actorId: 'gsf', intentId: 'g1', op: { kind: 'group.create', members: [{ windowId: 'w_gsf_a', generation: 1, incarnationId: 'inc_gsfa00001' }, { windowId: 'w_gsf_b', generation: 1, incarnationId: 'inc_gsfb00001' }] } });
+  const gid = made.changed.createdGroup.groupId;
+  const v0 = made.changed.createdGroup.version;
+  // By groupId, patch rect + zIndex: the MEMBER rows keep their spatial.
+  const set1 = v4.applyIntent({ actorId: 'gsf', intentId: 'f1', op: { kind: 'group.setFrame', groupId: gid, expectedGroupVersion: v0, patch: { rect: { x: 500, y: 400 }, zIndex: 9 } } });
+  const after1 = set1.changed.groups[0];
+  assert.equal(after1.frame.rect.x, 500, 'frame rect patched');
+  assert.equal(after1.frame.zIndex, 9);
+  assert.equal(after1.version, v0 + 1, 'group version bumps');
+  const rows = v4.readV4().windows.filter((w) => w.ref.windowId === 'w_gsf_a' || w.ref.windowId === 'w_gsf_b');
+  assert.ok(rows.every((row) => row.spatial.x < 100), 'member spatial UNTOUCHED (latent while grouped)');
+  // By MEMBER locator (identity-exact):
+  const set2 = v4.applyIntent({ actorId: 'gsf', intentId: 'f2', op: { kind: 'group.setFrame', member: { windowId: 'w_gsf_b', generation: 1, incarnationId: 'inc_gsfb00001' }, patch: { presentation: { kind: 'maximised' } } } });
+  assert.equal(set2.changed.groups[0].frame.presentation.kind, 'maximised', 'member locator reaches the frame');
+  // Stale expectedGroupVersion refuses:
+  assert.throws(() => v4.applyIntent({ actorId: 'gsf', intentId: 'f3', op: { kind: 'group.setFrame', groupId: gid, expectedGroupVersion: v0, patch: { zIndex: 1 } } }),
+    (e) => e.status === 409 && e.code === 'GROUP_CHANGED');
+  // Bad presentation refuses:
+  assert.throws(() => v4.applyIntent({ actorId: 'gsf', intentId: 'f4', op: { kind: 'group.setFrame', groupId: gid, patch: { presentation: { kind: 'warp' } } } }),
+    (e) => e.status === 400);
+});

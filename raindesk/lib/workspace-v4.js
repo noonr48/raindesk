@@ -258,6 +258,26 @@ function evictOldest(map, limit) {
   for (let i = 0; i < overflow; i++) delete map[keys[i]];
 }
 
+/** Stage-4 G1: group-frame validation — the frame is the canonical
+ * {rect, presentation, zIndex} owned by the GROUP (members keep content
+ * identity + ordering only). */
+function normalizeFramePresentation(p) {
+  if (!p || typeof p !== 'object' || !PRESENTATION_KINDS.has(p.kind)) throw httpError(400, 'frame.presentation.kind must be floating|docked|maximised');
+  if (p.kind === 'docked') {
+    if (!DOCK_EDGES.has(p.edge)) throw httpError(400, 'frame.presentation.edge must be left|right|top|bottom when docked');
+    return { kind: 'docked', edge: p.edge };
+  }
+  return { kind: p.kind };
+}
+function normalizeFrame(f) {
+  if (!f || typeof f !== 'object') throw httpError(400, 'frame must be an object');
+  const rect = { x: 0, y: 0, width: 460, height: 360, ...(f.rect || {}) };
+  for (const key of ['x', 'y', 'width', 'height']) {
+    if (!Number.isFinite(rect[key])) throw httpError(400, `frame.rect.${key} must be finite`);
+  }
+  return { rect, presentation: normalizeFramePresentation(f.presentation || { kind: 'floating' }), zIndex: Number.isFinite(f.zIndex) ? f.zIndex : 0 };
+}
+
 /** Group-level helpers shared by several ops. */
 function stripFromAllGroups(ws, ref, touchedGroups) {
   for (const group of ws.groups) {
@@ -476,7 +496,22 @@ const OPS = {
       stripFromAllGroups(ws, ref, tgs);
     }
     affected.groups.push(...tgs.map((g) => ({ ...g })));
-    const group = { groupId, version: 1, members, active: members.find((m) => m.windowId === (op.active && op.active.windowId)) || members[0] };
+    // Stage-4 G1: the FIRST-CLASS GROUP FRAME — the group owns geometry,
+    // presentation and z-order; members own content identity + ordering
+    // only. Absent an explicit frame, derive it from the FIRST member's
+    // row (its spatial + presentation + zIndex at grouping time).
+    const firstRow = ws.windows.find((w) => refEq(w.ref, members[0]));
+    let frame = null;
+    if (op.frame) {
+      frame = normalizeFrame(op.frame);
+    } else if (firstRow) {
+      frame = {
+        rect: { x: firstRow.spatial.x, y: firstRow.spatial.y, width: firstRow.spatial.width, height: firstRow.spatial.height },
+        presentation: { ...firstRow.presentation },
+        zIndex: firstRow.spatial.zIndex || 0,
+      };
+    }
+    const group = { groupId, version: 1, members, active: members.find((m) => m.windowId === (op.active && op.active.windowId)) || members[0], frame };
     ws.groups.push(group);
     ws.structuralRevision += 1;
     affected.kind = 'group.create';
@@ -612,6 +647,56 @@ const OPS = {
     ws.structuralRevision += 1;
     affected.kind = 'group.dissolve';
     affected.groups.push({ ...group, members: [], active: null });
+    return group;
+  },
+
+  'group.setFrame'(ws, op, affected) {
+    // Stage-4 G1: the frame mutation op — patches the group's canonical
+    // frame under the group revision discipline (expectedGroupVersion),
+    // NEVER touching member rows' spatial/presentation (they are latent
+    // while grouped). Locatable by groupId OR by any member (identity-exact
+    // like every op).
+    let group = null;
+    if (op.member) {
+      const row = resolveLive(ws, op.member, 'member');
+      group = ws.groups.find((g) => g.members.some((m) => refEq(m, row.ref)));
+      if (!group) throw httpError(409, `CONTAINER_CHANGED ${row.ref.windowId} (member is not grouped)`, { code: 'CONTAINER_CHANGED' });
+    } else {
+      group = ws.groups.find((g) => g.groupId === op.groupId);
+    }
+    if (!group) throw httpError(404, `unknown group "${op.groupId}"`);
+    if (op.expectedGroupVersion !== undefined && op.expectedGroupVersion !== group.version) {
+      throw httpError(409, 'GROUP_CHANGED', { code: 'GROUP_CHANGED', group: { ...group } });
+    }
+    if (!group.frame) {
+      // Legacy groups (seeded without a frame) lazily adopt the first
+      // member's row — one-time, before any patch applies.
+      const firstRow = ws.windows.find((w) => refEq(w.ref, group.members[0]));
+      group.frame = firstRow
+        ? { rect: { x: firstRow.spatial.x, y: firstRow.spatial.y, width: firstRow.spatial.width, height: firstRow.spatial.height }, presentation: { ...firstRow.presentation }, zIndex: firstRow.spatial.zIndex || 0 }
+        : { rect: { x: 0, y: 0, width: 460, height: 360 }, presentation: { kind: 'floating' }, zIndex: 0 };
+    }
+    const patch = op.patch || {};
+    if (patch.rect !== undefined) {
+      if (!patch.rect || typeof patch.rect !== 'object') throw httpError(400, 'frame patch.rect must be an object');
+      for (const key of ['x', 'y', 'width', 'height']) {
+        if (patch.rect[key] !== undefined) {
+          if (!Number.isFinite(patch.rect[key])) throw httpError(400, `frame.rect.${key} must be finite`);
+          group.frame.rect[key] = patch.rect[key];
+        }
+      }
+    }
+    if (patch.presentation !== undefined) {
+      group.frame.presentation = normalizeFramePresentation(patch.presentation);
+    }
+    if (patch.zIndex !== undefined) {
+      if (!Number.isFinite(patch.zIndex)) throw httpError(400, 'frame.zIndex must be finite');
+      group.frame.zIndex = patch.zIndex;
+    }
+    group.version += 1;
+    ws.structuralRevision += 1;
+    affected.kind = 'group.setFrame';
+    affected.groups.push({ ...group });
     return group;
   },
 
@@ -889,7 +974,7 @@ function readV4() {
     windows: ws.windows.map(({ ref, type, space, entityRef, presentation, beforeMaximise, collapsed, pinned, locked, spatial, structureVersion, spatialVersion }) => (
       { ref: { ...ref }, type, space, entityRef, presentation: { ...presentation }, beforeMaximise: beforeMaximise ? { ...beforeMaximise } : null, collapsed, pinned, locked, spatial: { ...spatial }, structureVersion, spatialVersion }
     )),
-    groups: ws.groups.map((g) => ({ groupId: g.groupId, version: g.version, members: g.members.map((m) => ({ ...m })), active: g.active ? { ...g.active } : null })),
+    groups: ws.groups.map((g) => ({ groupId: g.groupId, version: g.version, members: g.members.map((m) => ({ ...m })), active: g.active ? { ...g.active } : null, frame: g.frame ? JSON.parse(JSON.stringify(g.frame)) : null })),
     shelf: { version: ws.shelf.version, members: ws.shelf.members.map((m) => ({ ...m })) },
     focus: ws.focus ? { ...ws.focus } : null,
     viewport: ws.viewport ? JSON.parse(JSON.stringify(ws.viewport)) : null,
