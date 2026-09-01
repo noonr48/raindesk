@@ -604,6 +604,13 @@
         state.v4 = window.RaindeskV4Client ? window.RaindeskV4Client.V4Client({ api: API }) : null;
         state.freeform = window.RaindeskWindowManager.WindowManager({
           root: $('stage'), document, api: API, v4: state.v4,
+          // Stage-2 B1 repair (implementation-lens): the production desk MUST
+          // feed the shared projection its viewport — creativeDesk.init is
+          // awaited earlier, so the persisted viewport is already loaded when
+          // freeform.init runs (the P3 legacy conversion converts through the
+          // REAL viewport, not identity). Without this, world render/unproject
+          // and the conversion all ran at {0,0,1} forever.
+          getViewport: () => (state.creativeDesk ? state.creativeDesk.viewport() : { x: 0, y: 0, zoom: 1 }),
           viewportMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
           geometry: window.RaindeskWorkspaceUI || {},
         });

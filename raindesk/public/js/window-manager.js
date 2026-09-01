@@ -1170,7 +1170,12 @@
           const surface = surfaceFor(model);
           const edgeAllowed = surface && surface.supportedStates.includes('docked') && surface.dockEdges.includes(model.dock);
           if (model.dock && edgeAllowed) {
-            model.rect = geo.dockRect ? geo.dockRect(model.dock, model.rect, metrics()) : model.rect;
+            // Stage-2 B2 repair (implementation-lens): a docked WORLD surface
+            // keeps its canonical world rect LATENT here too — the rail is a
+            // presentation rendered from the edge (screenRectOf), never a
+            // coordinate authority. Every other dock site already guards;
+            // this one clobbered the latent rect on every boot.
+            if (!isWorld(model)) model.rect = geo.dockRect ? geo.dockRect(model.dock, model.rect, metrics()) : model.rect;
           } else {
             model.state = 'floating';
             model.dock = null;
@@ -1416,6 +1421,11 @@
     function ungroup(groupIdOrWindowId) {
       const group = groups.get(groupIdOrWindowId) || groupFor(groupIdOrWindowId);
       if (!group) return null;
+      // Identity-exact dissolve (F1 class): capture a member ref BEFORE the
+      // local teardown — the server resolves the group from the member, so
+      // no id race exists even inside the create-response swap window.
+      const firstModel = group.windowIds.length ? windows.get(group.windowIds[0]) : null;
+      const dissolveMember = firstModel && firstModel.ref ? { ...firstModel.ref } : null;
       for (const id of group.windowIds.slice()) {
         const model = windows.get(id);
         if (!model) continue;
@@ -1425,7 +1435,7 @@
         persist(model);
       }
       groups.delete(group.groupId);
-      if (v4) queueIntent({ kind: 'group.dissolve', groupId: group.groupId });
+      if (v4 && dissolveMember) queueIntent(() => ({ kind: 'group.dissolve', member: { ...dissolveMember } }));
       return group;
     }
 
@@ -1525,7 +1535,7 @@
               }
             });
         } else {
-          queueIntent(() => ({ kind: 'group.join', member: { ...model.ref }, target: { groupId: group.groupId } }));
+          queueIntent(() => ({ kind: 'group.join', member: { ...model.ref }, target: { groupId: (groupFor(model.windowId) || group).groupId } })); // re-resolve at SEND time (F1 class)
         }
       }
       bringToFront(group.activeWindowId);
@@ -1561,8 +1571,9 @@
           const idx2 = group.windowIds.indexOf(memberId);
           const beforeId2 = idx2 + 1 < group.windowIds.length ? group.windowIds[idx2 + 1] : null;
           const beforeModel2 = beforeId2 ? windows.get(beforeId2) : null;
+          const liveGroup = groupFor(memberId) || group; // re-resolve at SEND time (F1 class)
           return {
-            kind: 'group.reorder', groupId: group.groupId, member: { ...model.ref },
+            kind: 'group.reorder', groupId: liveGroup.groupId, member: { ...model.ref },
             ...(beforeModel2 && beforeModel2.ref ? { before: { ...beforeModel2.ref } } : {}),
           };
         });

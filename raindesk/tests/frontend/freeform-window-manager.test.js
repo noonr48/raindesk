@@ -183,9 +183,13 @@ function v4ApiFixture({ record = [], doc } = {}) {
       } else if (op.kind === 'group.join' || op.kind === 'group.leave' || op.kind === 'group.activate' || op.kind === 'group.reorder' || op.kind === 'group.dissolve') {
         // Realistic echo: the touched group with its members (the canned
         // members:[] shape was unrealistic — the adopt path never observed
-        // membership through activate echoes).
-        const members = (op.member ? [op.member] : []).map((m) => ({ ...m }));
-        changed.groups.push({ groupId: op.groupId || (op.target && op.target.groupId) || `grp_test_${groupSeq}`, version: 2, members, active: op.member ? { ...op.member } : null });
+        // membership through activate echoes). DISSOLVE echoes the group
+        // EMPTIED (members: [], active: null) — mirroring the real server —
+        // so the adopt loop deletes the local record instead of resurrecting
+        // a fictional one.
+        const dissolved = op.kind === 'group.dissolve';
+        const members = dissolved ? [] : (op.member ? [op.member] : []).map((m) => ({ ...m }));
+        changed.groups.push({ groupId: op.groupId || (op.target && op.target.groupId) || `grp_test_${groupSeq}`, version: 2, members, active: dissolved ? null : (op.member ? { ...op.member } : null) });
       } else if (op.kind === 'window.close' && op.window) {
         changed.tombstones.push({ ...op.window });
       } else if (op.kind === 'shelf.minimise' || op.kind === 'shelf.restore') {
@@ -1575,4 +1579,37 @@ test('Stage-2 P3 true-up: the space flag rides the conversion wire — a SECOND 
   assert.equal(record2.filter((c) => c.kind === 'spatial').length, 0, 'no re-conversion on a truthed-up row');
   const again = m2.state('window_worldscene').rect;
   assert.ok(Math.abs(again.x - converted.x) <= 0.5 && Math.abs(again.width - converted.width) <= 0.5, 'no compounding drift across reloads');
+});
+
+test('Stage-2 B2: a docked world surface restores with its canonical world rect LATENT (no rail bake at boot)', async () => {
+  const api = v4ApiFixture({ doc: {
+    schemaVersion: 4, structuralRevision: 5, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_worldscene', generation: 1, incarnationId: 'inc_b2d' }, type: 'sequence_strip', space: 'world', entityRef: null, presentation: { kind: 'docked', edge: 'left' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: -350, y: -140, width: 460, height: 360, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [] }, focus: null,
+  } });
+  const root = makeNode('div');
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, getViewport: () => ({ x: 0, y: 0, zoom: 1 }), viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: { dockRect: (dock, rect) => ({ ...rect, x: 12, y: 66 }) } });
+  await manager.init();
+  const st = manager.state('window_worldscene');
+  assert.equal(st.state, 'docked', 'docked presentation restored');
+  assert.equal(st.rect.x, -350, 'the canonical WORLD rect stays latent — the screen rail is rendered, never baked (B2)');
+  assert.equal(st.rect.y, -140, 'y untouched by dockRect');
+  assert.equal(st.rect.width, 460, 'width untouched');
+});
+
+test('group-echo F1 class: dissolve is identity-exact by member (no id race, even inside the swap window)', async () => {
+  const record = [];
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root: makeNode('div'), document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const [a, b] = openThree(manager);
+  manager.groupWindows([a, b], { activeWindowId: a });
+  manager.ungroup(manager.groups()[0].groupId); // NO await: dispatched inside the create-response window
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.groups().length, 0, 'local group dissolved');
+  const dissolve = record.find((c) => c.kind === 'intent' && c.op.kind === 'group.dissolve');
+  assert.ok(dissolve, 'dissolve recorded');
+  assert.ok(dissolve.op.member && dissolve.op.member.windowId, 'dissolve carries the identity-exact MEMBER locator');
+  assert.equal(dissolve.op.groupId, undefined, 'no groupId guess on the wire');
 });

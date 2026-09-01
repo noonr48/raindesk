@@ -347,3 +347,13 @@ test('restore without a prior maximise refuses 409 NOT_MAXIMISED (never a silent
   assert.throws(() => v4.applyIntent({ actorId: 'resto', intentId: 'r2', op: { kind: 'window.setPresentation', window: made.changed.windows[0].ref, mode: 'restore' } }),
     (e) => e.status === 409 && e.code === 'NOT_MAXIMISED');
 });
+
+test('applySpatial body.space true-up: the ONE declarative-space writer (validated; fresh-mutationId by design)', () => {
+  const mk = (n) => v4.applyIntent({ actorId: 'tu_probe', intentId: `tu_${n}`, op: { kind: 'window.create', windowId: `w_tu_${n}`, incarnationId: `inc_tu_${n}0001`, type: 'note', space: 'screen', x: 10, y: 10, width: 200, height: 150 } });
+  mk(1);
+  const up = v4.applySpatial('w_tu_1', 1, { incarnationId: 'inc_tu_10001', mutationId: 'tu_m1', patch: { x: 20 }, space: 'world' });
+  assert.equal(up.window.space, 'world', 'the true-up rides the PATCH atomically');
+  assert.equal(v4.readV4().windows.find((w) => w.ref.windowId === 'w_tu_1').space, 'world', 'canonical row carries the truthed flag');
+  mk(2);
+  assert.throws(() => v4.applySpatial('w_tu_2', 1, { incarnationId: 'inc_tu_20001', patch: {}, space: 'galaxy' }), (e) => e.status === 400, 'bad space values refuse');
+});

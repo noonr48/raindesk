@@ -33,7 +33,7 @@ let phase = 'startup';
 function step(n, label) {
   phase = `step-${n}-${label}`;
   steps.push(n);
-  console.error(`[journey] step ${n}/25: ${label}`);
+  console.error(`[journey] step ${n}/26: ${label}`);
 }
 
 function freePort() {
@@ -361,8 +361,17 @@ async function main() {
     await waitFor(page, `window.raindeskFreeform.state('window_notes').state==='floating'`, 'notes re-float off the edge', 5_000);
     if (await value(page, `document.querySelectorAll('.freeform-snap-preview').length`) !== 0) throw new Error('snap preview ghost leaked after gesture settled');
 
-    // 25. Zero console errors across the whole journey.
-    step(25, 'zero console errors');
+    // 25. Desk zoom re-projects world windows through the LIVE viewport
+    // (Stage-2 B1 discriminator: the production seam is wired — a window's
+    // rendered position must track the desk viewport, proving getViewport
+    // feeds the projection on the real page, not identity).
+    step(25, 'desk zoom re-projects world windows');
+    const preZoomLeft = await value(page, `document.querySelector('.freeform-window[data-window-id="window_scenes"]').style.left`);
+    await value(page, `(()=>{const c=document.getElementById('canvas');const r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-240,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));return true;})()`);
+    await waitFor(page, `document.querySelector('.freeform-window[data-window-id="window_scenes"]').style.left !== ${JSON.stringify(preZoomLeft)}`, 'world window re-projected under desk zoom', 5_000);
+
+    // 26. Zero console errors across the whole journey.
+    step(26, 'zero console errors');
     if (page.consoleErrors.length) throw new Error(`console errors: ${page.consoleErrors.slice(0, 5).join(' | ')}`);
 
     if (SCREENSHOT) {

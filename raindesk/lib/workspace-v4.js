@@ -593,7 +593,17 @@ const OPS = {
   },
 
   'group.dissolve'(ws, op, affected) {
-    const group = ws.groups.find((g) => g.groupId === op.groupId);
+    let group = null;
+    if (op.member) {
+      // Member locator (Stage-2 F1 class): identity-exact like every other
+      // op — a client dissolving a group whose server id it may never have
+      // observed (the create-response swap window) needs no groupId guess.
+      const row = resolveLive(ws, op.member, 'member');
+      group = ws.groups.find((g) => g.members.some((m) => refEq(m, row.ref)));
+      if (!group) throw httpError(409, `CONTAINER_CHANGED ${row.ref.windowId} (member is not grouped)`, { code: 'CONTAINER_CHANGED' });
+    } else {
+      group = ws.groups.find((g) => g.groupId === op.groupId);
+    }
     if (!group) throw httpError(404, `unknown group "${op.groupId}"`);
     if (op.expectedGroupVersion !== undefined && op.expectedGroupVersion !== group.version) {
       throw httpError(409, 'GROUP_CHANGED', { code: 'GROUP_CHANGED', group: { ...group } });
