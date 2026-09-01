@@ -1629,3 +1629,29 @@ test('Stage-3 T1/T2: freeform mode owns registry surfaces — legacy trail gated
   assert.ok(/function toggleLayersSurface\(\) \{/.test(src), 'surface toggle exists');
   assert.ok(src.includes("if (t === 'layers') { if (!toggleLayersSurface()) togglePanel(); return; }"), 'layers tool routes surface-first with legacy fallback');
 });
+
+test('Stage-4 G2: tabbed members render at the GROUP frame — switching tabs never moves the frame', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  // Deliberately DIFFERENT geometry: the second member would jump the frame
+  // under the old per-member-rect model.
+  manager.open('references', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  manager.open('layers', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  const frameA = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  assert.equal(frameA.hidden, false, 'active member visible');
+  const rectA = { left: frameA.style.left, top: frameA.style.top, width: frameA.style.width, height: frameA.style.height };
+  // Switch to the differently-geometried member: the FRAME must not move.
+  manager.switchTab('window_layers');
+  await new Promise((r) => setTimeout(r, 5));
+  const frameB = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const rectB = { left: frameB.style.left, top: frameB.style.top, width: frameB.style.width, height: frameB.style.height };
+  assert.deepEqual(rectB, rectA, 'switchTab swaps CONTENT only — the frame geometry is byte-identical (G2 core)');
+  const frameAafter = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  assert.equal(frameAafter.hidden, true, 'the previous member hides');
+  // The members' own latent rects survive untouched (server-owned truth).
+  assert.equal(manager.state('window_layers').rect.x, 600, 'member latent rect intact');
+});

@@ -172,17 +172,29 @@
       const surface = surfaceFor(model);
       return Boolean(surface && surface.coordinateSpace === 'world');
     }
-    /** Screen-space rect for RENDERING a world surface: projected placement
-     * when floating/tabbed; the dock-rail presentation when docked (docking
-     * is a temporary presentation, never a coordinate authority — Round-6).
-     * Maximise is handled by the fullscreen branch (metrics-owned). */
-    function screenRectOf(model) {
+    /** Screen-space rect for RENDERING: projected placement when
+     * floating/tabbed; the dock-rail presentation when docked (docking is a
+     * temporary presentation, never a coordinate authority — Round-6).
+     * Maximise is handled by the fullscreen branch (metrics-owned). The
+     * `rect` parameter defaults to the model's own rect — callers pass the
+     * GROUP frame rect for grouped members (Stage-4 G2). */
+    function screenRectOf(model, rect) {
+      const r = rect || model.rect;
       const vp = getViewport(); const m = metrics(); const s = WProj.worldScale(vp, m) || 1;
       if (model.state === 'docked' && geo.dockRect) {
-        return geo.dockRect(model.dock, { x: model.rect.x, y: model.rect.y, width: model.rect.width * s, height: model.rect.height * s }, m);
+        return geo.dockRect(model.dock, { x: r.x, y: r.y, width: r.width * s, height: r.height * s }, m);
       }
-      const p = WProj.worldToScreen(model.rect, vp, m);
-      return { x: p.x, y: p.y, width: model.rect.width * s, height: model.rect.height * s };
+      const p = WProj.worldToScreen(r, vp, m);
+      return { x: p.x, y: p.y, width: r.width * s, height: r.height * s };
+    }
+    /** Stage-4 G2: the effective rendered rect — the GROUP frame's when the
+     * member is grouped (every member renders at the frame geometry; the
+     * member's own rect stays latent), else the member's own. Switching
+     * tabs swaps CONTENT; the frame never moves. */
+    function effectiveRect(model) {
+      const group = groupFor(model.windowId);
+      if (model.state === 'tabbed' && group && group.frame && group.frame.rect) return group.frame.rect;
+      return model.rect;
     }
 
     function clampRect(rect, surface) {
@@ -355,6 +367,7 @@
             groupId: group.groupId, version: group.version,
             windowIds: group.members.map((m) => m.windowId),
             activeWindowId: activeId,
+            frame: group.frame ? JSON.parse(JSON.stringify(group.frame)) : (existing && existing.frame ? existing.frame : null),
           });
           for (const m of group.members) { const win = windows.get(m.windowId); if (win) win.groupId = group.groupId; }
         }
@@ -465,9 +478,11 @@
         frame.style.width = `${m.width}px`; frame.style.height = `${m.height}px`;
       } else {
         frame.classList.remove('freeform-window-maximised');
-        // Stage-2 P2: world surfaces render through the projection (screen
-        // placement is DERIVED; the canonical world rect is untouched).
-        const r = isWorld(model) ? screenRectOf(model) : model.rect;
+        // Stage-2 P2 + Stage-4 G2: render through the projection (screen
+        // placement is DERIVED) — grouped members render at the GROUP frame
+        // rect, never their own latent geometry.
+        const er = effectiveRect(model);
+        const r = isWorld(model) ? screenRectOf(model, er) : er;
         frame.style.left = `${r.x}px`;
         frame.style.top = `${r.y}px`;
         frame.style.width = `${r.width}px`;
@@ -1255,7 +1270,7 @@
         if (windowIds.length < 2) continue;
         const activeId = group.active && group.active.windowId;
         const activeWindowId = windowIds.includes(activeId) ? activeId : windowIds[0];
-        groups.set(group.groupId, { groupId: group.groupId, version: group.version, windowIds, activeWindowId });
+        groups.set(group.groupId, { groupId: group.groupId, version: group.version, windowIds, activeWindowId, frame: group.frame ? group.frame : null });
       }
       if (ws && ws.focus && windows.has(ws.focus.windowId)) focusedId = ws.focus.windowId;
       for (const model of windows.values()) {
@@ -1392,7 +1407,11 @@
       if (ids.length < 2) throw new Error('grouping needs at least two open windows');
       const groupId = `group_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
       const activeWindowId = options.activeWindowId && ids.includes(options.activeWindowId) ? options.activeWindowId : ids[0];
-      groups.set(groupId, { groupId, windowIds: ids.slice(), activeWindowId });
+      // Stage-4 G2: the local frame derivation (first member's current
+      // geometry) — instant local render; the server echo replaces it.
+      const firstModel0 = ids.map((id) => windows.get(id)).filter(Boolean)[0];
+      const localFrame = firstModel0 ? { rect: { ...firstModel0.rect }, presentation: { kind: 'floating' }, zIndex: firstModel0.zIndex } : null;
+      groups.set(groupId, { groupId, windowIds: ids.slice(), activeWindowId, frame: localFrame });
       for (const id of ids) {
         const model = windows.get(id);
         model.groupId = groupId;
@@ -1416,7 +1435,7 @@
                 ? provisional.activeWindowId
                 : (created.active && created.active.windowId);
               groups.delete(groupId); // provisional local id yields to the server's canonical one
-              groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: activeStillMember });
+              groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: activeStillMember, frame: created.frame || (provisional && provisional.frame ? provisional.frame : null) });
               for (const m of created.members) { const win = windows.get(m.windowId); if (win) win.groupId = created.groupId; }
               renderAll();
             }
@@ -1516,7 +1535,7 @@
       let madeGroup = false;
       if (!group) {
         const groupId = `group_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-        group = { groupId, windowIds: [target.windowId], activeWindowId: target.windowId };
+        group = { groupId, windowIds: [target.windowId], activeWindowId: target.windowId, frame: { rect: { ...target.rect }, presentation: { kind: 'floating' }, zIndex: target.zIndex } };
         groups.set(groupId, group);
         target.groupId = groupId;
         transition(target, 'tabbed');
@@ -1536,7 +1555,7 @@
                 const activeStillMember = group.windowIds.includes(group.activeWindowId)
                   ? group.activeWindowId
                   : (created.active && created.active.windowId);
-                groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: activeStillMember });
+                groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: activeStillMember, frame: created.frame || group.frame || null });
                 for (const m of created.members) { const win = windows.get(m.windowId); if (win) win.groupId = created.groupId; }
                 renderAll();
               }
