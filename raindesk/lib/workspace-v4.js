@@ -757,6 +757,86 @@ function applySpatial(windowId, generation, body) {
   return response;
 }
 
+/* --------------------------------------------- partner action routing */
+
+/** Partner workspace executor for `window_*` targets (design: receipts and
+ * inverses store WindowRef; a revert of a closed-and-reopened window must
+ * fail with the identity codes rather than moving the new incarnation).
+ * Every verb routes through the SAME intent/spatial lanes any client uses —
+ * there is no side door. Legacy panel-namespace and world-namespace targets
+ * stay on the v3 executor (Stage 2/3 boundary). */
+function applyAction(action = {}) {
+  const type = action.type;
+  const targetId = action.targetId ? assertValidId(action.targetId, 'targetId') : null;
+  if (!targetId || !targetId.startsWith('window_')) {
+    throw httpError(400, `v4 applyAction serves window_* targets only (got "${targetId || ''}")`);
+  }
+  const payload = action.payload && typeof action.payload === 'object' && !Array.isArray(action.payload) ? action.payload : {};
+  const base = action.actionId ? `act_${String(action.actionId).slice(0, 50)}` : `act_${crypto.randomBytes(6).toString('hex')}`;
+  assertSafeKeyComponent('actionId', base);
+  let seq = 0;
+  const P = (op) => applyIntent({ actorId: 'partner', intentId: `${base}_${seq++}`, op });
+  const ws0 = read();
+  const row = ws0.windows.find((w) => w.ref.windowId === targetId) || null;
+  const onShelf = row && ws0.shelf.members.some((m) => refEq(m, row.ref));
+  const ref = action.ref || (row ? { ...row.ref } : null);
+
+  if (type === 'focus') {
+    if (!row) throw httpError(404, `unknown workspace object "${targetId}"`);
+    const prevFocus = ws0.focus ? { ...ws0.focus } : null;
+    P({ kind: 'focus.set', window: ref });
+    return { object: { id: targetId }, ref: { ...row.ref }, inverse: { type: 'focus', targetId: prevFocus ? prevFocus.windowId : targetId, ref: prevFocus, payload: {} } };
+  }
+  if (type === 'move_panel') {
+    if (!row) throw httpError(404, `unknown workspace object "${targetId}"`);
+    if (row.locked) throw httpError(409, 'workspace object is locked');
+    const pre = { x: row.spatial.x, y: row.spatial.y, width: row.spatial.width, height: row.spatial.height, rotation: row.spatial.rotation || 0, scale: row.spatial.scale || 1 };
+    const patch = {};
+    for (const key of ['x', 'y', 'width', 'height', 'rotation', 'scale']) {
+      if (payload[key] !== undefined) {
+        if (!Number.isFinite(payload[key])) throw httpError(400, `payload.${key} must be finite`);
+        patch[key] = payload[key];
+      }
+    }
+    if (!Object.keys(patch).length) throw httpError(400, 'move_panel needs at least one spatial field');
+    const res = applySpatial(targetId, ref.generation, { incarnationId: ref.incarnationId, mutationId: `${base}_${seq++}`, patch });
+    return { object: { id: targetId }, ref: { ...res.window.ref }, inverse: { type: 'move_panel', targetId, ref: { ...row.ref }, payload: pre } };
+  }
+  if (type === 'dock_panel') {
+    if (!row) throw httpError(404, `unknown workspace object "${targetId}"`);
+    if (row.space === 'world') throw httpError(400, 'world objects do not use screen-edge docking');
+    const pre = row.presentation ? { ...row.presentation } : { kind: 'floating' };
+    const edge = payload.dock == null ? null : payload.dock;
+    if (edge !== null && !DOCK_EDGES.has(edge)) throw httpError(400, 'invalid dock position');
+    P(edge ? { kind: 'window.setPresentation', window: ref, mode: 'docked', edge } : { kind: 'window.setPresentation', window: ref, mode: 'floating' });
+    return { object: { id: targetId }, ref: { ...row.ref }, inverse: { type: 'dock_panel', targetId, ref: { ...row.ref }, payload: { dock: pre.kind === 'docked' ? pre.edge : null } } };
+  }
+  if (type === 'open_panel') {
+    if (row && onShelf) {
+      P({ kind: 'shelf.restore', window: ref, mode: 'resume' });
+      return { object: { id: targetId }, ref: { ...row.ref }, inverse: { type: 'close_panel', targetId, ref: { ...row.ref }, payload: {} } };
+    }
+    if (row) {
+      if (payload.collapsed !== undefined) P({ kind: 'window.setFlags', window: ref, patch: { collapsed: Boolean(payload.collapsed) } });
+      P({ kind: 'focus.set', window: ref });
+      return { object: { id: targetId }, ref: { ...row.ref }, inverse: { type: 'close_panel', targetId, ref: { ...row.ref }, payload: {} } };
+    }
+    // Absent or tombstoned: intentional reopen with a NEW incarnation — old
+    // incarnations stay dead (the protocol's reopen semantics).
+    const incarnationId = `inc_${crypto.randomBytes(8).toString('hex')}`;
+    const rowType = payload.type && WINDOW_TYPES.has(payload.type) ? payload.type : 'generic_panel';
+    const created = P({ kind: 'window.create', windowId: targetId, incarnationId, type: rowType, x: payload.x, y: payload.y, width: payload.width, height: payload.height });
+    const newRef = created.changed.windows[0].ref;
+    return { object: { id: targetId }, ref: { ...newRef }, inverse: { type: 'close_panel', targetId, ref: { ...newRef }, payload: {} } };
+  }
+  if (type === 'close_panel') {
+    if (!row) throw httpError(404, `unknown workspace object "${targetId}"`);
+    if (!onShelf) P({ kind: 'shelf.minimise', window: ref });
+    return { object: { id: targetId }, ref: { ...row.ref }, inverse: { type: 'open_panel', targetId, ref: { ...row.ref }, payload: {} } };
+  }
+  throw httpError(400, `workspace cannot execute action "${type}"`);
+}
+
 /* ------------------------------------------------- legacy writer guarding */
 
 /** Tombstone guard for the CURRENT v3 routes: once an id has a v4 tombstone
@@ -812,6 +892,7 @@ module.exports = {
   applyIntent,
   getReceipt,
   applySpatial,
+  applyAction,
   assertLegacyWriteAllowed,
   deriveLegacyState,
 };

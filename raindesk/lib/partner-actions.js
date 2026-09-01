@@ -13,6 +13,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { HttpError } = require('./errors');
 const workspace = require('./workspace');
+const workspaceV4 = require('./workspace-v4');
 
 const DATA_DIR = process.env.RAINDESK_DATA_DIR
   ? path.resolve(process.env.RAINDESK_DATA_DIR)
@@ -105,14 +106,20 @@ function approve(id) {
     a.status = 'approved'; return a;
   });
 }
-function execute(id, { workspaceImpl = workspace } = {}) {
+function execute(id, { workspaceImpl = workspace, v4Impl = workspaceV4 } = {}) {
   return mutate(id, (a) => {
     if (a.status !== 'approved') throw new HttpError(409, `action cannot execute from ${a.status}`);
     if (!a.executable) throw new HttpError(400, 'this action has no bounded executor yet');
     a.status = 'executing';
     try {
-      const result = workspaceImpl.applyAction({ type: a.type, targetId: a.targetId, payload: a.payload });
-      a.receipt = { kind: 'workspace', objectId: result.object && result.object.id || null, completedAt: now() };
+      // v4 routing (STAGE-1 design): `window_*` targets execute through the
+      // identity protocol — receipts and inverses carry WindowRef; legacy
+      // panel_*/world_* targets keep the v3 executor (Stage 2/3 boundary).
+      const viaV4 = a.targetId && String(a.targetId).startsWith('window_') && v4Impl;
+      const result = viaV4
+        ? v4Impl.applyAction({ type: a.type, targetId: a.targetId, payload: a.payload, actionId: a.id })
+        : workspaceImpl.applyAction({ type: a.type, targetId: a.targetId, payload: a.payload });
+      a.receipt = { kind: viaV4 ? 'workspace-v4' : 'workspace', objectId: result.object && result.object.id || null, ref: result.ref || null, completedAt: now() };
       a.inverse = result.inverse || null;
       a.status = 'completed';
       return a;
@@ -127,11 +134,14 @@ function accept(id) {
     a.status = 'accepted'; return a;
   });
 }
-function revert(id, { workspaceImpl = workspace } = {}) {
+function revert(id, { workspaceImpl = workspace, v4Impl = workspaceV4 } = {}) {
   return mutate(id, (a) => {
     if (!['completed', 'accepted'].includes(a.status)) throw new HttpError(409, `action cannot be reverted from ${a.status}`);
     if (!a.inverse) throw new HttpError(409, 'action has no inverse receipt');
-    try { workspaceImpl.applyAction(a.inverse); }
+    // Ref-bearing inverses (v4) revert through the identity protocol: a stale
+    // ref fails with the identity codes instead of moving a new incarnation.
+    const impl = a.inverse && a.inverse.ref !== undefined ? v4Impl : workspaceImpl;
+    try { impl.applyAction(a.inverse); }
     catch (e) { throw new HttpError(409, `revert failed: ${e && e.message ? e.message : e}`); }
     a.status = 'reverted'; return a;
   });
