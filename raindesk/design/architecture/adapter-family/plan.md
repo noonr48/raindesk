@@ -1,0 +1,9 @@
+# Adapter-Family — PLAN
+
+- **A1** seedFromV3 hardening (workspace-v4.js): .pre-v4.bak backup of the v3 file at first migration; edge validation (DOCK_EDGES) for docked + shelf-retained docks; maximised conversion ({kind:'maximised'} with floating fallback = the v3 rect); duplicate-membership dedupe (stored group order wins; a migrationRepair receipt lists removed duplicates). Gates: lib/tests migration unit tests (seed a hostile v3 fixture: duplicate membership, invalid edges, maximised row, missing ids; assert the converted doc + backup file + receipt).
+- **A2** object adapter (server-core.js + workspace-v4.js): route rules — tombstoned → typed refusal (done); window_* missing → 410 WINDOW_NAMESPACE_RESERVED; legacy missing → synthetic v4 window.create (gen 1, minted incarnation) + v3 upsert in one request; live updates → v3 upsert + v4 spatial/presentation intent when the row exists in v4. legacyRevision maintained. Gates: route tests for each rule incl. the never-resurrect invariant.
+- **A3** structural adapters: groups/shelf/window-delete translate their diff to v4 intents (group.create/dissolve/regroup; shelf.minimise/restore; window.close) inside one transaction per request, gated on legacyRevision (409 with current doc on mismatch), returning the v3 projection + {deprecated:true, use:'/api/workspace/v4/*'}. Gates: route tests (happy path + revision conflict + tombstone-safety).
+- **A4** Partner receipts: verify + (if needed) enforce WindowRef in receipts/inverses and INCARNATION_REPLACED on revert-after-reopen. Gates: partner-actions test (close → reopen → revert → must fail typed, new incarnation untouched).
+- **A5** closeout: grep no freeform callers on legacy routes; full gates (suite/journey/matrix/smoke); dual-lens review.
+
+Rollback: revert cluster commits; the .pre-v4.bak backup is never deleted by code.
