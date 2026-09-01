@@ -55,6 +55,7 @@ const shotDocuments = require('./lib/shot-documents');
 const sheetDocuments = require('./lib/sheet-documents');
 const workspace = require('./lib/workspace');
 const workspaceV4 = require('./lib/workspace-v4');
+const WINDOW_TYPES_COMPAT = workspaceV4.WINDOW_TYPES; // Adapter-family A2: legacy synthetic creates map to v4-valid types (SSOT)
 const partnerActions = require('./lib/partner-actions');
 const jobStore = require('./lib/job-store');
 const takes = require('./lib/takes');
@@ -452,11 +453,66 @@ async function handleApi(req, res, url, deps) {
         if (error instanceof HttpError && error.code) return v4Envelope(res, error);
         throw error;
       }
+      // Adapter-family A2 (Round-6 §6): the object route is a compatibility
+      // ADAPTER over the canonical v4 store — never a co-owner. Three rules:
+      const v4doc = workspaceV4.read();
+      const liveRow = v4doc.windows.find((w) => w.ref.windowId === legacyId);
+      if (!liveRow && legacyId.startsWith('window_')) {
+        // (1) the window_* namespace belongs to window.create — a missing id
+        // is a reserved-namespace conflict, not an implicit create.
+        return v4Envelope(res, Object.assign(
+          new HttpError(410, `window ids are created through /api/workspace/v4/intents (got "${legacyId}")`),
+          { code: 'WINDOW_NAMESPACE_RESERVED' },
+        ));
+      }
+      if (!liveRow) {
+        // (2) missing LEGACY ids (world_*/panel_*/...) with no identity
+        // history create generation 1 through a synthetic v4 intent — the
+        // row lands in BOTH stores in one request; v4 first (identity
+        // leads, the v3 upsert follows in this same request).
+        try {
+          const type = body && WINDOW_TYPES_COMPAT.has(body.type) ? body.type : 'generic_panel';
+          workspaceV4.applyIntent({
+            actorId: 'legacy_adapter',
+            intentId: `syn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+            op: {
+              kind: 'window.create',
+              windowId: legacyId,
+              incarnationId: `inc_${Math.random().toString(36).slice(2, 14)}`,
+              type,
+              x: body && body.x, y: body && body.y,
+              width: body && body.width, height: body && body.height,
+            },
+          });
+        } catch (error) {
+          if (error instanceof HttpError && error.code) return v4Envelope(res, error);
+          throw error;
+        }
+      } else if (body && [body.x, body.y, body.width, body.height, body.zIndex].some(Number.isFinite)) {
+        // (3) live legacy row updates land in v4 SPATIALLY too (the stores
+        // must not diverge; a patch v4 refuses surfaces typed — never a
+        // silent mirror gap).
+        try {
+          workspaceV4.applySpatial(legacyId, liveRow.ref.generation, {
+            incarnationId: liveRow.ref.incarnationId, // compaction guard keys on the incarnation (the client always sends it)
+            patch: {
+              ...(Number.isFinite(body.x) ? { x: Math.round(body.x) } : {}),
+              ...(Number.isFinite(body.y) ? { y: Math.round(body.y) } : {}),
+              ...(Number.isFinite(body.width) ? { width: Math.round(body.width) } : {}),
+              ...(Number.isFinite(body.height) ? { height: Math.round(body.height) } : {}),
+              ...(Number.isFinite(body.zIndex) ? { zIndex: Math.round(body.zIndex) } : {}),
+            },
+          });
+        } catch (error) {
+          if (error instanceof HttpError && error.code) return v4Envelope(res, error);
+          throw error;
+        }
+      }
     }
     // Revision rides along so freeform clients keep lastRevision in sync with
     // ungated upserts (each upsert bumps it; without adoption every later
     // gated structural write 409s).
-    return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body), revision: workspace.read().revision });
+    return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body), revision: workspace.read().revision, legacyRevision: workspaceV4.read().legacyRevision });
   }
   if (method === 'POST' && route === '/api/workspace/viewport') {
     const body = await readJson(req, 64 * 1024);

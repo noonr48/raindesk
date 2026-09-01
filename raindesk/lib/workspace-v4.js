@@ -1034,6 +1034,7 @@ function deriveLegacyState(row, ctx) {
 
 module.exports = {
   V4_PATH,
+  WINDOW_TYPES,
   read,
   readV4,
   applyIntent,

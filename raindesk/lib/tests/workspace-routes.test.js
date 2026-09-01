@@ -33,9 +33,11 @@ const post = (base, route, payload) => fetch(`${base}${route}`, { method: 'POST'
 const getWorkspace = async (base) => (await (await fetch(`${base}/api/workspace`)).json());
 
 test('workspace group/shelf/delete routes round-trip with revision gating', async (t) => {
+  // Adapter-family A2: window_* ids are RESERVED (410 via the object route) — this
+  // round-trip seeds through the LEGACY namespace, the adapter's blessed path.
   await withServer(t, async (base) => {
     // Seed two windows through the existing object route.
-    for (const [windowId, ref] of [['window_alpha', 'note:alpha'], ['window_beta', 'note:beta']]) {
+    for (const [windowId, ref] of [['world_alpha', 'note:alpha'], ['world_beta', 'note:beta']]) {
       const res = await post(base, '/api/workspace/object', { windowId, type: 'note', entityRef: ref, x: 0, y: 0, width: 220, height: 160 });
       assert.equal(res.status, 200, `seed ${windowId}`);
     }
@@ -45,21 +47,21 @@ test('workspace group/shelf/delete routes round-trip with revision gating', asyn
 
     // Group them with the fresh revision.
     let res = await post(base, '/api/workspace/groups', {
-      groups: [{ groupId: 'group_ab', windowIds: ['window_alpha', 'window_beta'], activeWindowId: 'window_beta' }],
+      groups: [{ groupId: 'group_ab', windowIds: ['world_alpha', 'world_beta'], activeWindowId: 'world_beta' }],
       baseRevision: ws.revision,
     });
     assert.equal(res.status, 200);
     ws = (await res.json()).workspace;
-    assert.equal(ws.windows.find((w) => w.windowId === 'window_alpha').groupId, 'group_ab');
-    assert.equal(ws.groups[0].activeWindowId, 'window_beta');
+    assert.equal(ws.windows.find((w) => w.windowId === 'world_alpha').groupId, 'group_ab');
+    assert.equal(ws.groups[0].activeWindowId, 'world_beta');
 
     // Shelf one member with the fresh revision.
     const fresh = (await getWorkspace(base)).revision;
-    res = await post(base, '/api/workspace/shelf', { windowIds: ['window_beta'], baseRevision: fresh });
+    res = await post(base, '/api/workspace/shelf', { windowIds: ['world_beta'], baseRevision: fresh });
     assert.equal(res.status, 200);
     ws = (await res.json()).workspace;
-    assert.deepEqual(ws.shelf.windowIds, ['window_beta']);
-    assert.equal(ws.windows.find((w) => w.windowId === 'window_beta').state, 'minimised', 'shelving minimises the member');
+    assert.deepEqual(ws.shelf.windowIds, ['world_beta']);
+    assert.equal(ws.windows.find((w) => w.windowId === 'world_beta').state, 'minimised', 'shelving minimises the member');
 
     // Stale baseRevision -> 409 with the current workspace attached.
     res = await post(base, '/api/workspace/groups', { groups: [], baseRevision: fresh });
@@ -71,15 +73,15 @@ test('workspace group/shelf/delete routes round-trip with revision gating', asyn
     // Delete cascade: removing a member keeps the group with the survivor;
     // the mission guarantees closing one tab never destroys the others.
     const now = (await getWorkspace(base)).revision;
-    res = await post(base, '/api/workspace/window/delete', { windowId: 'window_beta', baseRevision: now });
+    res = await post(base, '/api/workspace/window/delete', { windowId: 'world_beta', baseRevision: now });
     assert.equal(res.status, 200);
     ws = (await res.json()).workspace;
     assert.equal(ws.windows.length, 1);
-    assert.deepEqual(ws.groups[0].windowIds, ['window_alpha'], 'group survives the loss of one member');
+    assert.deepEqual(ws.groups[0].windowIds, ['world_alpha'], 'group survives the loss of one member');
     assert.deepEqual(ws.shelf.windowIds, [], 'shelf membership cleaned on delete');
     // Deleting the LAST member dissolves the group.
     const last = (await getWorkspace(base)).revision;
-    res = await post(base, '/api/workspace/window/delete', { windowId: 'window_alpha', baseRevision: last });
+    res = await post(base, '/api/workspace/window/delete', { windowId: 'world_alpha', baseRevision: last });
     ws = (await res.json()).workspace;
     assert.equal(ws.groups.length, 0, 'group dissolves when the last member leaves');
   });
