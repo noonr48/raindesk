@@ -1470,3 +1470,28 @@ test('Stage-2 P2: world surfaces keep canonical WORLD rects — pan/zoom re-proj
   assert.ok(spatial, 'world geometry persists through the v4 spatial lane');
   assert.ok(Math.abs(spatial.patch.x - (base.x + 65.6)) <= 0.5, 'persisted spatial carries WORLD units (persist rounds to integer)');
 });
+
+test('Stage-2 P3: legacy screen-unit rows convert to world at restore (client-informed backfill) and re-persist', async () => {
+  const vp = { x: 0, y: 0, zoom: 1 };
+  const record = [];
+  const root = makeNode('div');
+  // A world-classified surface's row persisted by the PRE-world client:
+  // screen-space rect + space:'screen'.
+  const api = v4ApiFixture({ record, doc: {
+    schemaVersion: 4, structuralRevision: 3, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_worldscene', generation: 1, incarnationId: 'inc_ws1' }, type: 'sequence_strip', space: 'screen', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 640, y: 400, width: 328, height: 288, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [] }, focus: null,
+  } });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, getViewport: () => vp, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  const st = manager.state('window_worldscene');
+  // scale = min(1280/1024, 800/1024) = 0.78125; screen centre (640,400) maps to world (0,0).
+  assert.ok(Math.abs(st.rect.x) <= 0.5 && Math.abs(st.rect.y) <= 0.5, 'screen centre maps to the world origin');
+  assert.ok(Math.abs(st.rect.width - 328 / 0.78125) <= 0.5, 'size converts to world units');
+  await new Promise((r) => setTimeout(r, 5));
+  const spatial = record.filter((c) => c.kind === 'spatial').pop();
+  assert.ok(spatial, 'the corrected world geometry re-persists durably');
+  assert.ok(Math.abs(spatial.patch.x) <= 1, 'persisted patch carries world values');
+});

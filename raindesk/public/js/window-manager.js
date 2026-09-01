@@ -904,6 +904,7 @@
         writeChain = writeChain.then(() => v4.intent({
           kind: 'window.create', windowId, incarnationId: model.ref.incarnationId,
           type: model.entityType, entityRef: model.entityRef || undefined,
+          space: surface.coordinateSpace || undefined,
           x: Math.round(model.rect.x), y: Math.round(model.rect.y),
           width: Math.round(model.rect.width), height: Math.round(model.rect.height),
         }).then((response) => {
@@ -1139,6 +1140,20 @@
           restoreRect: null, onRename: null, frame: null, body: null, head: null, titleEl: null, tabsSlot: null,
         };
         if (onShelf) continue; // restored below as shelf-backed models
+        // Stage-2 P3: legacy rows persisted by the pre-world client carry
+        // SCREEN-unit geometry flagged space:'screen' — convert through the
+        // LIVE viewport+metrics (exact; the server lacks stage metrics —
+        // LEDGER L-4) and re-persist the canonical world rect.
+        if (v4 && win.space !== 'world') {
+          const legacySurface = CreativeSurfaces.get(surfaceId);
+          if (legacySurface && legacySurface.coordinateSpace === 'world') {
+            const vp = getViewport(); const m = metrics();
+            const s = WProj.worldScale(vp, m) || 1;
+            const world = WProj.screenToWorld(model.rect, vp, m);
+            model.rect = clampRect({ ...model.rect, x: world.x, y: world.y, width: model.rect.width / s, height: model.rect.height / s }, legacySurface);
+            persist(model);
+          }
+        }
         if (model.state === 'maximised') model.restoreRect = { ...model.rect };
         // Docked windows stay docked durably: the stored edge re-derives
         // geometry against current metrics. Per-SURFACE dock policy is a
@@ -1188,6 +1203,18 @@
           collapsed: true, pinned: Boolean(win.pinned), locked: Boolean(win.locked),
           restoreRect: null, onRename: null, frame: null, body: null, head: null, titleEl: null, tabsSlot: null,
         };
+        // Stage-2 P3: legacy shelf-backed rows convert too (same live-viewport
+        // math as the floating path).
+        if (v4 && win.space !== 'world') {
+          const legacySurface = CreativeSurfaces.get(surfaceId);
+          if (legacySurface && legacySurface.coordinateSpace === 'world') {
+            const vp = getViewport(); const m = metrics();
+            const s = WProj.worldScale(vp, m) || 1;
+            const world = WProj.screenToWorld(model.rect, vp, m);
+            model.rect = clampRect({ ...model.rect, x: world.x, y: world.y, width: model.rect.width / s, height: model.rect.height / s }, legacySurface);
+            persist(model);
+          }
+        }
         windows.set(model.windowId, model);
         zTop = Math.max(zTop, model.zIndex);
         renderFrame(model);

@@ -37,3 +37,13 @@ Would change my mind: the merged red-test surface proves unmanageable mid-flight
 
 STATE: S0 67f8708, S1 2042009, S2 7f50952 pushed; cutover (merged S3-S5) in flight.
 NEXT ENTRY POINT: read OPS payloads (group.*, setFlags, close), rewrite WindowManager write/read paths, rebase frontend tests to v4 adapters, switch journey server asserts to GET /api/workspace/v4, suite+journey, commit as the cutover.
+
+### L-4 — P3 backfill: server-side migration vs client-informed conversion?
+Phase: Stage-2 P3 (post-P2 skeleton)
+Options:
+  A Server-side one-time v4 migration using the persisted viewport — works if the transform is fully known server-side / dead if it is not: worldToScreen needs baseScale(metrics)*zoom and the screen centre — the server owns NEITHER the stage metrics nor the render-time viewport semantics; an assumption-based conversion drifts every legacy rect.
+  B Client-informed conversion at restore — the restoring client owns live metrics + getViewport, so screenToWorld is EXACT per conversion; corrected world geometry re-persists immediately (durable spatial PATCH); new creates flag their coordinateSpace at birth — dead if the stale declarative space flag on legacy rows gates any server behavior.
+Chosen: B — deciding criterion: conversion exactness (the server cannot know the stage size).
+Rejected: A loses precision on the very first legacy row for any non-default stage.
+Resources: checked server-side space consumers (grep: readV4 exposure only — no validation branches on it); stale flags on legacy rows recorded as an honest residual until those windows are recreated.
+Would change my mind: any future server-side behavior that branches on row.space — then a server reclassify op or store migration becomes required.
