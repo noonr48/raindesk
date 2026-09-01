@@ -178,11 +178,12 @@
      * Maximise is handled by the fullscreen branch (metrics-owned). The
      * `rect` parameter defaults to the model's own rect — callers pass the
      * GROUP frame rect for grouped members (Stage-4 G2). */
-    function screenRectOf(model, rect) {
+    function screenRectOf(model, rect, dockEdge) {
       const r = rect || model.rect;
       const vp = getViewport(); const m = metrics(); const s = WProj.worldScale(vp, m) || 1;
-      if (model.state === 'docked' && geo.dockRect) {
-        return geo.dockRect(model.dock, { x: r.x, y: r.y, width: r.width * s, height: r.height * s }, m);
+      const edge = dockEdge !== undefined ? dockEdge : (model.state === 'docked' ? model.dock : null);
+      if (edge && geo.dockRect) {
+        return geo.dockRect(edge, { x: r.x, y: r.y, width: r.width * s, height: r.height * s }, m);
       }
       const p = WProj.worldToScreen(r, vp, m);
       return { x: p.x, y: p.y, width: r.width * s, height: r.height * s };
@@ -195,6 +196,32 @@
       const group = groupFor(model.windowId);
       if (model.state === 'tabbed' && group && group.frame && group.frame.rect) return group.frame.rect;
       return model.rect;
+    }
+    /** Stage-4 G3: the frame object when this member is grouped (else null). */
+    function groupedFrame(model) {
+      const group = groupFor(model.windowId);
+      return model.state === 'tabbed' && group && group.frame ? group.frame : null;
+    }
+    /** Stage-4 G3: grouped geometry/lifecycle commits ride group.setFrame —
+     * the member's own spatial stays latent (the G3 contract). */
+    function persistFrame(model) {
+      const group = groupFor(model.windowId);
+      const frame = groupedFrame(model);
+      if (!v4 || !frame || !group) return Promise.resolve(null);
+      const patch = {
+        rect: { x: Math.round(frame.rect.x), y: Math.round(frame.rect.y), width: Math.round(frame.rect.width), height: Math.round(frame.rect.height) },
+        zIndex: frame.zIndex,
+      };
+      frame.rect.x = patch.rect.x; frame.rect.y = patch.rect.y;
+      frame.rect.width = patch.rect.width; frame.rect.height = patch.rect.height;
+      renderFrame(model);
+      return queueIntent(() => ({ kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: group.version, patch }));
+    }
+    /** Stage-4 G3: gesture-origin restore targets the frame when grouped. */
+    function restoreGestureOrigin(model, ox, oy) {
+      const gf = groupedFrame(model);
+      if (gf) { gf.rect.x = ox; gf.rect.y = oy; }
+      else { model.rect.x = ox; model.rect.y = oy; }
     }
 
     function clampRect(rect, surface) {
@@ -471,6 +498,8 @@
       const isHiddenMember = model.state === 'tabbed' && group && group.activeWindowId !== model.windowId;
       if (model.state === 'minimised' || isHiddenMember) { frame.hidden = true; return; }
       frame.hidden = false;
+      const gfRender = model.state === 'tabbed' ? groupedFrame(model) : null;
+      const frameMaximised = Boolean(gfRender && gfRender.presentation && gfRender.presentation.kind === 'maximised');
       if (model.state === 'maximised' && model.restoreRect) {
         const m = metrics();
         frame.classList.add('freeform-window-maximised');
@@ -478,11 +507,12 @@
         frame.style.width = `${m.width}px`; frame.style.height = `${m.height}px`;
       } else {
         frame.classList.remove('freeform-window-maximised');
-        // Stage-2 P2 + Stage-4 G2: render through the projection (screen
+        // Stage-2 P2 + Stage-4 G2/G3: render through the projection (screen
         // placement is DERIVED) — grouped members render at the GROUP frame
-        // rect, never their own latent geometry.
+        // rect/presentation, never their own latent geometry.
         const er = effectiveRect(model);
-        const r = isWorld(model) ? screenRectOf(model, er) : er;
+        const fe = gfRender && gfRender.presentation && gfRender.presentation.kind === 'docked' ? gfRender.presentation.edge : undefined;
+        const r = isWorld(model) ? screenRectOf(model, er, fe) : (fe !== undefined ? screenRectOf(model, er, fe) : er);
         frame.style.left = `${r.x}px`;
         frame.style.top = `${r.y}px`;
         frame.style.width = `${r.width}px`;
@@ -649,7 +679,7 @@
         e.preventDefault();
         const surface = surfaceFor(current);
         const canDock = Boolean(surface && surface.supportedStates.includes('docked'));
-        const start = { x: e.clientX, y: e.clientY, ox: current.rect.x, oy: current.rect.y, pointerId: e.pointerId };
+        const start = { x: e.clientX, y: e.clientY, ox: effectiveRect(current).x, oy: effectiveRect(current).y, pointerId: e.pointerId };
         // Deferred capture (>3px) so dblclick-to-rename survives; threshold
         // listeners live at DOCUMENT capture level because a steep drag can
         // leave the head rect on its first interpolated step (proven v1).
@@ -661,7 +691,7 @@
           // Escape cancels a pending drop: pre-gesture geometry, overlays
           // gone, listeners detached — the gesture never commits.
           if (session) session.end();
-          current.rect.x = start.ox; current.rect.y = start.oy;
+          restoreGestureOrigin(current, start.ox, start.oy);
           renderFrame(current);
           try { if (captured) head.releasePointerCapture(start.pointerId); } catch (_e) {}
           clearSnapPreview();
@@ -679,7 +709,7 @@
           clearSnapPreview();
           clearSnapZones();
           if (!captured) return;
-          current.rect.x = start.ox; current.rect.y = start.oy;
+          restoreGestureOrigin(current, start.ox, start.oy);
           renderFrame(current);
         };
         const teardown = () => {
@@ -701,7 +731,7 @@
             clearSnapPreview();
             clearSnapZones();
             try { if (captured) head.releasePointerCapture(start.pointerId); } catch (_e) {}
-            if (captured) { current.rect.x = start.ox; current.rect.y = start.oy; renderFrame(current); }
+            if (captured) { restoreGestureOrigin(current, start.ox, start.oy); renderFrame(current); }
             return;
           }
           if (!captured) {
@@ -710,14 +740,17 @@
             try { head.setPointerCapture(ev.pointerId); } catch (_e) {}
             bringToFront(current.windowId);
           }
+          const gfMove = groupedFrame(current);
           if (isWorld(current)) {
             // Pointer deltas unproject at the live worldScale (P2).
             const s = WProj.worldScale(getViewport(), metrics()) || 1;
-            current.rect.x = start.ox + (ev.clientX - start.x) / s;
-            current.rect.y = start.oy + (ev.clientY - start.y) / s;
+            const nx = start.ox + (ev.clientX - start.x) / s;
+            const ny = start.oy + (ev.clientY - start.y) / s;
+            if (gfMove) { gfMove.rect.x = nx; gfMove.rect.y = ny; } else { current.rect.x = nx; current.rect.y = ny; }
           } else {
-            current.rect.x = start.ox + (ev.clientX - start.x);
-            current.rect.y = start.oy + (ev.clientY - start.y);
+            const nx = start.ox + (ev.clientX - start.x);
+            const ny = start.oy + (ev.clientY - start.y);
+            if (gfMove) { gfMove.rect.x = nx; gfMove.rect.y = ny; } else { current.rect.x = nx; current.rect.y = ny; }
           }
           renderFrame(current);
           // Phase 5: preview the dock the drag would settle into.
@@ -750,7 +783,8 @@
             if (v4 && current.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...current.ref }, mode: 'floating', floatingAt: { x: Math.round(current.rect.x), y: Math.round(current.rect.y) } }));
           }
           renderFrame(current);
-          await persist(current);
+          if (groupedFrame(current)) await persistFrame(current);
+          else await persist(current);
         };
         document.addEventListener('pointermove', move, true);
         document.addEventListener('pointerup', up, true);
@@ -773,7 +807,7 @@
           const dir = grip.dataset.resizeDir || 'se';
           const surface = surfaceFor(current);
           const min = surface ? surface.minimumSize : { width: 200, height: 140 };
-          const start = { x: e.clientX, y: e.clientY, rect: { ...current.rect }, state: current.state, dock: current.dock, collapsed: current.collapsed, pointerId: e.pointerId };
+          const start = { x: e.clientX, y: e.clientY, rect: { ...effectiveRect(current) }, state: current.state, dock: current.dock, collapsed: current.collapsed, pointerId: e.pointerId };
           // One gesture per window (kernel lock): a second contact on this
           // window must never steer or commit another contact's resize.
           // The lock is acquired BEFORE pointer capture so a refused second
@@ -805,7 +839,10 @@
             if (dir.includes('w')) left = Math.min(left + dx, right - min.width);
             if (dir.includes('s')) bottom = Math.max(bottom + dy, top + min.height);
             if (dir.includes('n')) top = Math.min(top + dy, bottom - min.height);
-            current.rect = { x: left, y: top, width: right - left, height: bottom - top };
+            const nextRect = { x: left, y: top, width: right - left, height: bottom - top };
+            const gfR = groupedFrame(current);
+            if (gfR) gfR.rect = nextRect;
+            else current.rect = nextRect;
             renderFrame(current);
           };
           const detach = () => {
@@ -874,6 +911,20 @@
     }
     function applySnap(model, snapped) {
       if (snapped.kind === 'dock') {
+        const gfSnap = groupedFrame(model);
+        if (gfSnap) {
+          // Stage-4 G3: a grouped member docks the GROUP frame — the
+          // presentation rides group.setFrame; the member stays tabbed, its
+          // own spatial latent.
+          gfSnap.presentation = { kind: 'docked', edge: snapped.dock };
+          if (!isWorld(model)) gfSnap.rect = { ...snapped.rect };
+          renderFrame(model);
+          if (v4 && model.ref) queueIntent(() => {
+            const g = groupFor(model.windowId);
+            return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'docked', edge: snapped.dock } } };
+          });
+          return;
+        }
         // Stage-2 P2: a docked WORLD surface keeps its canonical world rect
         // LATENT (docking is a temporary presentation, never a coordinate
         // authority — Round-6); screen surfaces keep the baked rail rect.
@@ -1081,6 +1132,17 @@
     function maximise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
       if (model.state === 'maximised') return model;
+      const gfMax = groupedFrame(model);
+      if (gfMax) {
+        // Stage-4 G3: the FRAME owns the presentation — the member stays tabbed.
+        gfMax.presentation = { kind: 'maximised' };
+        renderAll();
+        if (v4 && model.ref) queueIntent(() => {
+          const g = groupFor(model.windowId);
+          return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'maximised' } } };
+        });
+        return model;
+      }
       transition(model, 'maximised');
       renderFrame(model);
       if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'maximised' }));
@@ -1088,7 +1150,18 @@
     }
     function unmaximise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
-      if (model.state !== 'maximised') return model;
+      if (model.state !== 'maximised') {
+        // Stage-4 G3: the FRAME owns the presentation for grouped members.
+        const gfUn = groupedFrame(model);
+        if (!gfUn || !gfUn.presentation || gfUn.presentation.kind !== 'maximised') return model;
+        gfUn.presentation = { kind: 'floating' };
+        renderAll();
+        if (v4 && model.ref) queueIntent(() => {
+          const g = groupFor(model.windowId);
+          return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'floating' } } };
+        });
+        return model;
+      }
       transition(model, 'floating');
       renderFrame(model);
       // v4 restore re-applies the typed beforeMaximise presentation (the

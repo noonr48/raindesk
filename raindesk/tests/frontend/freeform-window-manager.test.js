@@ -1655,3 +1655,38 @@ test('Stage-4 G2: tabbed members render at the GROUP frame — switching tabs ne
   // The members' own latent rects survive untouched (server-owned truth).
   assert.equal(manager.state('window_layers').rect.x, 600, 'member latent rect intact');
 });
+
+test('Stage-4 G3: grouped geometry/lifecycle commits ride group.setFrame — member spatial stays latent', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  manager.open('layers', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  // DRAG the active grouped member: the FRAME moves; the member's rect does not.
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 200, clientY: 150 });
+  fakeDocument.dispatch('pointermove', { clientX: 300, clientY: 150, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 300, clientY: 150 });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.groups()[0].frame.rect.x, 200, 'the GROUP frame moved by the drag');
+  assert.equal(manager.state('window_references').rect.x, 100, 'member latent rect untouched by grouped drag');
+  const setF = record.find((c) => c.kind === 'intent' && c.op.kind === 'group.setFrame');
+  assert.ok(setF, 'group.setFrame recorded');
+  assert.equal(setF.op.member.windowId, 'window_references', 'identity-exact member locator');
+  assert.equal(record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_references').length, 0, 'no member spatial PATCH for grouped geometry');
+  // MAXIMISE the grouped member: the FRAME presentation maximises; the member stays tabbed.
+  manager.maximise('window_references');
+  assert.equal(manager.state('window_references').state, 'tabbed', 'member stays tabbed — the FRAME owns the presentation');
+  assert.equal(manager.groups()[0].frame.presentation.kind, 'maximised');
+  await new Promise((r) => setTimeout(r, 5)); // flush the maximise intent (async chain) before reading the record
+  const maxOp = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.setFrame').pop();
+  assert.equal(maxOp.op.patch.presentation.kind, 'maximised', 'frame maximise rode group.setFrame');
+  // UNMAXIMISE returns the frame to floating; the member is still tabbed.
+  manager.unmaximise('window_references');
+  assert.equal(manager.groups()[0].frame.presentation.kind, 'floating');
+  assert.equal(manager.state('window_references').state, 'tabbed');
+});
