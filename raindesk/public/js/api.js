@@ -26,13 +26,14 @@
   const GEN_MAX_ATTEMPTS = 6;     // consecutive transport failures tolerated
 
   class ApiError extends Error {
-    constructor(message, { status = 0, cause = null, friendly = '', workspace = null } = {}) {
+    constructor(message, { status = 0, cause = null, friendly = '', workspace = null, detail = null } = {}) {
       super(message);
       this.name = 'ApiError';
       this.status = status;
       this.cause = cause;
       this.friendly = friendly || friendlyFor(status, message);
       this.workspace = workspace || null;
+      this.detail = detail || null;
     }
   }
 
@@ -61,7 +62,7 @@
       const msg = body && body.error ? body.error : `HTTP ${res.status}`;
       // Structural 409s carry the current workspace for adopt-and-retry;
       // keep it on the error or the client's self-heal never sees it.
-      throw new ApiError(msg, { status: res.status, workspace: (body && body.workspace) || null });
+      throw new ApiError(msg, { status: res.status, workspace: (body && body.workspace) || null, detail: body || null });
     }
     return body;
   }
@@ -298,6 +299,26 @@
     return POST('/api/workspace/window/delete', { windowId, baseRevision: baseRevision || undefined });
   }
 
+  /* ------------------------------------------- workspace v4 (cutover S1) */
+
+  function getWorkspaceV4() { return GET('/api/workspace/v4'); }
+  function applyWorkspaceIntent({ actorId, intentId, op, knownStructuralRevision } = {}) {
+    return POST('/api/workspace/v4/intents', {
+      actorId, intentId, op,
+      ...(knownStructuralRevision !== undefined ? { knownStructuralRevision } : {}),
+    });
+  }
+  function getWorkspaceIntentReceipt(actorId, intentId) {
+    return GET(`/api/workspace/v4/intents/${encodeURIComponent(actorId)}/${encodeURIComponent(intentId)}`);
+  }
+  function patchWorkspaceSpatial(windowId, generation, body) {
+    return jsonFetch(`/api/workspace/v4/windows/${encodeURIComponent(windowId)}/${encodeURIComponent(generation)}/spatial`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body == null ? {} : body),
+    });
+  }
+
   /* ---------------------------------------------------- creative sheets */
 
   function listSheets() { return GET('/api/sheets'); }
@@ -388,6 +409,7 @@
     uploadBlob, blobUrl, getShotDocument, saveShotDocument, getShotRevisions, getShotRevision, restoreShotRevision,
     getWorkspace, upsertWorkspaceObject, setWorkspaceViewport,
     setWorkspaceGroups, setWorkspaceShelf, deleteWorkspaceWindow,
+    getWorkspaceV4, applyWorkspaceIntent, getWorkspaceIntentReceipt, patchWorkspaceSpatial,
     listSheets, createSheet, getSheet, saveSheet, getSheetRevisions, getSheetRevision, restoreSheetRevision,
     listPartnerActions, mutatePartnerAction,
     sendChat,
