@@ -533,6 +533,15 @@
         }
         // Stage-6 K2: keyboard move/resize — only when NOT renaming.
         if (title.hasAttribute('contenteditable')) return;
+        // Spec-F4: F2 enters rename on titled surfaces (keyboard parity with
+        // dblclick) — a plain unmodified key, BEFORE the ctrl branch.
+        if (e.key === 'F2') {
+          if (!model.onRename) return;
+          e.preventDefault();
+          title.setAttribute('contenteditable', 'true');
+          title.focus();
+          return;
+        }
         // Stage-6 K3: lifecycle keys ride the SAME lanes pointer gestures do.
         if (e.ctrlKey || e.metaKey) {
           if (e.key === 'Enter') {
@@ -1182,7 +1191,18 @@
       const s = isWorld(model) ? (WProj.worldScale(getViewport(), metrics()) || 1) : 1;
       const rect = grouped ? group.frame.rect : model.rect;
       if ('dx' in mode) { rect.x += mode.dx / s; rect.y += mode.dy / s; }
-      else { rect.width += mode.dw / s; rect.height += mode.dh / s; }
+      else {
+        rect.width += mode.dw / s; rect.height += mode.dh / s;
+        // Spec-F3: registry minimums floor EVERY resize path (a size floor is
+        // surface policy, not a viewport clamp — world frames still never
+        // clamp origins; grouped frames floor the FRAME against the active
+        // member's surface minimum, mirroring pointer resize).
+        const min = surface && surface.minimumSize ? surface.minimumSize : null;
+        if (min) {
+          rect.width = Math.max(rect.width, min.width);
+          rect.height = Math.max(rect.height, min.height);
+        }
+      }
       if (!isWorld(model)) {
         if (grouped) {
           const m = metrics(); const HEADER0 = 40; // Stage-5 F3 reachable band for screen group frames
@@ -1266,8 +1286,11 @@
         if (model.state === 'minimised' || hiddenMember) continue;
         return focus(id);
       }
-      const chip = shelfHostEl && shelfHostEl.children && shelfHostEl.children.find
-        ? shelfHostEl.children.find((c) => c.dataset && c.dataset.windowId)
+      // Array.from: real-DOM children is an HTMLCollection (no .find) — the
+      // guarded .find call silently skipped the chip tier in browsers
+      // (spec-F1; the same class the journey caught at the tablist).
+      const chip = shelfHostEl && shelfHostEl.children
+        ? Array.from(shelfHostEl.children).find((c) => c.dataset && c.dataset.windowId)
         : null;
       if (chip) { chip.focus(); return null; }
       if (typeof document !== 'undefined' && document.activeElement && document.activeElement.blur) {

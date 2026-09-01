@@ -22,3 +22,7 @@
 - Screen-reader-specific behavior beyond ARIA semantics (no NVDA/VoiceOver automation; semantics + focus determinism are the provable layer).
 - Animatic-mode keyboard surface (freeform desk is the Round-5/6 target; animatic adapters come later in the adapter family).
 - Persisting focus across reloads (focus is ephemeral presentation; workspace.focus field stays unused this stage).
+
+## Scope amendments (spec-review round 1)
+- F2 rename key IMPLEMENTED (was silently cut): plain F2 on the title enters rename on titled surfaces (keyboard parity with dblclick).
+- Ctrl+W minimise-to-shelf CUT (recorded, no longer silent): redundant with Ctrl+M, and Chromium reserves Ctrl+W for browser-tab close — a page handler cannot reliably preventDefault it in a normal tab, so shipping the binding would be a false affordance. Ctrl+Shift+W remains the real-close binding (preventable in the cases tested).

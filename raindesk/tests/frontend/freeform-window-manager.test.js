@@ -2239,3 +2239,70 @@ test('Stage-6 K5: the announcer is a polite live region; lifecycle ops announce 
   assert.ok(String(announcer.textContent).startsWith('Layers minimised to shelf'), `minimise announced: ${announcer.textContent}`);
   assert.ok(announcer.textContent.length <= 121, 'announcements bounded (120 chars + the zero-width tick)');
 });
+
+test('Stage-6 spec-repair F1: the chip tier survives a REAL-DOM-shaped HTMLCollection (children without .find)', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('layers', { rect: { x: 40, y: 40, width: 300, height: 240 } });
+  const shelfHost = makeNode('div');
+  manager.attachShelf(shelfHost);
+  // Simulate the real DOM: an HTMLCollection has no .find — the old guarded
+  // .find call silently skipped the chip tier in browsers (spec-F1).
+  shelfHost.children = Array.from(shelfHost.children); // detach from the live array
+  shelfHost.children.find = undefined; // now shaped like an HTMLCollection
+  manager.minimise('window_layers');
+  const chip = Array.from(shelfHost.children).find((c) => c.classList && c.classList.contains('freeform-shelf-chip'));
+  assert.ok(chip, 'PRECONDITION: the chip rendered into the collection');
+  assert.equal(fakeDocument.activeElement, chip, 'Array.from landed focus on the chip despite children lacking .find (the real-DOM path)');
+});
+
+test('Stage-6 spec-repair F3: registry minimums floor WORLD and GROUPED keyboard resize (a size floor is surface policy, not a viewport clamp)', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const titleOf = (wid) => {
+    const f = root.children.find((c) => c.dataset && c.dataset.windowId === wid);
+    const h = f.children.find((c) => c.classList.contains('freeform-window-head'));
+    return h.children.find((c) => c.classList.contains('freeform-window-title'));
+  };
+  // world surface WITH a registry minimum
+  wm.CreativeSurfaces.register({ id: 'f3world', title: 'F3 World', entityType: 'sequence_strip', coordinateSpace: 'world', minimumSize: { width: 240, height: 160 } });
+  manager.open('f3world', { rect: { x: 1000, y: 2000, width: 400, height: 300 } });
+  manager.focus('window_f3world');
+  for (let i = 0; i < 20; i++) titleOf('window_f3world').dispatch('keydown', { key: 'ArrowLeft', shiftKey: true });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(manager.state('window_f3world').rect.width, 240, 'world keyboard resize floors at the registry minimum (20 x -8px from 400)');
+  // grouped screen frame: the FRAME floors, not just origins (layers must exist)
+  manager.open('references', { rect: { x: 600, y: 100, width: 300, height: 220 } });
+  manager.open('layers', { rect: { x: 60, y: 320, width: 300, height: 220 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  manager.focus('window_references');
+  for (let i = 0; i < 30; i++) titleOf('window_references').dispatch('keydown', { key: 'ArrowLeft', shiftKey: true });
+  await new Promise((r) => setTimeout(r, 200));
+  const fr = manager.groups().find((g) => g.windowIds.includes('window_references')).frame.rect;
+  assert.ok(fr.width >= 240, `grouped frame width floors at the active member's registry minimum (got ${fr.width})`);
+});
+
+test('Stage-6 spec-repair F4: F2 enters rename on titled surfaces (keyboard parity with dblclick)', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  let renamed = null;
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('layers', { rect: { x: 40, y: 40, width: 300, height: 240 }, onRename: (t) => { renamed = t; } });
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frame.children.find((c) => c.classList.contains('freeform-window-head'));
+  const title = head.children.find((c) => c.classList.contains('freeform-window-title'));
+  manager.focus('window_layers');
+  title.dispatch('keydown', { key: 'F2' });
+  assert.equal(title.getAttribute('contenteditable'), 'true', 'F2 entered rename editing');
+  assert.equal(fakeDocument.activeElement, title, 'the caret owns focus during editing');
+  title.textContent = 'Renamed via F2';
+  title.dispatch('blur', { target: title });
+  assert.equal(renamed, 'Renamed via F2', 'the blur commit persisted through onRename');
+  assert.equal(title.getAttribute('contenteditable'), null, 'editing mode exited after commit');
+});
