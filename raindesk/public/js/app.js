@@ -1551,6 +1551,12 @@
     disp.style.width = w + 'px';
     disp.style.height = h + 'px';
     if (state.creativeDesk) state.creativeDesk.refreshLayout();
+    // Stage-5 V1: stage resize reflows the freeform desk (debounced — the
+    // reachable-titlebar invariant + dock/group rail re-derivation).
+    if (state.freeform && typeof state.freeform.reflow === 'function') {
+      clearTimeout(state._reflowTimer);
+      state._reflowTimer = setTimeout(() => { try { state.freeform.reflow(); } catch (_e) { /* additive; never block resize */ } }, 120);
+    }
     markDirty();
   }
 

@@ -1254,6 +1254,47 @@
     }
     function list() { return [...windows.keys()].map(state); }
 
+    /** Stage-5 V1: responsive reflow after a stage resize. Screen-space
+     * floating windows keep a REACHABLE title bar (at least a header strip
+     * inside the viewport); world surfaces stay canonical — the endless
+     * desk reaches them by pan, and their rects are never viewport-
+     * clamped. Docked surfaces and group frames re-derive rail geometry
+     * through renderAll from current metrics. */
+    function reflow() {
+      const m = metrics();
+      for (const model of windows.values()) {
+        if (model.state !== 'floating' || isWorld(model)) continue;
+        const HEADER = 40; // reachable title-bar strip
+        const minX = HEADER - model.rect.width;
+        const maxX = m.width - HEADER;
+        const minY = 0;
+        const maxY = m.height - HEADER;
+        const nx = Math.min(Math.max(model.rect.x, minX), maxX);
+        const ny = Math.min(Math.max(model.rect.y, minY), maxY);
+        if (nx !== model.rect.x || ny !== model.rect.y) {
+          model.rect.x = nx; model.rect.y = ny;
+          renderFrame(model);
+          persist(model);
+        }
+      }
+      renderAll(); // docked rails + group frames re-derive from current metrics
+    }
+
+    /** Stage-5 V2: bring every floating screen window FULLY into view. */
+    function bringAllIntoView() {
+      const m = metrics();
+      for (const model of windows.values()) {
+        if (model.state !== 'floating' || isWorld(model)) continue;
+        const w = Math.min(model.rect.width, m.width);
+        const h = Math.min(model.rect.height, m.height);
+        model.rect.x = Math.min(Math.max(model.rect.x, 0), m.width - w);
+        model.rect.y = Math.min(Math.max(model.rect.y, 0), m.height - h);
+        renderFrame(model);
+        persist(model);
+      }
+      renderAll();
+    }
+
     /** Restore persisted windows from the canonical v4 document. */
     async function init() {
       if (!api || typeof api.getWorkspaceV4 !== 'function') return list();
@@ -1739,7 +1780,7 @@
       return group;
     }
 
-    return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll, renderAll,
+    return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll, renderAll, reflow, bringAllIntoView,
       groupWindows, ungroup, switchTab, tearOut, joinGroup, groupIds, attachShelf,
       groups: () => [...groups.values()].map((g) => ({ ...g, windowIds: g.windowIds.slice() })) };
 

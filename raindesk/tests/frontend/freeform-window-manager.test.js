@@ -1903,3 +1903,32 @@ function expectRef(record, windowId) {
   const created = record.find((c) => c.op && c.op.kind === 'window.create' && c.op.windowId === windowId);
   return created ? created.op.incarnationId : 'inc_unknown_00';
 }
+
+test('Stage-5 V1/V2: reflow keeps screen floating windows reachable and NEVER touches world rects; bringAllIntoView converges extremes', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  let m = { width: 1280, height: 800 };
+  wm.CreativeSurfaces.register({ id: 'worldfar', title: 'World Far', entityType: 'sequence_strip', coordinateSpace: 'world' });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => m, geometry: {} });
+  // Screen window stranded far off the top-left; world window at an extreme world position.
+  manager.open('references', { rect: { x: -2000, y: -3000, width: 400, height: 300 } });
+  manager.open('worldfar', { rect: { x: -95000, y: 87000, width: 460, height: 360 } });
+  const before = { ...manager.state('window_worldfar').rect };
+  manager.reflow();
+  const ref = manager.state('window_references');
+  assert.ok(ref.rect.x >= 40 - 400 && ref.rect.x <= 1280 - 40, 'the title bar is reachable after reflow');
+  assert.ok(ref.rect.y >= 0 && ref.rect.y <= 800 - 40, 'the header strip is on-screen');
+  assert.deepEqual(manager.state('window_worldfar').rect, before, 'WORLD rects stay canonical — never viewport-clamped');
+  // Viewport shrinks drastically: reflow converges again; bringAllIntoView pulls everything fully inside.
+  m = { width: 360, height: 640 };
+  manager.bringAllIntoView();
+  const ref2 = manager.state('window_references');
+  assert.ok(ref2.rect.x >= 0 && ref2.rect.x <= 360 - Math.min(ref2.rect.width, 360), 'fully inside after bringAllIntoView');
+  assert.ok(ref2.rect.y >= 0 && ref2.rect.y <= 640 - Math.min(ref2.rect.height, 640));
+  assert.deepEqual(manager.state('window_worldfar').rect, before, 'world rect STILL untouched');
+  await new Promise((r) => setTimeout(r, 5)); // flush the async persist chain before reading the record
+  const spatials = record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_references');
+  assert.ok(spatials.length >= 1, 'the normalized screen positions persisted');
+  assert.equal(record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_worldfar').length, 0, 'no world spatial PATCH from reflow');
+});
