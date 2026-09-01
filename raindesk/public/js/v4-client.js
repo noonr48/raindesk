@@ -164,11 +164,12 @@
     /** Spatial patch for an exact incarnation — no outbox (spatial traffic
      * is high-frequency; dedupe rides the server's mutationId ledger and the
      * caller re-commits the latest geometry on the next gesture). */
-    function spatial(ref, patch, mutationId) {
+    function spatial(ref, patch, mutationId, extra) {
       return api.patchWorkspaceSpatial(ref.windowId, ref.generation, {
         incarnationId: ref.incarnationId,
         ...(mutationId ? { mutationId } : {}),
         patch,
+        ...(extra || {}), // migration true-up lane (e.g. space reclassification)
       });
     }
 

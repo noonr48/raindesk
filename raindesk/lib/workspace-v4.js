@@ -732,6 +732,16 @@ function applySpatial(windowId, generation, body) {
   if (!body || typeof body.incarnationId !== 'string' || body.incarnationId !== row.ref.incarnationId) {
     throw httpError(409, `INCARNATION_REPLACED ${windowId}`, { code: 'INCARNATION_REPLACED', live: { ...row.ref } });
   }
+  // Migration true-up (Stage-2 P3): the ONE writer of a row's declarative
+  // space — a legacy conversion rides the same PATCH that corrects the
+  // geometry, so the flag trues up once and no future reload ever
+  // re-converts already-world geometry (compounding-drift guard). Space
+  // changes ride FRESH mutationIds by design (the hash stays scoped to
+  // {incarnationId, patch} for stored-retry compatibility).
+  if (body && body.space !== undefined) {
+    if (!SPACES.has(body.space)) throw httpError(400, 'body.space must be world|screen');
+    row.space = body.space;
+  }
   const patch = body.patch || {};
   const SPATIAL_KEYS = ['x', 'y', 'width', 'height', 'rotation', 'scale', 'zIndex'];
   for (const key of SPATIAL_KEYS) { // pass 1: validate ALL keys before ANY mutation

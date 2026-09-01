@@ -204,7 +204,7 @@ function v4ApiFixture({ record = [], doc } = {}) {
       return Promise.resolve({ ok: true, intentId: payload.intentId, duplicate: false, structuralRevision, changed });
     },
     patchWorkspaceSpatial(windowId, generation, body) {
-      record.push({ kind: 'spatial', windowId, generation, patch: body.patch || {}, mutationId: body.mutationId });
+      record.push({ kind: 'spatial', windowId, generation, patch: body.patch || {}, mutationId: body.mutationId, space: body.space });
       return Promise.resolve({ ok: true, spatialRevision: 1, spatialVersion: 2, structuralRevision, window: { ref: { windowId, generation, incarnationId: body.incarnationId } } });
     },
     getWorkspaceV4() {
@@ -1534,4 +1534,45 @@ test('group-echo race class: switchTab inside the create-response window keeps t
   assert.ok(activate, 'activate recorded');
   assert.equal(activate.op.groupId, group.groupId, 'send-time re-resolution: the SERVER-minted id, never the dead provisional id');
   assert.ok(!activate.op.groupId.startsWith('group_'), 'provisional local id never reaches the wire');
+});
+
+test('Stage-2 P3 true-up: the space flag rides the conversion wire — a SECOND init never re-converts (no compounding drift)', async () => {
+  const vp = { x: 0, y: 0, zoom: 1 };
+  const legacyDoc = () => ({
+    schemaVersion: 4, structuralRevision: 3, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_worldscene', generation: 1, incarnationId: 'inc_tu1' }, type: 'sequence_strip', space: 'screen', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 640, y: 400, width: 328, height: 288, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [] }, focus: null,
+  });
+  const mkManager = (doc, record) => wm.WindowManager({
+    root: makeNode('div'), document: fakeDocument,
+    api: v4ApiFixture({ record, doc }),
+    getViewport: () => vp,
+    viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {},
+  });
+
+  // First init: converts AND trues the flag on the same wire call.
+  const record1 = [];
+  const m1 = mkManager(legacyDoc(), record1);
+  await m1.init();
+  await new Promise((r) => setTimeout(r, 5));
+  const tu = record1.filter((c) => c.kind === 'spatial').pop();
+  assert.ok(tu, 'conversion persisted');
+  assert.equal(tu.space, 'world', 'the true-up flag rides the conversion PATCH');
+  const converted = { ...m1.state('window_worldscene').rect };
+
+  // Simulate the store carrying the corrected row (space world + converted geometry):
+  const doc2 = legacyDoc();
+  doc2.windows[0].space = 'world';
+  doc2.windows[0].spatial = { ...doc2.windows[0].spatial, x: Math.round(converted.x), y: Math.round(converted.y), width: Math.round(converted.width), height: Math.round(converted.height) };
+
+  // Second init: must NOT convert again — no spatial intent, geometry identical.
+  const record2 = [];
+  const m2 = mkManager(doc2, record2);
+  await m2.init();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(record2.filter((c) => c.kind === 'spatial').length, 0, 'no re-conversion on a truthed-up row');
+  const again = m2.state('window_worldscene').rect;
+  assert.ok(Math.abs(again.x - converted.x) <= 0.5 && Math.abs(again.width - converted.width) <= 0.5, 'no compounding drift across reloads');
 });

@@ -240,7 +240,7 @@
      * keep the window usable (the next gesture re-commits latest truth). */
     let mutationSeq = 0;
     const mintMutationId = () => `mut_${Date.now().toString(36)}_${(mutationSeq++).toString(36)}`;
-    function persist(model) {
+    function persist(model, extra) {
       if (!v4 || !model.ref) return Promise.resolve(model);
       // Commit ADOPTS the rounded canonical values into the model so the
       // live render and the post-reload render project from identical
@@ -253,7 +253,7 @@
       };
       model.rect.x = patch.x; model.rect.y = patch.y;
       model.rect.width = patch.width; model.rect.height = patch.height;
-      const next = writeChain.then(() => v4.spatial(model.ref, patch, mintMutationId())).then((res) => {
+      const next = writeChain.then(() => v4.spatial(model.ref, patch, mintMutationId(), extra)).then((res) => {
         model.persisted = true; model.persistFailed = false;
         const row = res && res.window;
         if (row && row.ref) { model.ref = { ...row.ref }; if (row.spatialVersion) model.spatialVersion = row.spatialVersion; }
@@ -1157,7 +1157,7 @@
             const s = WProj.worldScale(vp, m) || 1;
             const world = WProj.screenToWorld(model.rect, vp, m);
             model.rect = clampRect({ ...model.rect, x: world.x, y: world.y, width: model.rect.width / s, height: model.rect.height / s }, legacySurface);
-            persist(model);
+            persist(model, { space: 'world' }); // true-up: the flag rides the conversion — no future reload re-converts
           }
         }
         if (model.state === 'maximised') model.restoreRect = { ...model.rect };
@@ -1218,7 +1218,7 @@
             const s = WProj.worldScale(vp, m) || 1;
             const world = WProj.screenToWorld(model.rect, vp, m);
             model.rect = clampRect({ ...model.rect, x: world.x, y: world.y, width: model.rect.width / s, height: model.rect.height / s }, legacySurface);
-            persist(model);
+            persist(model, { space: 'world' }); // true-up rides the conversion here too
           }
         }
         windows.set(model.windowId, model);
