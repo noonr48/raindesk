@@ -33,7 +33,7 @@ let phase = 'startup';
 function step(n, label) {
   phase = `step-${n}-${label}`;
   steps.push(n);
-  console.error(`[journey] step ${n}/26: ${label}`);
+  console.error(`[journey] step ${n}: ${label}`);
 }
 
 function freePort() {
@@ -370,8 +370,89 @@ async function main() {
     await value(page, `(()=>{const c=document.getElementById('canvas');const r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-240,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));return true;})()`);
     await waitFor(page, `document.querySelector('.freeform-window[data-window-id="window_scenes"]').style.left !== ${JSON.stringify(preZoomLeft)}`, 'world window re-projected under desk zoom', 5_000);
 
-    // 26. Zero console errors across the whole journey.
-    step(26, 'zero console errors');
+    // ---- Stage-6 K6: KEYBOARD-ONLY acceptance leg (Round-5 a11y gate) ----
+    const VK = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Tab: 9, m: 77, t: 84, g: 71, w: 87 };
+    const pressKey = async (key, mods = 0) => {
+      const p = { type: 'keyDown', key, code: key, windowsVirtualKeyCode: VK[key] || 0, nativeVirtualKeyCode: VK[key] || 0, modifiers: mods };
+      // Default ACTIVATION (Enter on a focused button fires click) needs the
+      // text payload — raw keyCode-only dispatch skips the browser default.
+      if (key === 'Enter') p.text = '\r';
+      await page.send('Input.dispatchKeyEvent', p);
+      await page.send('Input.dispatchKeyEvent', { ...p, type: 'keyUp', text: undefined });
+    };
+
+    // 27. Fresh keyboard-leg windows; focus contract holds end-to-end.
+    step(27, 'keyboard: open fresh windows; DOM focus + region semantics');
+    await value(page, `window.raindeskFreeform.open('takes', { windowId: 'window_kb_a', rect: { x: 900, y: 500, width: 360, height: 280 } })`);
+    await value(page, `window.raindeskFreeform.open('characters', { windowId: 'window_kb_b', rect: { x: 1320, y: 520, width: 360, height: 280 } })`);
+    await value(page, `window.raindeskFreeform.focus('window_kb_a')`);
+    await waitFor(page, `document.activeElement && document.activeElement.classList.contains('freeform-window-title') && document.activeElement.closest('.freeform-window').dataset.windowId === 'window_kb_a'`, 'kb_a title holds DOM focus');
+    const regionCheck = await value(page, `(()=>{const f=document.querySelector('.freeform-window[data-window-id="window_kb_a"]');return f.getAttribute('role')==='region' && f.getAttribute('aria-roledescription')==='window' && !!f.getAttribute('aria-label');})()`);
+    if (!regionCheck) throw new Error('keyboard leg: frame region semantics missing');
+
+    // 28. Keyboard move (world surfaces: direction-proven; exact math unit-tested in K2).
+    step(28, 'keyboard: arrows move the focused window');
+    const x0 = await value(page, `window.raindeskFreeform.state('window_kb_a').rect.x`);
+    await pressKey('ArrowRight', 0); await pressKey('ArrowRight', 0); await pressKey('ArrowRight', 0);
+    const x1 = await value(page, `window.raindeskFreeform.state('window_kb_a').rect.x`);
+    if (!(x1 > x0)) throw new Error(`keyboard move failed: x ${x0} -> ${x1}`);
+
+    // 29. Keyboard resize.
+    step(29, 'keyboard: Shift+Arrow resizes');
+    const w0 = await value(page, `window.raindeskFreeform.state('window_kb_a').rect.width`);
+    await pressKey('ArrowRight', 8); // Shift
+    const w1 = await value(page, `window.raindeskFreeform.state('window_kb_a').rect.width`);
+    if (!(w1 > w0)) throw new Error(`keyboard resize failed: w ${w0} -> ${w1}`);
+
+    // 30. Ctrl+G pairwise grouping by focus recency.
+    step(30, 'keyboard: Ctrl+G groups the pair; announcer speaks');
+    await pressKey('g', 2); // Ctrl
+    await waitFor(page, `window.raindeskFreeform.groups().some((g) => g.windowIds.includes('window_kb_a') && g.windowIds.includes('window_kb_b'))`, 'kb pair grouped');
+    const announced = await value(page, `document.querySelector('.freeform-announcer').textContent`);
+    if (!/grouped 2 windows/.test(String(announced))) throw new Error(`announcer missing group text: ${announced}`);
+
+    // 31. Tablist arrow keynav switches the active tab.
+    step(31, 'keyboard: tablist arrows switch tabs; aria-selected follows');
+    await value(page, `(()=>{const t=[...document.querySelectorAll('.freeform-window-tab')].find((tb)=>tb.dataset.tabFor==='window_kb_a');t.focus();return true;})()`);
+    await pressKey('ArrowRight', 0);
+    await waitFor(page, `window.raindeskFreeform.groups().find((g) => g.windowIds.includes('window_kb_a')).activeWindowId === 'window_kb_b'`, 'arrow keynav switched the active tab');
+    const selCheck = await value(page, `(()=>{const t=[...document.querySelectorAll('.freeform-window-tab')].find((tb)=>tb.dataset.tabFor==='window_kb_b');return t.getAttribute('aria-selected')==='true';})()`);
+    if (!selCheck) throw new Error('aria-selected did not follow the switch');
+
+    // 32. Ctrl+Enter maximise/restore on the grouped frame.
+    step(32, 'keyboard: Ctrl+Enter maximise toggle with announcements');
+    await value(page, `window.raindeskFreeform.focus('window_kb_b')`);
+    await pressKey('Enter', 2);
+    await waitFor(page, `window.raindeskFreeform.groups().find((g) => g.windowIds.includes('window_kb_a')).frame.presentation.kind === 'maximised'`, 'group frame maximised');
+    await pressKey('Enter', 2);
+    await waitFor(page, `window.raindeskFreeform.groups().find((g) => g.windowIds.includes('window_kb_a')).frame.presentation.kind !== 'maximised'`, 'group frame restored');
+
+    // 33. Ctrl+T tears the active member out.
+    step(33, 'keyboard: Ctrl+T tear-out');
+    await pressKey('t', 2);
+    await waitFor(page, `window.raindeskFreeform.state('window_kb_b').state === 'floating'`, 'kb_b torn out to floating');
+
+    // 34. Ctrl+M minimises to the shelf.
+    step(34, 'keyboard: Ctrl+M minimise to shelf');
+    await pressKey('m', 2);
+    await waitFor(page, `window.raindeskFreeform.state('window_kb_b').state === 'minimised'`, 'kb_b minimised');
+    await waitFor(page, `!!document.querySelector('.freeform-shelf-chip[data-window-id="window_kb_b"]')`, 'shelf chip rendered');
+
+    // 35. Chip keyboard restore (Enter on the focused chip).
+    step(35, 'keyboard: Enter on the shelf chip restores');
+    await value(page, `document.querySelector('.freeform-shelf-chip[data-window-id="window_kb_b"]').focus()`);
+    await pressKey('Enter', 0);
+    await waitFor(page, `window.raindeskFreeform.state('window_kb_b').state === 'floating'`, 'kb_b restored from shelf');
+
+    // 36. Ctrl+Shift+W real close; focus survives.
+    step(36, 'keyboard: Ctrl+Shift+W close; focus restores');
+    await pressKey('w', 10); // Ctrl+Shift
+    await waitFor(page, `window.raindeskFreeform.state('window_kb_b') === null`, 'kb_b closed');
+    await waitFor(page, `document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('freeform-window-title')`, 'focus fell to a surviving frame');
+
+
+    // 37. Zero console errors across the whole journey (keyboard leg included).
+    step(37, 'zero console errors');
     if (page.consoleErrors.length) throw new Error(`console errors: ${page.consoleErrors.slice(0, 5).join(' | ')}`);
 
     if (SCREENSHOT) {

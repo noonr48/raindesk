@@ -523,8 +523,14 @@
         title.setAttribute('contenteditable', 'true'); title.focus();
       });
       title.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); title.blur(); }
-        if (e.key === 'Escape') { e.preventDefault(); title.textContent = model.title; title.blur(); }
+        // Stage-6 K6 fix: rename-commit keys fire ONLY while editing — the
+        // unconditional blur stole DOM focus on plain Enter (the keyboard leg
+        // caught it: the second Ctrl+Enter never reached the handler).
+        if (title.hasAttribute('contenteditable')) {
+          if (e.key === 'Enter') { e.preventDefault(); title.blur(); }
+          if (e.key === 'Escape') { e.preventDefault(); title.textContent = model.title; title.blur(); }
+          return;
+        }
         // Stage-6 K2: keyboard move/resize — only when NOT renaming.
         if (title.hasAttribute('contenteditable')) return;
         // Stage-6 K3: lifecycle keys ride the SAME lanes pointer gestures do.
@@ -596,7 +602,14 @@
       if (model.frame) model.frame.setAttribute('aria-label', String(model.title)); // aria-label tracks the title SSOT
       const group = groupFor(model.windowId);
       const isHiddenMember = model.state === 'tabbed' && group && group.activeWindowId !== model.windowId;
-      if (model.state === 'minimised' || isHiddenMember) { frame.hidden = true; return; }
+      if (model.state === 'minimised' || isHiddenMember) {
+        frame.hidden = true;
+        // Stage-6 K6: a hidden member must never keep a STALE tab strip —
+        // renderGroupTabs is skipped below, so clear the slot here (a stale
+        // aria-selected in the DOM contradicts the live selection).
+        if (model.tabsSlot) model.tabsSlot.innerHTML = '';
+        return;
+      }
       frame.hidden = false;
       const gfRender = model.state === 'tabbed' ? groupedFrame(model) : null;
       const frameMaximised = Boolean(gfRender && gfRender.presentation && gfRender.presentation.kind === 'maximised');
@@ -1288,6 +1301,7 @@
       renderFrame(model);
       renderShelf();
       bringToFront(windowId);
+      focus(windowId); // Stage-6 K6: shelf restore re-focuses the window — the focused chip is destroyed on re-render; focus must not die with it (Round-5 focus restoration)
       announceLifecycle(model, 'restored');
       if (v4 && model.ref) queueIntent(() => ({
         kind: 'shelf.restore', window: { ...model.ref },
@@ -1718,10 +1732,12 @@
           const idx = ids.indexOf(memberId);
           const nextIdx = e.key === 'ArrowRight' ? (idx + 1) % ids.length : (idx - 1 + ids.length) % ids.length;
           switchTab(ids[nextIdx]);
-          // Roving focus follows the selection (ARIA tabs pattern)
+          // Roving focus follows the selection (ARIA tabs pattern).
+          // Array.from: real-DOM children is an HTMLCollection (no .find) —
+          // the fake DOM's array children masked this (journey-caught).
           const activeFrame = windows.get(ids[nextIdx]);
           if (activeFrame && activeFrame.frame) {
-            const tabs = activeFrame.tabsSlot ? activeFrame.tabsSlot.children : [];
+            const tabs = Array.from(activeFrame.tabsSlot ? activeFrame.tabsSlot.children : []);
             const nextTab = tabs.find((tn) => tn.dataset && tn.dataset.tabFor === ids[nextIdx]);
             if (nextTab && nextTab.focus) nextTab.focus();
           }
