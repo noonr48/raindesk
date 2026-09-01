@@ -1495,3 +1495,22 @@ test('Stage-2 P3: legacy screen-unit rows convert to world at restore (client-in
   assert.ok(spatial, 'the corrected world geometry re-persists durably');
   assert.ok(Math.abs(spatial.patch.x) <= 1, 'persisted patch carries world values');
 });
+
+test('Stage-2 P4: creates birth-flag their coordinate space; the world cascade owns world-surface placement (defaultPlacement is screen-chrome-only)', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('worldscene'); // world-classified (registered by the P2 test)
+  manager.open('references'); // screen-classified fixture (chrome path)
+  await new Promise((r) => setTimeout(r, 0));
+  const creates = record.filter((c) => c.kind === 'intent' && c.op.kind === 'window.create');
+  const worldCreate = creates.find((c) => c.op.windowId === 'window_worldscene');
+  const screenCreate = creates.find((c) => c.op.windowId === 'window_references');
+  assert.equal(worldCreate.op.space, 'world', 'world surfaces birth-flag space:world (no mixed authority at birth)');
+  assert.equal(screenCreate.op.space, 'screen', 'screen chrome birth-flags screen');
+  // defaultPlacement audit conclusion: world surfaces place via the world
+  // cascade (P2); declared defaultPlacement remains the SCREEN-chrome path.
+  const a = manager.state('window_worldscene');
+  assert.ok(Number.isFinite(a.rect.x) && a.rect.width >= 200, 'world cascade placement');
+});
