@@ -114,6 +114,11 @@ async function runViewport(vp, base, browserWsUrl, index) {
   await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot==='ready'`, `${vp.label} boot`, 60_000);
   await waitFor(cdp, `window.raindeskFreeform && typeof window.raindeskFreeform.open === 'function'`, `${vp.label} manager`, 10_000);
 
+  // Stage-5 (impl F2): the override is pinned — a silently failed
+  // setDeviceMetricsOverride must not yield six identical default-viewport
+  // boots that still pass (screen asserts are live-metrics-relative).
+  await waitFor(cdp, `(()=>{const m=document.getElementById('stage');return m&&m.clientWidth===${vp.width}&&m.clientHeight===${vp.height};})()`, `${vp.label} viewport pinned`, 15_000);
+
   // Screen-reflow path E2E: register a screen-classified chrome surface
   // (the shipped 7 are all world — world rects stay canonical, reachable by
   // pan) and seed it at an extreme; the boot+resize reflow must converge it.
@@ -140,13 +145,15 @@ async function runViewport(vp, base, browserWsUrl, index) {
   // cannot map the row. Screen persistence is pinned at unit level.)
 
   const errors = cdp.consoleErrors.slice();
-  try { cdp._ws.close(); } catch (_e) {}
-  if (errors.length) throw new Error(`${vp.label} console errors: ${errors.slice(0, 3).join(' | ')}`);
+  // Stage-5 (impl F1): capture from the TESTED page's cdp BEFORE closing —
+  // the old fresh-blank-tab capture produced blank PNGs (misleading channel).
   if (SCREENSHOT_DIR) {
     fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
-    const shot = await (async () => { const c = await newTab(browserWsUrl); const s = await c.send('Page.captureScreenshot', { format: 'png', fromSurface: false }); try { c._ws.close(); } catch (_e) {} return s; })();
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: false });
     fs.writeFileSync(path.join(SCREENSHOT_DIR, `matrix-${vp.label}.png`), Buffer.from(shot.data, 'base64'));
   }
+  try { cdp._ws.close(); } catch (_e) {}
+  if (errors.length) throw new Error(`${vp.label} console errors: ${errors.slice(0, 3).join(' | ')}`);
   return { label: vp.label, ok: true };
 }
 

@@ -1286,7 +1286,23 @@
           persist(model);
         }
       }
-      renderAll(); // docked rails + group frames re-derive from current metrics
+      // Stage-5 (impl F3): floating SCREEN group frames converge too — a
+      // group stranded by a shrink has no other recovery path (docked frames
+      // re-derive rails through renderAll; world frames are pannable by design).
+      for (const group of groups.values()) {
+        const frame = group.frame;
+        if (!frame || !frame.rect) continue;
+        const activeModel = windows.get(group.activeWindowId);
+        if (!activeModel || activeModel.state !== 'tabbed' || isWorld(activeModel)) continue;
+        const gx = Math.min(Math.max(frame.rect.x, HEADER - frame.rect.width), m.width - HEADER);
+        const gy = Math.min(Math.max(frame.rect.y, 0), m.height - HEADER);
+        if (gx !== frame.rect.x || gy !== frame.rect.y) {
+          frame.rect.x = gx; frame.rect.y = gy;
+          renderFrame(activeModel);
+          persistFrame(activeModel);
+        }
+      }
+      renderAll(); // docked rails + world group frames re-derive from current metrics
     }
 
     /** Stage-5 V2: bring every floating screen window FULLY into view. */
