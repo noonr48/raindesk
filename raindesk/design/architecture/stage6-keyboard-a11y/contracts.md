@@ -1,0 +1,8 @@
+# Stage-6 — CONTRACTS
+
+1. **No new writers.** Every keyboard op resolves to an existing WindowManager method that already routes through the v4 intent outbox. Grep-check: no fetch/upsertWorkspace* calls appear in keyboard paths.
+2. **Focus contract.** Exactly one frame holds DOM focus at any time when the desk is focused (document.activeElement is a frame title, a tab, a shelf chip, or the stage body). open() focuses the new frame. close()/minimise() move focus to the most-recently-focused remaining frame, else first shelf chip, else stage. focus(windowId) (logical) ALSO moves DOM focus — closing the Round-5 "logical focus does not move DOM focus" gap.
+3. **Determinism contract.** Focus moves are a pure function of (op, current focus, focusOrder recency, windows, groups, shelf) — no timing dependence; unit-testable.
+4. **Announcement contract.** Every lifecycle op that changes frame visibility/ownership/membership announces ≤120 chars, role=stage/status polite. Announcement is derived FROM state (not fire-and-forget strings): emitted at the same seam that persists/renders.
+5. **ARIA contract.** Frame: role="region" + aria-roledescription="window" + aria-label=title. Tablist: role=tablist/tab, aria-selected on active, arrow Left/Right switches. Controls keep their aria-labels. Resize handles stay aria-hidden (keyboard resize replaces them in tab order).
+6. **Keyboard geometry contract.** Arrows move by 8px (Alt: 32px) in the frame's OWN space (screen: viewport px; world: world units via WProj inverse at current zoom, rounding-adoption per Stage-2). Shift+Arrows resize by the same grid honoring registry minimumSize. clampRect applies to screen frames; world frames never viewport-clamp.
