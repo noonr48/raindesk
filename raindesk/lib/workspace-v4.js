@@ -1032,7 +1032,19 @@ function deriveLegacyState(row, ctx) {
   return row.presentation.kind === 'maximised' ? 'maximised' : row.presentation.kind === 'docked' ? 'docked' : 'floating';
 }
 
+
+/** Adapter-family A3: legacy adapters keep the v4 doc's legacyRevision coupled
+ * to the v3 revision they front (the Round-6 §6 gate target). */
+function bumpLegacyRevision(revision) {
+  if (!Number.isInteger(revision)) return;
+  const ws = read();
+  if (ws.legacyRevision === revision) return;
+  ws.legacyRevision = revision;
+  atomicWrite(ws);
+}
+
 module.exports = {
+  bumpLegacyRevision,
   V4_PATH,
   WINDOW_TYPES,
   read,

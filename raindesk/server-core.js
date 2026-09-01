@@ -520,12 +520,70 @@ async function handleApi(req, res, url, deps) {
   }
   /* Freeform desk structural API: groups, shelf, window deletion. These are
    * revision-gated (baseRevision -> 409 with the current workspace attached)
-   * because a lost update here is structural, not spatial. */
+   * because a lost update here is structural, not spatial.
+   *
+   * Adapter-family A3 (Round-6 §6): each route is now a temporary
+   * compatibility ADAPTER — the requested diff translates to v4 intents
+   * FIRST (canonical authority; typed failures surface, nothing written),
+   * then the v3 write lands as the projection, and legacyRevision stays
+   * coupled to the v3 revision it fronts. Responses carry deprecation
+   * metadata (the freeform manager already lives on /api/workspace/v4). */
+  const DEPRECATION = { deprecated: true, use: '/api/workspace/v4' };
+  const mintIntentId = () => `syn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+  const mirrorOp = (op) => workspaceV4.applyIntent({ actorId: 'legacy_adapter', intentId: mintIntentId(), op });
+  const v4RowOf = (id) => workspaceV4.read().windows.find((w) => w.ref.windowId === id) || null;
+  function mirrorGroupsToV4(requested) {
+    const requestedIds = new Set(requested.map((g) => g.groupId));
+    for (const g of workspaceV4.read().groups) {
+      if (!requestedIds.has(g.groupId) && g.members.length) mirrorOp({ kind: 'group.dissolve', member: { ...g.members[0] } });
+    }
+    for (const req of requested) {
+      const live = workspaceV4.read().groups.find((g) => g.groupId === req.groupId);
+      const memberRefs = (Array.isArray(req.windowIds) ? req.windowIds : []).map(v4RowOf).filter(Boolean).map((r) => ({ ...r.ref }));
+      if (!live) {
+        if (memberRefs.length) {
+          const activeRow = req.activeWindowId ? v4RowOf(req.activeWindowId) : null;
+          mirrorOp({ kind: 'group.create', ...(req.groupId ? { groupId: req.groupId } : {}), members: memberRefs, ...(activeRow ? { active: { ...activeRow.ref } } : {}) });
+        }
+        continue;
+      }
+      const liveIds = live.members.map((m) => m.windowId);
+      const wanted = Array.isArray(req.windowIds) ? req.windowIds : [];
+      for (const id of liveIds) if (!wanted.includes(id)) {
+        const row = v4RowOf(id); if (row) mirrorOp({ kind: 'group.leave', member: { ...row.ref }, expectedGroupId: live.groupId });
+      }
+      for (const id of wanted) if (!liveIds.includes(id)) {
+        const row = v4RowOf(id); if (row) mirrorOp({ kind: 'group.join', member: { ...row.ref }, target: { groupId: live.groupId } });
+      }
+      const activeRow = req.activeWindowId ? v4RowOf(req.activeWindowId) : null;
+      if (activeRow && (!live.active || live.active.windowId !== req.activeWindowId)) {
+        mirrorOp({ kind: 'group.activate', groupId: live.groupId, member: { ...activeRow.ref } });
+      }
+    }
+  }
+  function mirrorShelfToV4(requestedIds) {
+    const currentIds = workspaceV4.read().shelf.members.map((m) => m.windowId);
+    for (const id of requestedIds) if (!currentIds.includes(id)) {
+      const row = v4RowOf(id); if (row) mirrorOp({ kind: 'shelf.minimise', window: { ...row.ref } });
+    }
+    for (const id of currentIds) if (!requestedIds.includes(id)) {
+      const row = v4RowOf(id); if (row) mirrorOp({ kind: 'shelf.restore', window: { ...row.ref } });
+    }
+  }
+  const legacyStale = (body) => Number.isFinite(body && body.baseRevision) && body.baseRevision !== workspace.read().revision;
+  const legacyConflict = (res) => sendJson(res, 409, { error: 'workspace changed since baseRevision', workspace: workspace.read(), ...DEPRECATION });
+
   if (method === 'POST' && route === '/api/workspace/groups') {
     const body = await readJson(req, 256 * 1024);
+    if (Array.isArray(body && body.groups)) {
+      if (legacyStale(body)) return legacyConflict(res);
+      try { mirrorGroupsToV4(body.groups); }
+      catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; }
+    }
     try {
-      const ws = workspace.setGroups(body && body.groups, { baseRevision: body && body.baseRevision });
-      return sendJson(res, 200, { ok: true, workspace: ws });
+      const ws = workspace.setGroups(body && body.groups, { baseRevision: undefined });
+      workspaceV4.bumpLegacyRevision(workspace.read().revision);
+      return sendJson(res, 200, { ok: true, workspace: ws, ...DEPRECATION });
     } catch (error) {
       if (error instanceof HttpError && error.workspace) {
         return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
@@ -535,9 +593,15 @@ async function handleApi(req, res, url, deps) {
   }
   if (method === 'POST' && route === '/api/workspace/shelf') {
     const body = await readJson(req, 64 * 1024);
+    if (Array.isArray(body && body.windowIds)) {
+      if (legacyStale(body)) return legacyConflict(res);
+      try { mirrorShelfToV4(body.windowIds); }
+      catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; }
+    }
     try {
-      const ws = workspace.setShelf(body && body.windowIds, { baseRevision: body && body.baseRevision });
-      return sendJson(res, 200, { ok: true, workspace: ws });
+      const ws = workspace.setShelf(body && body.windowIds, { baseRevision: undefined });
+      workspaceV4.bumpLegacyRevision(workspace.read().revision);
+      return sendJson(res, 200, { ok: true, workspace: ws, ...DEPRECATION });
     } catch (error) {
       if (error instanceof HttpError && error.workspace) {
         return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
@@ -547,9 +611,19 @@ async function handleApi(req, res, url, deps) {
   }
   if (method === 'POST' && route === '/api/workspace/window/delete') {
     const body = await readJson(req, 64 * 1024);
+    const deleteTarget = body && body.windowId;
+    if (deleteTarget && workspace.read().windows.some((w) => w.windowId === deleteTarget)) {
+      if (legacyStale(body)) return legacyConflict(res);
+      const row = v4RowOf(deleteTarget);
+      if (row) {
+        try { mirrorOp({ kind: 'window.close', window: { ...row.ref } }); }
+        catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; }
+      }
+    }
     try {
-      const ws = workspace.deleteWindow(body && body.windowId, { baseRevision: body && body.baseRevision });
-      return sendJson(res, 200, { ok: true, workspace: ws });
+      const ws = workspace.deleteWindow(body && body.windowId, { baseRevision: undefined });
+      workspaceV4.bumpLegacyRevision(workspace.read().revision);
+      return sendJson(res, 200, { ok: true, workspace: ws, ...DEPRECATION });
     } catch (error) {
       if (error instanceof HttpError && error.workspace) {
         return sendJson(res, error.status, { error: error.message, workspace: error.workspace });
