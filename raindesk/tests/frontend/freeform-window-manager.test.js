@@ -152,19 +152,69 @@ const savedDocument = global.document;
 global.document = fakeDocument;
 
 const wm = require(path.join(ROOT, 'public', 'js', 'window-manager.js'));
+const v4mod = require(path.join(ROOT, 'public', 'js', 'v4-client.js'));
+global.RaindeskV4Client = v4mod; // WindowManager's self-construct fallback reads this
 
 test.after(() => { if (savedDocument === undefined) delete global.document; else global.document = savedDocument; });
 
 /* ------------------------------------------------------------ helpers */
 
+/* ----------------------------------------------------- v4 api fixture */
+
+/** Fake v4 wire surface: records every intent/spatial commit into `record`
+ * and answers with realistic canonical payloads (refs, createdGroup, shelf
+ * and presentation echoes) so the manager's adopt paths stay exercised. */
+function v4ApiFixture({ record = [], doc } = {}) {
+  let structuralRevision = 1;
+  let groupSeq = 0;
+  return {
+    applyWorkspaceIntent(payload) {
+      record.push({ kind: 'intent', op: payload.op, intentId: payload.intentId });
+      structuralRevision += 1;
+      const op = payload.op || {};
+      const changed = { kind: op.kind, windows: [], groups: [], tombstones: [] };
+      if (op.kind === 'window.create') {
+        changed.windows.push({ ref: { windowId: op.windowId, generation: 1, incarnationId: op.incarnationId }, presentation: { kind: 'floating' } });
+      } else if (op.kind === 'group.create') {
+        groupSeq += 1;
+        const group = { groupId: `grp_test_${groupSeq}`, version: 1, members: op.members.map((m) => ({ ...m })), active: { ...(op.active || op.members[0]) } };
+        changed.groups.push(group);
+        changed.createdGroup = group;
+      } else if (op.kind === 'group.join' || op.kind === 'group.leave' || op.kind === 'group.activate' || op.kind === 'group.reorder' || op.kind === 'group.dissolve') {
+        changed.groups.push({ groupId: op.groupId || (op.target && op.target.groupId) || `grp_test_${groupSeq}`, version: 2, members: [], active: null });
+      } else if (op.kind === 'window.close' && op.window) {
+        changed.tombstones.push({ ...op.window });
+      } else if (op.kind === 'shelf.minimise' || op.kind === 'shelf.restore') {
+        // Canonical shelf echo: minimise ADDS the ref, restore removes it —
+        // adoptResponse treats this as truth, so an empty minimise echo
+        // would instantly un-minimise the model.
+        changed.shelf = { version: 2, members: op.kind === 'shelf.minimise' && op.window ? [{ ...op.window }] : [] };
+        if (op.window) changed.windows.push({ ref: { ...op.window }, presentation: op.mode === 'resume' ? { kind: 'docked', edge: 'left' } : { kind: 'floating' } });
+      } else if (op.kind === 'window.setPresentation' && op.window) {
+        const pres = op.mode === 'docked' ? { kind: 'docked', edge: op.edge }
+          : op.mode === 'maximised' ? { kind: 'maximised' }
+          : op.mode === 'restore' ? { kind: 'floating' }
+          : { kind: 'floating', ...(op.floatingAt ? { at: { x: op.floatingAt.x, y: op.floatingAt.y } } : {}) };
+        changed.windows.push({ ref: { ...op.window }, presentation: pres });
+      }
+      return Promise.resolve({ ok: true, intentId: payload.intentId, duplicate: false, structuralRevision, changed });
+    },
+    patchWorkspaceSpatial(windowId, generation, body) {
+      record.push({ kind: 'spatial', windowId, generation, patch: body.patch || {} });
+      return Promise.resolve({ ok: true, spatialRevision: 1, spatialVersion: 2, structuralRevision, window: { ref: { windowId, generation, incarnationId: body.incarnationId } } });
+    },
+    getWorkspaceV4() {
+      return Promise.resolve(doc || { schemaVersion: 4, windows: [], groups: [], shelf: { version: 1, members: [] }, focus: null, structuralRevision: 1, spatialRevision: 1, viewportRevision: 1 });
+    },
+  };
+}
+
 function freshManager({ persistCalls } = {}) {
   const calls = persistCalls || [];
   const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { calls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-    focusWorkspace() { return Promise.resolve({ ok: true }); },
-  };
+  const api = v4ApiFixture({ record: calls });
+  api.getWorkspace = () => Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } });
+  api.focusWorkspace = () => Promise.resolve({ ok: true });
   const manager = wm.WindowManager({
     root, document: fakeDocument, api,
     viewportMetrics: () => ({ width: 1280, height: 800 }),
@@ -260,16 +310,19 @@ test('close destroys the controller and removes the frame', () => {
   assert.equal(root.children.filter((c) => c.dataset && c.dataset.windowId === 'window_probe').length, 0);
 });
 
-test('spatial changes persist through the v3 object API', async () => {
+test('lifecycle changes travel as v4 intents (create + shelf.minimise); spatial lane stays geometry-only', async () => {
   const { manager, calls } = freshManager();
   manager.open('references', { rect: { x: 10, y: 20, width: 350, height: 280 } });
   manager.minimise('window_references');
   await new Promise((r) => setTimeout(r, 5));
-  const last = calls[calls.length - 1];
-  assert.equal(last.windowId, 'window_references');
-  assert.equal(last.state, 'minimised');
-  assert.equal(last.x, 10);
-  assert.equal(last.width, 350);
+  const create = calls.find((c) => c.kind === 'intent' && c.op.kind === 'window.create');
+  assert.ok(create, 'open births through the window.create intent');
+  assert.equal(create.op.windowId, 'window_references');
+  assert.equal(create.op.x, 10);
+  assert.equal(create.op.width, 350);
+  const minimise = calls.find((c) => c.kind === 'intent' && c.op.kind === 'shelf.minimise');
+  assert.ok(minimise, 'minimise travels as the shelf.minimise intent');
+  assert.equal(calls.filter((c) => c.kind === 'spatial').length, 0, 'no lifecycle state ever rides the spatial lane');
 });
 
 test('focus and z-order: bringing a window to front raises its zIndex', () => {
@@ -284,28 +337,24 @@ test('focus and z-order: bringing a window to front raises its zIndex', () => {
 });
 
 test('init restores persisted floating windows and shelf-backs minimised ones', async () => {
-  const persistCalls = [];
+  const record = [];
   const root = makeNode('div');
-  const shelf = makeNode('nav');
-  const api = {
-    getWorkspace() {
-      return Promise.resolve({
-        schemaVersion: 3, revision: 4,
-        windows: [
-          { windowId: 'window_references', type: 'reference_board', x: 5, y: 6, width: 300, height: 240, zIndex: 7, state: 'floating', collapsed: false, pinned: false, locked: false },
-          { windowId: 'window_layers', type: 'layers_panel', x: 1, y: 2, width: 260, height: 200, zIndex: 8, state: 'minimised', collapsed: true, pinned: false, locked: false },
-        ],
-        groups: [], shelf: { windowIds: ['window_layers'] },
-      });
-    },
-    upsertWorkspaceObject(p) { persistCalls.push(p); return Promise.resolve({ ok: true }); },
-    setWorkspaceShelf() { return Promise.resolve({ ok: true, workspace: { revision: 5, windows: [], groups: [], shelf: { windowIds: [] } } }); },
-  };
+  const api = v4ApiFixture({ record, doc: {
+    schemaVersion: 4, structuralRevision: 4, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_references', generation: 1, incarnationId: 'inc_a1' }, type: 'reference_board', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 5, y: 6, width: 300, height: 240, rotation: 0, scale: 1, zIndex: 7 }, structureVersion: 1, spatialVersion: 1 },
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_b2' }, type: 'layers_panel', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 1, y: 2, width: 260, height: 200, rotation: 0, scale: 1, zIndex: 8 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [],
+    shelf: { version: 1, members: [{ windowId: 'window_layers', generation: 1, incarnationId: 'inc_b2' }] },
+    focus: null,
+  } });
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   await manager.init();
   const refs = manager.state('window_references');
   assert.ok(refs, 'floating window restored');
   assert.equal(refs.rect.x, 5);
+  assert.ok(refs.ref && refs.ref.generation === 1, 'canonical ref adopted');
   // Minimised windows are shelf-backed: identity + rect + controller on
   // disk, frame hidden until a shelf chip restores them.
   const layers = manager.state('window_layers');
@@ -314,27 +363,22 @@ test('init restores persisted floating windows and shelf-backs minimised ones', 
   const layersFrame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_layers');
   assert.ok(layersFrame, 'shelf-backed frame exists');
   assert.equal(layersFrame.hidden, true, 'shelf-backed frame hidden until restored');
-  assert.equal(persistCalls.length, 0, 'init does not rewrite unchanged state');
+  assert.equal(record.length, 0, 'init does not rewrite unchanged state');
 });
 
 test('init restores groups: tabbed members return with the active member visible', async () => {
   const root = makeNode('div');
-  const api = {
-    getWorkspace() {
-      return Promise.resolve({
-        schemaVersion: 3, revision: 6,
-        windows: [
-          { windowId: 'window_ga', type: 'note', entityRef: 'note:ga', x: 10, y: 10, width: 300, height: 200, zIndex: 3, state: 'tabbed', groupId: 'g_restore', collapsed: false, pinned: false, locked: false },
-          { windowId: 'window_gb', type: 'note', entityRef: 'note:gb', x: 10, y: 10, width: 300, height: 200, zIndex: 4, state: 'tabbed', groupId: 'g_restore', collapsed: false, pinned: false, locked: false },
-          { windowId: 'window_stray', type: 'note', entityRef: 'note:stray', x: 60, y: 60, width: 260, height: 180, zIndex: 5, state: 'tabbed', groupId: 'g_lost', collapsed: false, pinned: false, locked: false },
-        ],
-        groups: [{ groupId: 'g_restore', windowIds: ['window_ga', 'window_gb'], activeWindowId: 'window_gb' }],
-        shelf: { windowIds: [] },
-      });
-    },
-    upsertWorkspaceObject(p) { return Promise.resolve({ ok: true }); },
-    setWorkspaceGroups() { return Promise.resolve({ ok: true, workspace: { revision: 7, windows: [], groups: [], shelf: { windowIds: [] } } }); },
-  };
+  const api = v4ApiFixture({ doc: {
+    schemaVersion: 4, structuralRevision: 6, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_ga', generation: 1, incarnationId: 'inc_ga' }, type: 'note', entityRef: 'note:ga', presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 10, y: 10, width: 300, height: 200, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+      { ref: { windowId: 'window_gb', generation: 1, incarnationId: 'inc_gb' }, type: 'note', entityRef: 'note:gb', presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 10, y: 10, width: 300, height: 200, rotation: 0, scale: 1, zIndex: 4 }, structureVersion: 1, spatialVersion: 1 },
+      { ref: { windowId: 'window_stray', generation: 1, incarnationId: 'inc_stray' }, type: 'note', entityRef: 'note:stray', presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 60, y: 60, width: 260, height: 180, rotation: 0, scale: 1, zIndex: 5 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [{ groupId: 'g_restore', version: 1, members: [{ windowId: 'window_ga', generation: 1, incarnationId: 'inc_ga' }, { windowId: 'window_gb', generation: 1, incarnationId: 'inc_gb' }], active: { windowId: 'window_gb', generation: 1, incarnationId: 'inc_gb' } }],
+    shelf: { version: 1, members: [] },
+    focus: null,
+  } });
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   await manager.init();
   const groups = manager.groups();
@@ -348,7 +392,7 @@ test('init restores groups: tabbed members return with the active member visible
   const tabs = bFrame.querySelectorAll('.freeform-window-tab');
   assert.equal(tabs.length, 2, 'active member renders the tab strip');
   const stray = manager.state('window_stray');
-  assert.equal(stray.state, 'floating', 'stranded tabbed member re-floats when its group is gone');
+  assert.equal(stray.state, 'floating', 'an ungrouped ref derives floating (stranded-tab shapes cannot exist in v4)');
   const strayFrame = root.children.find((c) => c.dataset && c.dataset.windowId === 'window_stray');
   assert.equal(strayFrame.hidden, false, 'stranded member is visible');
 });
@@ -388,7 +432,8 @@ test('window drag released over the shelf minimises it', async () => {
   assert.equal(manager.state('window_references').state, 'minimised', 'drop on the shelf minimises');
   assert.equal(frame.hidden, true);
   assert.ok(shelf.children.some((c) => c.classList.contains('freeform-shelf-chip')), 'shelf chip rendered');
-  assert.deepEqual(shelfCalls, [['window_references']], 'shelf membership persisted');
+  const min = shelfCalls.find((c) => c.kind === 'intent' && c.op.kind === 'shelf.minimise');
+  assert.ok(min && min.op.window.windowId === 'window_references', 'shelf membership persisted as the shelf.minimise intent');
 });
 
 test('window drag released over another window joins its group (through the dragged frame)', () => {
@@ -621,10 +666,12 @@ test('resize commit persists once with the final rect', async () => {
   h.dispatch('pointermove', { clientX: 520, clientY: 430, pointerId: 1 });
   h.dispatch('pointerup', { clientX: 520, clientY: 430, pointerId: 1 });
   await new Promise((r) => setTimeout(r, 5));
-  const last = calls[calls.length - 1];
+  const spatials = calls.filter((c) => c.kind === 'spatial');
+  assert.equal(spatials.length, 1, 'the commit persists exactly once');
+  const last = spatials[spatials.length - 1];
   assert.equal(last.windowId, id);
-  assert.equal(last.width, 420);
-  assert.equal(last.height, 330);
+  assert.equal(last.patch.width, 420);
+  assert.equal(last.patch.height, 330);
 });
 
 test('snap zones render during a header drag for a default-supported surface and emphasize the settling edge', () => {
@@ -732,79 +779,39 @@ test('docked -> floating restore roundtrip works for default-supported surfaces'
   assert.equal(after.rect.x, 0 + (500 - 30), 'floating rect follows the free release point');
 });
 
-test('init seeds lastRevision so the first gated write is gate-protected', async () => {
+test('group work travels as identity-exact group.create intents (no revision token to seed)', async () => {
   const { manager, structural } = groupingManager();
-  await manager.init(); // fixture getWorkspace returns revision 1
+  await manager.init();
   const [a, b] = openThree(manager);
   manager.groupWindows([a, b], { activeWindowId: a });
   await new Promise((r) => setTimeout(r, 5));
-  assert.ok(structural.length >= 1, 'structural write recorded');
-  assert.equal(structural[0].baseRevision, 1,
-    'first gated write carries the seeded revision (null would bypass the 409 gate)');
+  const create = structural.find((c) => c.kind === 'intent' && c.op.kind === 'group.create');
+  assert.ok(create, 'group.create intent recorded');
+  assert.deepEqual(create.op.members.map((m) => m.windowId).sort(), [a, b].sort(), 'members travel as WindowRefs');
+  assert.equal(create.op.active.windowId, a);
 });
 
-test('two desks on one store: gated writes stay revision-protected after init seeding', async () => {
-  // Shared store mimicking lib/workspace revision semantics: every write
-  // bumps revision; gated writes 409 with current state when stale.
-  const store = { revision: 1, windows: [], groups: [], shelf: { windowIds: [] } };
-  const groupCalls = [];
-  let groupsAttempts = 0;
-  const mkApi = () => ({
-    getWorkspace: () => Promise.resolve({ schemaVersion: 3, revision: store.revision, windows: store.windows.map((w) => ({ ...w })), groups: store.groups.map((g) => ({ ...g })), shelf: { windowIds: [] } }),
-    upsertWorkspaceObject: (payload) => {
-      store.revision += 1;
-      store.windows = store.windows.filter((w) => w.windowId !== payload.windowId).concat([{ ...payload }]);
-      return Promise.resolve({ ok: true, object: payload, revision: store.revision });
-    },
-    setWorkspaceGroups: (groups, { baseRevision } = {}) => {
-      groupCalls.push(baseRevision);
-      groupsAttempts += 1;
-      if (groupsAttempts === 1) {
-        // Simulate a foreign writer (the other desk) landing between our
-        // send and server-handle: 409 carrying the post-conflict state.
-        // Faithful to the real ApiError shape (GPT Pro round-6): status
-        // rides ON the error — a workspace payload without status===409
-        // must never adopt-and-retry (that's the classifier contract).
-        store.revision += 1;
-        return Promise.reject(Object.assign(new Error('workspace changed since this edit'), { status: 409, workspace: { revision: store.revision, windows: [], groups: [], shelf: { windowIds: [] } } }));
-      }
-      store.revision += 1;
-      store.groups = groups.map((g) => ({ ...g }));
-      return Promise.resolve({ ok: true, workspace: { revision: store.revision, windows: [], groups: store.groups.map((g) => ({ ...g })), shelf: { windowIds: [] } } });
-    },
-  });
-  const rootA = makeNode('div');
-  const rootB = makeNode('div');
-  const mgrA = wm.WindowManager({ root: rootA, document: fakeDocument, api: mkApi(), viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-  const mgrB = wm.WindowManager({ root: rootB, document: fakeDocument, api: mkApi(), viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-  await Promise.all([mgrA.init(), mgrB.init()]); // BOTH seed lastRevision = 1
-
-  // Desk B lands an object upsert first (bumps the shared store to 2).
-  mgrB.open('references');
-  await new Promise((r) => setTimeout(r, 5));
-  assert.equal(store.revision, 2, 'B upsert bumped the shared store');
-
-  // Desk A opens two windows (upserts bump to 3 then 4, each adopted) and
-  // groups them: the gated write must carry the CURRENT revision — null
-  // would bypass the gate and silently clobber B's landed object.
+test('two desks on one shared v4 surface: no client-side revision gate exists to bypass — disjoint intents converge server-side', async () => {
+  // The v3 whole-array clobber class (stale baseRevision silently
+  // overwriting another desk's landed write) is structurally gone:
+  // membership ops are per-group intents carrying WindowRefs, validated
+  // and serialized server-side (lib/tests/workspace-v4.test.js pins the
+  // disjoint-work property). This test pins the CLIENT half: two desks
+  // over one shared surface produce canonical, dedupable intents.
+  const record = [];
+  const mkApi = () => v4ApiFixture({ record });
+  const mgrA = wm.WindowManager({ root: makeNode('div'), document: fakeDocument, api: mkApi(), viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const mgrB = wm.WindowManager({ root: makeNode('div'), document: fakeDocument, api: mkApi(), viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await Promise.all([mgrA.init(), mgrB.init()]);
+  mgrA.open('references');
   mgrA.open('layers');
+  mgrB.open('probe');
   await new Promise((r) => setTimeout(r, 5));
-  mgrA.open('probe');
-  await new Promise((r) => setTimeout(r, 5));
-  mgrA.groupWindows(['window_layers', 'window_probe'], { activeWindowId: 'window_layers' });
+  mgrA.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
   await new Promise((r) => setTimeout(r, 10));
-
-  // The first attempt must carry a REAL revision token — groupWindows' own
-  // member upserts serialize ahead of it on the chain and are adopted, so
-  // the exact number is their sum with the boot seed; null is the defect
-  // this test exists to forbid.
-  assert.ok(Number.isInteger(groupCalls[0]) && groupCalls[0] >= 2, 'first gated write carried a real (non-null) revision token');
-  // The simulated foreign write forced 409 -> adopt -> retry: convergence,
-  // not a silent drop, is the contract under cross-desk contention.
-  assert.equal(groupCalls[1], groupCalls[0] + 1, 'retry adopted the conflicted revision');
-  assert.equal(groupCalls.length, 2, 'exactly one adopt-and-retry after the conflict');
-  assert.equal(store.groups.length, 1, 'group converged onto the shared store');
-  assert.deepEqual(store.groups[0].windowIds.slice().sort(), ['window_layers', 'window_probe']);
+  const creates = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.create');
+  assert.equal(creates.length, 1, 'one canonical group.create; no revision ladder, no adopt-and-retry');
+  assert.equal(creates[0].op.members.length, 2);
 });
 
 /* ------------------------------------------------------ shelf (Phase 2) */
@@ -813,12 +820,7 @@ function shelfManager() {
   const shelfCalls = [];
   const root = makeNode('div');
   const shelf = makeNode('nav');
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-    setWorkspaceGroups(groups) { return Promise.resolve({ ok: true, workspace: { revision: 2, windows: [], groups, shelf: { windowIds: [] } } }); },
-    setWorkspaceShelf(windowIds) { shelfCalls.push(windowIds); return Promise.resolve({ ok: true, workspace: { revision: 3, windows: [], groups: [], shelf: { windowIds } } }); },
-  };
+  const api = v4ApiFixture({ record: shelfCalls });
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   return { manager, root, shelf, shelfCalls };
 }
@@ -840,7 +842,8 @@ test('minimise is disabled without a shelf; attachShelf re-enables it and render
   assert.ok(chip, 'shelf renders a chip for the minimised window');
   assert.equal(chip.dataset.windowId, 'window_references');
   await new Promise((r) => setTimeout(r, 5));
-  assert.deepEqual(shelfCalls, [['window_references']], 'shelf membership persisted');
+  const minimised = shelfCalls.find((c) => c.kind === 'intent' && c.op.kind === 'shelf.minimise');
+  assert.ok(minimised && minimised.op.window.windowId === 'window_references', 'shelf membership persisted as the shelf.minimise intent');
 
   chip.dispatch('click', {});
   const restored = manager.state('window_references');
@@ -848,7 +851,8 @@ test('minimise is disabled without a shelf; attachShelf re-enables it and render
   assert.deepEqual(restored.rect, { x: 120, y: 90, width: 400, height: 300 }, 'restore preserves the prior rect');
   assert.equal(frame.hidden, false);
   await new Promise((r) => setTimeout(r, 5));
-  assert.deepEqual(shelfCalls[shelfCalls.length - 1], [], 'shelf emptied on restore');
+  const restore = shelfCalls.filter((c) => c.kind === 'intent' && c.op.kind === 'shelf.restore');
+  assert.ok(restore.length >= 1, 'shelf emptied via the shelf.restore intent');
 });
 
 test('dragging a shelf chip out re-floats the window at the drop point', async () => {
@@ -874,14 +878,7 @@ test('dragging a shelf chip out re-floats the window at the drop point', async (
 function groupingManager() {
   const structural = [];
   const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-    setWorkspaceGroups(groups, { baseRevision } = {}) {
-      structural.push({ kind: 'groups', groups, baseRevision });
-      return Promise.resolve({ ok: true, workspace: { revision: 9, windows: [], groups, shelf: { windowIds: [] } } });
-    },
-  };
+  const api = v4ApiFixture({ record: structural });
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   return { manager, root, structural };
 }
@@ -941,7 +938,8 @@ test('tearOut frees the window; the group survives with the remaining pair', asy
   assert.deepEqual(group.windowIds, [a, c], 'group survives losing one member');
   assert.equal(manager.state(a).state, 'tabbed');
   await new Promise((r) => setTimeout(r, 5));
-  assert.ok(structural.some((call) => call.kind === 'groups'), 'structural changes persist');
+  const leave = structural.find((c) => c.kind === 'intent' && c.op.kind === 'group.leave');
+  assert.ok(leave && leave.op.member.windowId === b, 'tear-out persists as the group.leave intent (floating at the drop point)');
 });
 
 test('ungroup returns every member to floating and clears the group', () => {
@@ -974,14 +972,11 @@ test('closing one grouped member never destroys the others', () => {
 
 /* ----------------------- GPT Pro round-3 triage: durable dock + close + cancel */
 
-test('dock commit persists the durable edge; re-float clears it', async () => {
-  const persistCalls = [];
+test('dock commit persists the durable edge as a typed presentation; re-float clears it', async () => {
+  const record = [];
   const root = makeNode('div');
   let snap = { dock: 'left', rect: { x: 0, y: 0, width: 640, height: 800 } };
-  const api = {
-    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-  };
+  const api = v4ApiFixture({ record });
   const manager = wm.WindowManager({
     root, document: fakeDocument, api,
     viewportMetrics: () => ({ width: 1280, height: 800 }),
@@ -995,31 +990,29 @@ test('dock commit persists the durable edge; re-float clears it', async () => {
   fakeDocument.dispatch('pointermove', { clientX: 20, clientY: 130, buttons: 1 });
   fakeDocument.dispatch('pointerup', { clientX: 20, clientY: 130 });
   await new Promise((r) => setTimeout(r, 0));
-  const committed = persistCalls[persistCalls.length - 1];
-  assert.equal(committed.state, 'docked', 'commit persists the docked state');
-  assert.equal(committed.dock, 'left', 'commit persists the durable edge (was: omitted entirely)');
-  // Dragging off the edge re-floats AND clears the stored dock.
+  const pres = record.filter((c) => c.kind === 'intent' && c.op.kind === 'window.setPresentation');
+  assert.equal(pres[pres.length - 1].op.mode, 'docked', 'commit persists the docked presentation');
+  assert.equal(pres[pres.length - 1].op.edge, 'left', 'commit persists the durable edge');
   snap = null;
   head.dispatch('pointerdown', { button: 0, clientX: 20, clientY: 110 });
   fakeDocument.dispatch('pointermove', { clientX: 400, clientY: 130, buttons: 1 });
   fakeDocument.dispatch('pointerup', { clientX: 400, clientY: 130 });
   await new Promise((r) => setTimeout(r, 0));
-  const after = persistCalls[persistCalls.length - 1];
-  assert.equal(after.state, 'floating', 'drag-off-edge re-floats');
-  assert.equal(after.dock, null, 're-float clears the stored dock');
+  const after = record.filter((c) => c.kind === 'intent' && c.op.kind === 'window.setPresentation').pop();
+  assert.equal(after.op.mode, 'floating', 'drag-off-edge re-floats');
+  assert.equal(manager.state(id).dock, null, 're-float clears the stored dock');
 });
 
 test('docked state survives reload: init keeps the edge and re-derives geometry', async () => {
   const root = makeNode('div');
   let dockRectCalls = 0;
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() {
-      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
-        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 400, height: 300, zIndex: 3, state: 'docked', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'left' },
-      ], groups: [], shelf: { windowIds: [] } });
-    },
-  };
+  const api = v4ApiFixture({ doc: {
+    schemaVersion: 4, structuralRevision: 5, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_d1' }, type: 'layers_panel', space: 'screen', entityRef: 'layers:main', presentation: { kind: 'docked', edge: 'left' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 16, y: 66, width: 400, height: 300, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [] }, focus: null,
+  } });
   const manager = wm.WindowManager({
     root, document: fakeDocument, api,
     viewportMetrics: () => ({ width: 1280, height: 800 }),
@@ -1033,20 +1026,20 @@ test('docked state survives reload: init keeps the edge and re-derives geometry'
   assert.equal(st.rect.y, 66);
 });
 
-test('close is authoritative server-side: the persisted row is deleted through the write chain', async () => {
-  const deletes = [];
+test('close is authoritative server-side: the durable window.close intent carries the exact incarnation', async () => {
+  const record = [];
   const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    deleteWorkspaceWindow(windowId) { deletes.push(windowId); return Promise.resolve({ ok: true, revision: 9 }); },
-    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-  };
+  const api = v4ApiFixture({ record });
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   manager.open('references');
-  await new Promise((r) => setTimeout(r, 0)); // open()'s persist is async: model.persisted must be set before close
+  await new Promise((r) => setTimeout(r, 0)); // the create lands and its ref is adopted before close
   manager.close('window_references');
   await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(deletes, ['window_references'], 'close deletes the persisted row (was: resurrected on reload)');
+  const closeOp = record.find((c) => c.kind === 'intent' && c.op.kind === 'window.close');
+  assert.ok(closeOp, 'close travels as the window.close intent');
+  assert.equal(closeOp.op.window.windowId, 'window_references');
+  assert.equal(closeOp.op.window.generation, 1, 'identity-exact: the adopted canonical ref, not a bare id');
+  assert.ok(closeOp.op.window.incarnationId, 'incarnation carried — a stale-tab close can never touch a reopened one');
 });
 
 test('drag pointercancel is a terminal: geometry reverts, overlays clear, nothing persists', async () => {
@@ -1082,36 +1075,34 @@ test('drag pointercancel is a terminal: geometry reverts, overlays clear, nothin
 
 /* ----------------- GPT Pro round-4 triage: close race, shelf docks, severed */
 
-test('close before the first persist lands still deletes: the upsert can never resurrect', async () => {
-  const deletes = [];
+test('close before the create lands still closes identity-exactly: the chain serializes create-then-close', async () => {
+  const record = [];
   const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    deleteWorkspaceWindow(windowId) { deletes.push(windowId); return Promise.resolve({ ok: true, workspace: { revision: 9 } }); },
-    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-  };
+  const api = v4ApiFixture({ record });
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   manager.open('references');
-  manager.close('window_references'); // NO flush: the open() upsert is still queued on the write chain
+  manager.close('window_references'); // NO flush: the create is still queued on the write chain
   await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(deletes, ['window_references'], 'unconditional close-delete: the late upsert can never resurrect (GPT Pro round-4)');
+  const createOp = record.find((c) => c.kind === 'intent' && c.op.kind === 'window.create');
+  const closeOp = record.find((c) => c.kind === 'intent' && c.op.kind === 'window.close');
+  assert.ok(createOp, 'create recorded');
+  assert.ok(closeOp, 'close recorded');
+  assert.equal(closeOp.op.window.incarnationId, createOp.op.incarnationId, 'close carries the incarnation the create minted — resurrection is structurally impossible (GPT Pro round-4)');
 });
 
 test('minimise then restore returns a docked window to its stored edge', async () => {
-  const persistCalls = [];
+  const record = [];
   const root = makeNode('div');
   const shelf = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() {
-      // Seed a docked-left window that is ALSO on the shelf: restore must
-      // return it to the dock, not float it (GPT Pro round-4).
-      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
-        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 380, height: 600, zIndex: 3, state: 'minimised', groupId: null, collapsed: true, pinned: false, locked: false, dock: 'left' },
-      ], groups: [], shelf: { windowIds: ['window_layers'] } });
-    },
-    setWorkspaceShelf(ids) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups: [], shelf: { windowIds: ids } } }); },
-  };
+  const api = v4ApiFixture({ record, doc: {
+    // Seed a docked-left window that is ALSO on the shelf: restore must
+    // return it to the dock, not float it (GPT Pro round-4).
+    schemaVersion: 4, structuralRevision: 5, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_m1' }, type: 'layers_panel', space: 'screen', entityRef: 'layers:main', presentation: { kind: 'docked', edge: 'left' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 16, y: 66, width: 380, height: 600, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [{ windowId: 'window_layers', generation: 1, incarnationId: 'inc_m1' }] }, focus: null,
+  } });
   const manager = wm.WindowManager({
     root, document: fakeDocument, api,
     viewportMetrics: () => ({ width: 1280, height: 800 }),
@@ -1123,26 +1114,26 @@ test('minimise then restore returns a docked window to its stored edge', async (
   const st = manager.state('window_layers');
   assert.equal(st.state, 'docked', 'shelf restore returns the window to its stored dock (was: always floated)');
   assert.equal(st.rect.x, 16, 'docked geometry re-derives from the stored edge');
+  await new Promise((r) => setTimeout(r, 0)); // queueIntent is async: flush the chain before reading the record
+  const restoreOp = record.find((c) => c.kind === 'intent' && c.op.kind === 'shelf.restore');
+  assert.equal(restoreOp.op.mode, 'resume', 'dock-aware restore resumes the latent presentation');
 });
 
-test('init repairs an out-of-policy docked row and persists the repair immediately', async () => {
-  const persistCalls = [];
+test('init repairs an out-of-policy docked row with a durable presentation intent', async () => {
+  const record = [];
   const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() {
-      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
-        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 400, height: 300, zIndex: 3, state: 'docked', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'top' },
-      ], groups: [], shelf: { windowIds: [] } });
-    },
-  };
+  const api = v4ApiFixture({ record, doc: {
+    schemaVersion: 4, structuralRevision: 5, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_r1' }, type: 'layers_panel', space: 'screen', entityRef: 'layers:main', presentation: { kind: 'docked', edge: 'top' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 16, y: 66, width: 400, height: 300, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [] }, focus: null,
+  } });
   const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
   await manager.init();
   assert.equal(manager.state('window_layers').state, 'floating');
-  const repair = persistCalls.find((p) => p.windowId === 'window_layers');
-  assert.ok(repair, 'the repair is persisted immediately (was: malformed row returned every session)');
-  assert.equal(repair.state, 'floating');
-  assert.equal(repair.dock, null);
+  const repair = record.find((c) => c.kind === 'intent' && c.op.kind === 'window.setPresentation' && c.op.mode === 'floating');
+  assert.ok(repair, 'the repair is a durable intent (was: malformed row returned every session)');
 });
 
 test('tab tear and shelf chip severed buttons abort without tearing or restoring', async () => {
@@ -1166,104 +1157,8 @@ test('tab tear and shelf chip severed buttons abort without tearing or restoring
 
 /* --------------------- GPT Pro round-5 triage: error classes + invariants */
 
-test('close-delete classifies errors: 409 adopts and retries once, 404 anywhere is success', async () => {
-  const deleteCalls = [];
-  const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    deleteWorkspaceWindow(windowId) {
-      deleteCalls.push(windowId);
-      if (deleteCalls.length === 1) {
-        const conflict = new Error('stale baseRevision');
-        conflict.status = 409;
-        conflict.workspace = { revision: 7, windows: [], groups: [], shelf: { windowIds: [] } };
-        return Promise.reject(conflict);
-      }
-      if (deleteCalls.length === 2) {
-        const gone = new Error('unknown workspace window');
-        gone.status = 404; // the retry finds the row already absent: success
-        return Promise.reject(gone);
-      }
-      return Promise.resolve({ ok: true, workspace: { revision: 9 } });
-    },
-    getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-  };
-  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-  manager.open('references');
-  manager.close('window_references');
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(deleteCalls.length, 2, '409 adopted the server revision and retried exactly once');
-  // A 404 on the retry path settled as idempotent success — no warning loop,
-  // no third call, no unhandled rejection.
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(deleteCalls.length, 2, '404 on the retry path terminates as success');
-});
 
-test('close-delete warn path: a 5xx without workspace never retries and never silently settles', async () => {
-  const deleteCalls = [];
-  const warnings = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => warnings.push(args.join(' '));
-  try {
-    const root = makeNode('div');
-    const api = {
-      upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-      deleteWorkspaceWindow(windowId) {
-        deleteCalls.push(windowId);
-        const boom = new Error('gateway exploded');
-        boom.status = 502; // transport-class failure: NO workspace, NOT 404
-        return Promise.reject(boom);
-      },
-      getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-    };
-    const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-    manager.open('references');
-    manager.close('window_references');
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    assert.equal(deleteCalls.length, 1, 'a 5xx is neither absent-success (no silent settle) nor conflict (no retry): one attempt');
-    assert.ok(warnings.some((w) => w.includes('window_references') && w.includes('close-delete failed')),
-      'uncertain failure stays visible through the warn path (GPT Pro round-5)');
-  } finally {
-    console.warn = origWarn;
-  }
-});
 
-test('close-delete both-attempts-fail path: 409 then 5xx retries once, warns, never silently settles', async () => {
-  const deleteCalls = [];
-  const warnings = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => warnings.push(args.join(' '));
-  try {
-    const root = makeNode('div');
-    const api = {
-      upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-      deleteWorkspaceWindow(windowId) {
-        deleteCalls.push(windowId);
-        if (deleteCalls.length === 1) {
-          const conflict = new Error('stale baseRevision');
-          conflict.status = 409;
-          conflict.workspace = { revision: 7, windows: [], groups: [], shelf: { windowIds: [] } };
-          return Promise.reject(conflict);
-        }
-        const boom = new Error('gateway exploded on retry');
-        boom.status = 502; // conflict adopted, retried, retry failed non-404
-        return Promise.reject(boom);
-      },
-      getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 1, windows: [], groups: [], shelf: { windowIds: [] } }); },
-    };
-    const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-    manager.open('references');
-    manager.close('window_references');
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    assert.equal(deleteCalls.length, 2, 'exactly conflict + one retry: the 409 is adopted and retried once');
-    assert.ok(warnings.some((w) => w.includes('window_references') && w.includes('close-delete failed')),
-      'a non-404 retry failure stays visible through the warn catch (was: silently settled as absence)');
-  } finally {
-    console.warn = origWarn;
-  }
-});
 
 test('registry deep-freeze: defaultPlacement and contextualTools reject mutation', () => {
   const placement = { width: 500, height: 400, dock: null };
@@ -1280,77 +1175,8 @@ test('registry deep-freeze: defaultPlacement and contextualTools reject mutation
   assert.equal(def.contextualTools[0].id, 'note', 'retained source reference cannot rewrite the registered tool');
 });
 
-test('init repairs a stale dock on a TABBED row while keeping the group', async () => {
-  const persistCalls = [];
-  const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() {
-      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
-        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 100, y: 100, width: 380, height: 280, zIndex: 3, state: 'tabbed', groupId: 'g_stale', collapsed: false, pinned: false, locked: false, dock: 'right' },
-        { windowId: 'window_references', type: 'reference_board', space: 'screen', entityRef: 'board:references', x: 100, y: 100, width: 380, height: 280, zIndex: 4, state: 'tabbed', groupId: 'g_stale', collapsed: false, pinned: false, locked: false, dock: null },
-      ], groups: [{ groupId: 'g_stale', windowIds: ['window_layers', 'window_references'], activeWindowId: 'window_references' }], shelf: { windowIds: [] } });
-    },
-    setWorkspaceGroups(groups) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups, shelf: { windowIds: [] } } }); },
-  };
-  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-  await manager.init();
-  const st = manager.state('window_layers');
-  assert.equal(st.state, 'tabbed', 'group membership is untouched by the repair');
-  assert.equal(st.dock, null, 'the stale dock on a tabbed member is cleared in memory');
-  const repair = persistCalls.find((p) => p.windowId === 'window_layers' && p.dock === null);
-  assert.ok(repair, 'and the tabbed-row repair is persisted (was: only floating rows were repaired)');
-});
 
-test('init repairs a stale dock on a floating row: no surprise re-dock later', async () => {
-  const persistCalls = [];
-  const root = makeNode('div');
-  const shelf = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { persistCalls.push(payload); return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() {
-      // {state: floating, dock: left} — the inconsistent hybrid GPT round-5
-      // flagged: a later minimise/restore surprise-redocks from it.
-      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
-        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 200, y: 200, width: 380, height: 280, zIndex: 3, state: 'floating', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'left' },
-      ], groups: [], shelf: { windowIds: [] } });
-    },
-    setWorkspaceShelf(ids) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups: [], shelf: { windowIds: ids } } }); },
-  };
-  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-  await manager.init();
-  const repaired = persistCalls.find((p) => p.windowId === 'window_layers' && p.dock === null);
-  assert.ok(repaired, 'the stale dock on a floating row is cleared and persisted at init');
-  manager.attachShelf(shelf);
-  manager.minimise('window_layers');
-  manager.restore('window_layers');
-  assert.equal(manager.state('window_layers').state, 'floating', 'restore after repair floats: no surprise redock from a stale edge');
-});
 
-test('shelf restore to docked shows content: collapsed is cleared', async () => {
-  const root = makeNode('div');
-  const shelf = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() {
-      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
-        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 380, height: 600, zIndex: 3, state: 'minimised', groupId: null, collapsed: true, pinned: false, locked: false, dock: 'left' },
-      ], groups: [], shelf: { windowIds: ['window_layers'] } });
-    },
-    setWorkspaceShelf(ids) { return Promise.resolve({ ok: true, workspace: { revision: 6, windows: [], groups: [], shelf: { windowIds: ids } } }); },
-  };
-  const manager = wm.WindowManager({
-    root, document: fakeDocument, api,
-    viewportMetrics: () => ({ width: 1280, height: 800 }),
-    geometry: { dockRect: (dock, rect) => ({ ...rect, x: 16 }) },
-  });
-  await manager.init();
-  manager.attachShelf(shelf);
-  manager.restore('window_layers');
-  const st = manager.state('window_layers');
-  assert.equal(st.state, 'docked');
-  assert.equal(st.collapsed, false, 'dock restore renders the body, not a header-only rail (GPT Pro round-5)');
-});
 
 test('resize cancel after anchored-edge undock restores the full lifecycle', async () => {
   const persistCalls = [];
@@ -1450,20 +1276,6 @@ test('dock policy: an edge outside dockEdges never docks and its zone never pain
   assert.equal(manager.state('window_layers').state, 'floating', 'release over a forbidden edge never docks');
 });
 
-test('init downgrades a persisted docked row whose edge is outside the surface policy', async () => {
-  const root = makeNode('div');
-  const api = {
-    upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-    getWorkspace() {
-      return Promise.resolve({ schemaVersion: 3, revision: 5, windows: [
-        { windowId: 'window_layers', type: 'layers_panel', space: 'screen', entityRef: 'layers:main', x: 16, y: 66, width: 400, height: 300, zIndex: 3, state: 'docked', groupId: null, collapsed: false, pinned: false, locked: false, dock: 'top' },
-      ], groups: [], shelf: { windowIds: [] } });
-    },
-  };
-  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-  await manager.init();
-  assert.equal(manager.state('window_layers').state, 'floating', 'top-docked layers row downgrades: top is outside its dock policy');
-});
 
 test('registry policy data is frozen through nesting: retained sources cannot rewrite nested values', () => {
   // GPT Pro round-6 minor: shallow clones left nested configuration mutable
@@ -1478,38 +1290,6 @@ test('registry policy data is frozen through nesting: retained sources cannot re
   assert.equal(def.contextualTools[0].payload.keybind, 'n');
 });
 
-test('structural writes retry ONLY genuine 409 conflicts: diagnostics riding other statuses warn instead', async () => {
-  // GPT Pro round-6 minor: close/shelf/groups classified conflict by payload
-  // presence, so any error attaching workspace data could masquerade as an
-  // adoptable conflict. The wire contract: ApiError carries status — 409 only.
-  const warnings = [];
-  const origWarn = console.warn;
-  console.warn = (...args) => warnings.push(args.join(' '));
-  try {
-    let shelfAttempts = 0;
-    const root = makeNode('div');
-    const api = {
-      upsertWorkspaceObject(payload) { return Promise.resolve({ ok: true, object: payload }); },
-      getWorkspace() { return Promise.resolve({ schemaVersion: 3, revision: 9, windows: [], groups: [], shelf: { windowIds: [] } }); },
-      setWorkspaceShelf(windowIds) {
-        shelfAttempts += 1;
-        const boom = new Error('gateway exploded');
-        boom.status = 503; // transport-class failure that ALSO carries diagnostics
-        boom.workspace = { revision: 12, windows: [], groups: [], shelf: { windowIds: [] } };
-        return Promise.reject(boom);
-      },
-    };
-    const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
-    manager.open('references');
-    manager.minimise('window_references');
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    assert.equal(shelfAttempts, 1, 'diagnostics on a non-409 must never adopt-and-retry');
-    assert.ok(warnings.some((w) => w.includes('shelf is not persisting')), 'uncertain structural failure stays visible through the warn path');
-  } finally {
-    console.warn = origWarn;
-  }
-});
 
 test('title model/DOM split (S0): state().title is always a string; span, tabs and shelf chips render it', () => {
   const { manager, root } = freshManager();
@@ -1538,4 +1318,99 @@ test('title model/DOM split (S0): state().title is always a string; span, tabs a
   const chip = shelf.children.find((c) => c.classList.contains('freeform-shelf-chip'));
   assert.equal(chip.textContent, 'Custom Refs', 'shelf chip label is the title string');
   assert.equal(chip.getAttribute('aria-label'), 'restore Custom Refs');
+});
+
+/* ---- v4 cutover replacements for the retired v3 error-class/repair tests
+ * (close-delete 409/404 ladder, revision-gate classification, stale-dock
+ * hybrids, out-of-policy downgrade): their guarantees moved to the typed
+ * intent protocol — terminal-vs-transient classification lives in
+ * v4-client.test.js, taxonomy enforcement in lib/tests/workspace-v4.test.js,
+ * and the manager-level contracts below. ---- */
+
+test('v4 close classification: 410 (already tombstoned) settles silently; transient failures stay visible', async () => {
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    {
+      const record = [];
+      const api = v4ApiFixture({ record });
+      api.applyWorkspaceIntent = (payload) => {
+        record.push({ kind: 'intent', op: payload.op, intentId: payload.intentId });
+        return Promise.reject(Object.assign(new Error('WINDOW_GENERATION_GONE window_references'), { status: 410, code: 'WINDOW_GENERATION_GONE', detail: { code: 'WINDOW_GENERATION_GONE' } }));
+      };
+      const manager = wm.WindowManager({ root: makeNode('div'), document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+      manager.open('references');
+      manager.close('window_references');
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      assert.ok(record.some((c) => c.op.kind === 'window.close'), 'close intent sent');
+      assert.ok(!warnings.some((w) => w.includes('close not confirmed')), 'already-tombstoned settles as idempotent success: no warn, no retry');
+    }
+    {
+      const record = [];
+      const api = v4ApiFixture({ record });
+      api.applyWorkspaceIntent = (payload) => {
+        record.push({ kind: 'intent', op: payload.op, intentId: payload.intentId });
+        return Promise.reject(Object.assign(new Error('gateway exploded'), { status: 502 }));
+      };
+      const manager = wm.WindowManager({ root: makeNode('div'), document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+      manager.open('references');
+      manager.close('window_references');
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      assert.ok(warnings.some((w) => w.includes('close not confirmed')), 'uncertain close failure stays visible (the outbox holds the intent durably)');
+    }
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('v4 rows cannot carry stale-dock hybrids: lifecycle derives from canonical ownership', async () => {
+  // The v3 hybrids ({state:'tabbed',dock:'right'} / {state:'floating',
+  // dock:'left'}) are structurally impossible in v4: an edge exists only
+  // inside presentation:{kind:'docked',edge}; tabbed/minimised/floating are
+  // DERIVED from group/shelf membership at restore. A grouped member with a
+  // latent docked presentation keeps the edge as LATENT (group.leave resume
+  // reapplies it) — never as current state.
+  const api = v4ApiFixture({ doc: {
+    schemaVersion: 4, structuralRevision: 5, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_t1' }, type: 'layers_panel', entityRef: 'layers:main', presentation: { kind: 'docked', edge: 'left' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 100, y: 100, width: 380, height: 280, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+      { ref: { windowId: 'window_references', generation: 1, incarnationId: 'inc_t2' }, type: 'reference_board', entityRef: 'board:references', presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 100, y: 100, width: 380, height: 280, rotation: 0, scale: 1, zIndex: 4 }, structureVersion: 1, spatialVersion: 1 },
+      { ref: { windowId: 'window_notes', generation: 1, incarnationId: 'inc_t3' }, type: 'note', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 200, y: 200, width: 300, height: 220, rotation: 0, scale: 1, zIndex: 5 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [{ groupId: 'g_stale', version: 1, members: [{ windowId: 'window_layers', generation: 1, incarnationId: 'inc_t1' }, { windowId: 'window_references', generation: 1, incarnationId: 'inc_t2' }], active: { windowId: 'window_references', generation: 1, incarnationId: 'inc_t2' } }],
+    shelf: { version: 1, members: [] }, focus: null,
+  } });
+  const root = makeNode('div');
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  assert.equal(manager.state('window_layers').state, 'tabbed', 'group membership derives tabbed');
+  assert.equal(manager.state('window_layers').dock, 'left', 'a latent docked presentation survives grouping as LATENT state (resume material)');
+  assert.equal(manager.state('window_references').state, 'tabbed', 'active member derives tabbed');
+  assert.equal(manager.state('window_notes').state, 'floating', 'ungrouped derives floating');
+  assert.equal(manager.state('window_notes').dock, null, 'floating presentation carries NO edge — the surprise-redock hybrid cannot exist');
+});
+
+test('shelf restore to docked shows content: collapsed is cleared', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record, doc: {
+    schemaVersion: 4, structuralRevision: 5, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_c1' }, type: 'layers_panel', space: 'screen', entityRef: 'layers:main', presentation: { kind: 'docked', edge: 'left' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 16, y: 66, width: 380, height: 600, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [{ windowId: 'window_layers', generation: 1, incarnationId: 'inc_c1' }] }, focus: null,
+  } });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: { dockRect: (d, rect) => ({ ...rect, x: 16 }) } });
+  await manager.init();
+  const shelf = makeNode('div');
+  manager.attachShelf(shelf);
+  manager.restore('window_layers');
+  const st = manager.state('window_layers');
+  assert.equal(st.state, 'docked');
+  assert.equal(st.collapsed, false, 'restored docked window shows content (collapse cleared)');
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  assert.ok(frame && !frame.classList.contains('freeform-window-collapsed'), 'body renders expanded');
 });

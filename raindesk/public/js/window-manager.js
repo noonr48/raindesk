@@ -123,8 +123,14 @@
    *   .state(windowId) / .list()
    *   .init() — restore persisted windows (workspace v3 windows[])
    */
-  function WindowManager({ root, document, api, viewportMetrics, shelfHost, geometry } = {}) {
+  function WindowManager({ root, document, api, v4: v4Given, viewportMetrics, shelfHost, geometry } = {}) {
     if (!root || !document) throw new Error('WindowManager requires root and document');
+    // v4 client: injected in production (app.js shares the boot-replay
+    // client); self-constructed as a memory-only fallback when the host
+    // provides the v4 api surface (tests, embedded hosts).
+    const v4lib = (typeof RaindeskV4Client !== 'undefined' && RaindeskV4Client) || (root && root.RaindeskV4Client) || null;
+    const v4 = v4Given || (v4lib && api && typeof api.applyWorkspaceIntent === 'function'
+      ? v4lib.V4Client({ api, storage: null, warn: () => {} }) : null);
     const geo = geometry || Geometry;
     const metrics = viewportMetrics || (() => ({ width: root.clientWidth || 1280, height: root.clientHeight || 800 }));
     const windows = new Map();        // windowId -> model
@@ -172,32 +178,28 @@
 
     /* ------------------------------------------------------- persistence */
 
+    /* v4 spatial persistence: geometry and z-order ride the mutationId-
+     * deduped PATCH lane; structural facts never travel here. A 410/409 for
+     * our own incarnation means the server closed/replaced it — drop the
+     * local ghost instead of fighting; transient failures warn once and
+     * keep the window usable (the next gesture re-commits latest truth). */
     function persist(model) {
-      if (!api || typeof api.upsertWorkspaceObject !== 'function') return Promise.resolve(model);
-      const next = writeChain.then(() => api.upsertWorkspaceObject({
-        windowId: model.windowId,
-        type: model.entityType,
-        entityRef: model.entityRef || undefined,
+      if (!v4 || !model.ref) return Promise.resolve(model);
+      const next = writeChain.then(() => v4.spatial(model.ref, {
         x: Math.round(model.rect.x), y: Math.round(model.rect.y),
         width: Math.round(model.rect.width), height: Math.round(model.rect.height),
         zIndex: model.zIndex,
-        state: model.state,
-        dock: model.dock || null,
-        collapsed: model.collapsed,
-        pinned: model.pinned,
-        locked: model.locked,
       })).then((res) => {
-        model.persisted = true;
-        // Ungated upserts still bump the server revision; adopt it (monotonic —
-        // an older response arriving late must never move it backward) so
-        // gated structural writes (groups/shelf) do not fire stale.
-        const rev = res && res.revision;
-        if (Number.isFinite(rev)) lastRevision = Math.max(lastRevision, rev);
-        model.persistFailed = false; return model;
+        model.persisted = true; model.persistFailed = false;
+        const row = res && res.window;
+        if (row && row.ref) { model.ref = { ...row.ref }; if (row.spatialVersion) model.spatialVersion = row.spatialVersion; }
+        return model;
       }).catch((error) => {
-        // Bounded failure signal: persistence must not break the creative
-        // flow, but a window that never reaches disk deserves one visible
-        // warning per window, not silence (adversarial-review repair).
+        const code = error && (error.code || (error.detail && error.detail.code));
+        if (code === 'WINDOW_GENERATION_GONE' || code === 'INCARNATION_REPLACED') {
+          dropModel(model.windowId, `window ${model.windowId} closed elsewhere (${code})`);
+          return null;
+        }
         if (!model.persistFailed) {
           model.persistFailed = true;
           console.warn(`[freeform] window ${model.windowId} is not persisting:`, error && error.message || error);
@@ -207,6 +209,96 @@
       writeChain = next.catch(() => {});
       saves.set(model.windowId, next);
       return next;
+    }
+
+    /* ------------------------------------------------ v4 intent plumbing */
+
+    const intentWarned = new Set();
+
+    /** Serialize a v4 intent behind every pending write. Typed-terminal
+     * conflicts (our incarnation gone/replaced) settle by dropping the
+     * local ghost; transient failures warn once per kind — the outbox
+     * already holds the op durably for boot replay. */
+    function queueIntent(op) {
+      if (!v4) return Promise.resolve(null);
+      const run = () => v4.intent(op).then((response) => {
+        if (response && response.changed) adoptResponse(response);
+        return response;
+      }).catch((error) => {
+        const code = error && (error.code || (error.detail && error.detail.code));
+        const target = (op.window || op.member || (op.target && op.target.window) || {}).windowId;
+        if ((code === 'WINDOW_GENERATION_GONE' || code === 'INCARNATION_REPLACED') && target) {
+          dropModel(target, `window ${target} closed elsewhere (${code})`);
+        } else if (!intentWarned.has(op.kind)) {
+          intentWarned.add(op.kind);
+          console.warn('[freeform]', op.kind, 'not persisting:', error && error.message || error);
+        }
+        return null;
+      });
+      writeChain = writeChain.then(run, run);
+      return writeChain;
+    }
+
+    /** Server responses are canonical: adopt refs, derived presentation,
+     * group membership and shelf state for every affected row. */
+    function adoptResponse(response) {
+      const changed = response && response.changed;
+      if (!changed) return;
+      if (Number.isFinite(response.structuralRevision)) lastRevision = Math.max(lastRevision, response.structuralRevision);
+      for (const row of changed.windows || []) {
+        if (!row || !row.ref) continue;
+        const model = windows.get(row.ref.windowId);
+        if (!model) continue;
+        model.ref = { ...row.ref };
+        const kind = row.presentation && row.presentation.kind;
+        if (kind && model.state !== 'minimised' && model.state !== 'tabbed') {
+          model.dock = kind === 'docked' ? row.presentation.edge : null;
+          const next = kind === 'docked' ? 'docked' : kind === 'maximised' ? 'maximised' : 'floating';
+          if (model.state !== next) {
+            model.state = next;
+            if (next === 'maximised' && !model.restoreRect) model.restoreRect = { ...model.rect };
+            if (next !== 'maximised') model.restoreRect = null;
+          }
+        }
+        renderFrame(model);
+      }
+      for (const group of changed.groups || []) {
+        if (!group || !group.groupId) continue;
+        if (Array.isArray(group.members) && group.members.length === 0) groups.delete(group.groupId);
+        else if (Array.isArray(group.members)) {
+          groups.set(group.groupId, {
+            groupId: group.groupId, version: group.version,
+            windowIds: group.members.map((m) => m.windowId),
+            activeWindowId: group.active && group.active.windowId,
+          });
+          for (const m of group.members) { const win = windows.get(m.windowId); if (win) win.groupId = group.groupId; }
+        }
+      }
+      if (changed.shelf && Array.isArray(changed.shelf.members)) {
+        const shelved = new Set(changed.shelf.members.map((m) => m.windowId));
+        for (const model of windows.values()) {
+          if (model.state === 'minimised' && !shelved.has(model.windowId)) {
+            model.state = 'floating';
+            renderFrame(model);
+          }
+        }
+        renderShelf();
+      }
+    }
+
+    /** Remove a local model whose server incarnation is gone. */
+    function dropModel(windowId, reason) {
+      const model = windows.get(windowId);
+      if (!model) return;
+      console.warn(`[freeform] ${reason}`);
+      abortGesturesFor(windowId);
+      removeFromGroup(model);
+      const controller = controllers.get(windowId);
+      if (controller && typeof controller.destroy === 'function') { try { controller.destroy(); } catch (_e) {} }
+      if (model.frame && model.frame.parentNode) model.frame.parentNode.removeChild(model.frame);
+      windows.delete(windowId); controllers.delete(windowId); saves.delete(windowId);
+      if (focusedId === windowId) focusedId = null;
+      renderShelf();
     }
 
     /* ---------------------------------------------------------- rendering */
@@ -543,7 +635,10 @@
           if (drop && drop.kind === 'group') { joinGroup(current.windowId, drop.targetWindowId); return; }
           const snapped = snapPlace(current, ev.altKey);
           if (snapped) applySnap(current, snapped);
-          else if (current.state === 'docked') { current.dock = null; transition(current, 'floating'); } // dragged off the edge re-floats
+          else if (current.state === 'docked') { // dragged off the edge re-floats
+            current.dock = null; transition(current, 'floating');
+            if (v4 && current.ref) queueIntent({ kind: 'window.setPresentation', window: { ...current.ref }, mode: 'floating', floatingAt: { x: Math.round(current.rect.x), y: Math.round(current.rect.y) } });
+          }
           renderFrame(current);
           await persist(current);
         };
@@ -657,6 +752,7 @@
         model.rect = { ...snapped.rect };
         model.dock = snapped.dock; // durable edge: docking must survive reload (GPT Pro round-3)
         transition(model, 'docked');
+        if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'docked', edge: snapped.dock });
       }
     }
 
@@ -682,6 +778,7 @@
         dock: null,
         collapsed: false, pinned: false, locked: false,
         restoreRect: null,
+        ref: { windowId, generation: 0, incarnationId: v4 ? v4.mintIncarnation(windowId) : `inc_${windowId}` },
         onRename: options.onRename || null,
         frame: null, body: null, head: null, titleEl: null,
       };
@@ -699,7 +796,27 @@
       controllers.set(windowId, controller);
       bringToFront(windowId);
       if (options.focus !== false) focus(windowId);
-      persist(model);
+      // v4 create: identity-safe birth. The outbox holds the intent durably
+      // until the server confirms; the response adopts the canonical ref
+      // (generation becomes server truth). Transient failure warns once per
+      // window — geometry re-commits on the next gesture.
+      if (v4) {
+        writeChain = writeChain.then(() => v4.intent({
+          kind: 'window.create', windowId, incarnationId: model.ref.incarnationId,
+          type: model.entityType, entityRef: model.entityRef || undefined,
+          x: Math.round(model.rect.x), y: Math.round(model.rect.y),
+          width: Math.round(model.rect.width), height: Math.round(model.rect.height),
+        }).then((response) => {
+          const row = response && response.changed && response.changed.windows && response.changed.windows[0];
+          if (row && row.ref) model.ref = { ...row.ref };
+          model.persisted = true; model.persistFailed = false;
+        }).catch((error) => {
+          if (!model.persistFailed) {
+            model.persistFailed = true;
+            console.warn(`[freeform] window ${windowId} create not persisting:`, error && error.message || error);
+          }
+        }));
+      }
       return controller;
     }
 
@@ -723,8 +840,7 @@
       transition(model, 'minimised');
       renderFrame(model);
       renderShelf();
-      persist(model);
-      persistShelfMembership();
+      if (v4 && model.ref) queueIntent({ kind: 'shelf.minimise', window: { ...model.ref } });
       return model;
     }
     function restore(windowId) {
@@ -741,14 +857,21 @@
       renderFrame(model);
       renderShelf();
       bringToFront(windowId);
+      if (v4 && model.ref) queueIntent({
+        kind: 'shelf.restore', window: { ...model.ref },
+        mode: dockOk ? 'resume' : 'floating',
+        ...(dockOk ? {} : { floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) } }),
+      });
       persist(model);
-      persistShelfMembership();
       return model;
     }
     function restoreAt(windowId, x, y) {
       const model = restore(windowId);
       if (model && Number.isFinite(x) && Number.isFinite(y)) {
-        if (model.state === 'docked') { model.dock = null; transition(model, 'floating'); } // explicit placement wins over the stored dock
+        if (model.state === 'docked') { // explicit placement wins over the stored dock
+          model.dock = null; transition(model, 'floating');
+          if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(x), y: Math.round(y) } });
+        }
         model.rect.x = x; model.rect.y = y;
         renderFrame(model);
         persist(model);
@@ -823,49 +946,15 @@
       });
     }
 
-    /** Shelf membership persists through the revision-gated shelf route,
-     * with the same adopt-and-retry-once on 409 as the groups path: a stale
-     * baseRevision (drag upserts bump the server revision) adopts the
-     * server's revision and retries rather than warning and dropping. */
-    function persistShelfMembership() {
-      if (!api || typeof api.setWorkspaceShelf !== 'function') return Promise.resolve();
-      const ids = [...windows.values()].filter((m) => m.state === 'minimised').map((m) => m.windowId);
-      const attempt = (baseRevision) => api.setWorkspaceShelf(ids, { baseRevision }).then((res) => {
-        const ws = res && res.workspace;
-        if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision, ws.revision);
-        shelfWarned = false;
-      }).catch((error) => {
-        // Conflict classification (GPT Pro round-6): ONLY a 409 carrying a
-        // valid canonical conflict payload is adoptable. Transport loss,
-        // auth, 5xx — or any other status attaching diagnostic workspace
-        // state — must warn WITHOUT retry: replaying a whole-collection
-        // write after an uncertain failure could clobber another client's
-        // disjoint edit.
-        if (!(error && error.status === 409 && error.workspace && Number.isFinite(error.workspace.revision))) {
-          if (!shelfWarned) {
-            shelfWarned = true;
-            console.warn('[freeform] shelf is not persisting:', error && error.message || error);
-          }
-          return;
-        }
-        const ws = error.workspace;
-        // Same adoption-on-conflict as groups: stale tokens die here.
-        lastRevision = Math.max(lastRevision, ws.revision);
-        if (baseRevision !== null && !shelfWarned) {
-          shelfWarned = true;
-          return attempt(ws.revision);
-        }
-      });
-      // Serialized behind every pending workspace write.
-      writeChain = writeChain.then(() => attempt(lastRevision), () => attempt(lastRevision));
-      return writeChain;
-    }
+    /* (v3 whole-collection persistence removed by the v4 cutover: groups,
+     * shelf and delete now travel as identity-exact intents — see
+     * queueIntent. Criterion: zero v3 workspace writes in this module.) */
     function maximise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
       if (model.state === 'maximised') return model;
       transition(model, 'maximised');
       renderFrame(model);
-      persist(model);
+      if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'maximised' });
       return model;
     }
     function unmaximise(windowId) {
@@ -873,7 +962,9 @@
       if (model.state !== 'maximised') return model;
       transition(model, 'floating');
       renderFrame(model);
-      persist(model);
+      // v4 restore re-applies the typed beforeMaximise presentation (the
+      // server remembers the dock edge the old state machine lost).
+      if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'restore' });
       return model;
     }
     function close(windowId) {
@@ -885,49 +976,17 @@
       if (model.frame && model.frame.parentNode) model.frame.parentNode.removeChild(model.frame);
       windows.delete(windowId); controllers.delete(windowId); saves.delete(windowId);
       if (focusedId === windowId) focusedId = null;
-      persistStructure();
-      if (api && typeof api.deleteWorkspaceWindow === 'function') {
-        // Close is authoritative server-side (GPT Pro round-4): enqueue the
-        // delete UNCONDITIONALLY after pending writes — gating on
-        // model.persisted raced the first upsert (open() then immediate
-        // close() let the late upsert resurrect the row). The revision
-        // lives at res.workspace.revision; a 409 adopts the server state
-        // and retries once; an already-absent row is success.
-        writeChain = writeChain.then(() => api.deleteWorkspaceWindow(windowId, { baseRevision: lastRevision }))
-          .then((res) => {
-            const rev = res && res.workspace && res.workspace.revision;
-            if (Number.isFinite(rev)) lastRevision = Math.max(lastRevision, rev);
-          })
+      if (v4 && model.ref) {
+        // v4 close: identity-exact and durable — the outbox holds the intent
+        // until the server confirms THIS incarnation tombstoned; boot replay
+        // precedes restore, so a dropped response can never resurrect the
+        // row (the race this protocol exists to kill).
+        writeChain = writeChain.then(() => v4.intent({ kind: 'window.close', window: { ...model.ref } }))
           .catch((error) => {
-            // Error classification (GPT Pro round-5): only a confirmed 404
-            // is idempotent success. A 409 adopts server state and retries
-            // once. Everything else — transport loss, auth, 5xx — stays
-            // rejected and visible instead of silently abandoning the row
-            // to resurrect on reload.
-            if (error && error.status === 404) return undefined;
-            // Round-6 rule shared by every structural write: adopt-and-retry
-            // ONLY a genuine 409 carrying canonical conflict state. Any other
-            // failure that happens to attach diagnostic workspace data must
-            // not be mistaken for a conflict.
-            const ws = error && error.status === 409 && error.workspace;
-            if (ws && Number.isFinite(ws.revision)) {
-              // Conflict: adopt the server revision and retry once.
-              lastRevision = Math.max(lastRevision, ws.revision);
-              return api.deleteWorkspaceWindow(windowId, { baseRevision: lastRevision }).then((res2) => {
-                const rev2 = res2 && res2.workspace && res2.workspace.revision;
-                if (Number.isFinite(rev2)) lastRevision = Math.max(lastRevision, rev2);
-              }).catch((retryError) => {
-                if (retryError && retryError.status === 404) return undefined; // gone on retry: success
-                throw retryError;
-              });
-            }
-            throw error;
-          })
-          .catch((error) => {
-            if (!model.closeDeleteFailed) {
-              model.closeDeleteFailed = true;
-              console.warn(`[freeform] window ${windowId} close-delete failed:`, error && error.message || error);
-            }
+            const code = error && (error.code || (error.detail && error.detail.code));
+            if (code === 'WINDOW_GENERATION_GONE' || code === 'INCARNATION_REPLACED') return null; // already settled server-side
+            console.warn(`[freeform] window ${windowId} close not confirmed:`, error && error.message || error);
+            return null;
           });
       }
       return model;
@@ -936,72 +995,65 @@
     function state(windowId) {
       const model = windows.get(windowId);
       if (!model) return null;
-      return { windowId, surfaceId: model.surfaceId, state: model.state, title: model.title,
+      return { windowId, surfaceId: model.surfaceId, state: model.state, title: model.title, ref: model.ref ? { ...model.ref } : null,
         rect: { ...model.rect }, zIndex: model.zIndex, collapsed: model.collapsed, dock: model.dock || null,
         pinned: model.pinned, locked: model.locked, focused: model.windowId === focusedId };
     }
     function list() { return [...windows.keys()].map(state); }
 
-    /** Restore persisted windows from a workspace v3 document (ws.windows). */
+    /** Restore persisted windows from the canonical v4 document. */
     async function init() {
-      if (!api || typeof api.getWorkspace !== 'function') return list();
+      if (!api || typeof api.getWorkspaceV4 !== 'function') return list();
       let ws = null;
-      try { ws = await api.getWorkspace(); } catch (_e) { return list(); }
-      // Seed the revision token from server truth so the FIRST gated
-      // structural write carries a real baseRevision instead of null
-      // (null bypasses the 409 gate entirely — a second tab's first write
-      // could silently clobber a concurrent tab's landed write).
-      if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision || 0, ws.revision);
-      const persisted = ws && Array.isArray(ws.windows) ? ws.windows : [];
-      // Namespace boundary during migration: freeform windows own the
-      // `window_` prefix; the still-running WorkspaceShell owns its legacy
-      // `panel_*` objects. Restoring those here would shadow the shell's own
-      // panels and block first-run auto-open (live-caught by the freeform
-      // smoke: hidden legacy frames made list() non-empty).
-      const freeformWindows = persisted.filter((win) => win && String(win.windowId).startsWith('window_'));
+      try { ws = await api.getWorkspaceV4(); } catch (_e) { return list(); }
+      // The structural revision is a sync cursor (advisory), never a gate.
+      if (ws && Number.isFinite(ws.structuralRevision)) lastRevision = Math.max(lastRevision || 0, ws.structuralRevision);
+      // v4 derives lifecycle from canonical ownership: shelf members are
+      // minimised, group members tabbed, presentation speaks for the rest.
+      const shelfIds = new Set((ws && ws.shelf && Array.isArray(ws.shelf.members) ? ws.shelf.members : []).map((m) => m.windowId));
+      const groupOf = new Map();
+      for (const g of (ws && Array.isArray(ws.groups) ? ws.groups : [])) {
+        if (!g || !g.groupId || !Array.isArray(g.members)) continue;
+        for (const m of g.members) groupOf.set(m.windowId, g);
+      }
+      const freeformWindows = (ws && Array.isArray(ws.windows) ? ws.windows : [])
+        .filter((win) => win && win.ref && String(win.ref.windowId).startsWith('window_'));
       for (const win of freeformWindows) {
         const surfaceId = surfaceIdForEntityType(win.type, win.entityRef);
         if (!surfaceId || !CreativeSurfaces.get(surfaceId)) continue;
-        if (windows.has(win.windowId)) continue;
+        if (windows.has(win.ref.windowId)) continue;
+        const group = groupOf.get(win.ref.windowId);
+        const onShelf = shelfIds.has(win.ref.windowId);
+        const kind = win.presentation && win.presentation.kind;
         const model = {
-          windowId: win.windowId, surfaceId,
-          title: win.windowId, entityType: win.type,
+          windowId: win.ref.windowId, surfaceId,
+          ref: { ...win.ref },
+          title: win.ref.windowId, entityType: win.type,
           entityRef: win.entityRef || null,
-          rect: clampRect({ x: win.x, y: win.y, width: win.width, height: win.height }, CreativeSurfaces.get(surfaceId)),
-          zIndex: Number(win.zIndex) || 1,
-          state: SUPPORTED_STATES.has(win.state) ? win.state : 'floating',
-          collapsed: Boolean(win.collapsed), pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
-          groupId: win.groupId || null,
-          dock: win.dock || null,
+          rect: clampRect({ x: win.spatial.x, y: win.spatial.y, width: win.spatial.width, height: win.spatial.height }, CreativeSurfaces.get(surfaceId)),
+          zIndex: Number(win.spatial.zIndex) || 1,
+          state: onShelf ? 'minimised' : group ? 'tabbed' : (kind === 'docked' ? 'docked' : kind === 'maximised' ? 'maximised' : 'floating'),
+          collapsed: Boolean(win.collapsed), pinned: Boolean(win.pinned), locked: Boolean(win.locked),
+          groupId: group ? group.groupId : null,
+          dock: kind === 'docked' ? win.presentation.edge : null,
           restoreRect: null, onRename: null, frame: null, body: null, head: null, titleEl: null, tabsSlot: null,
         };
-        if (model.state === 'minimised') continue; // restored below as shelf-backed models
-        // Tabbed members restore with their group (rebuilt below). Docked
-        // windows stay docked durably: the stored edge re-derives geometry
-        // against current metrics (GPT Pro round-3 — docking must survive
-        // reload). A docked row without an edge — or whose edge is now
-        // outside the surface's dock policy — downgrades honestly.
-        {
+        if (onShelf) continue; // restored below as shelf-backed models
+        if (model.state === 'maximised') model.restoreRect = { ...model.rect };
+        // Docked windows stay docked durably: the stored edge re-derives
+        // geometry against current metrics. Per-SURFACE dock policy is a
+        // client registry fact the server cannot know — an edge the surface
+        // no longer allows downgrades honestly (durable repair intent,
+        // GPT Pro round-4).
+        if (model.state === 'docked') {
           const surface = surfaceFor(model);
           const edgeAllowed = surface && surface.supportedStates.includes('docked') && surface.dockEdges.includes(model.dock);
-          if (model.state === 'docked' && model.dock && edgeAllowed) {
+          if (model.dock && edgeAllowed) {
             model.rect = geo.dockRect ? geo.dockRect(model.dock, model.rect, metrics()) : model.rect;
-          } else if (model.state === 'docked') {
-            // Out-of-policy row: clear the stale edge AND persist the repair
-            // immediately, or the same malformed row returns every session
-            // (GPT Pro round-4).
+          } else {
             model.state = 'floating';
             model.dock = null;
-            persist(model);
-          } else if (model.state !== 'minimised' && model.dock) {
-            // Stale dock on a non-docked row (GPT Pro round-5): only the
-            // shelf legitimately keeps an edge through 'minimised'; floating
-            // or tabbed rows carrying one would surprise-redock on a later
-            // minimise/restore. Clear and persist the repair. (Rows arriving
-            // here can only be legacy: the transition invariant prevents
-            // creating them at runtime.)
-            model.dock = null;
-            persist(model);
+            if (v4) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) } });
           }
         }
         windows.set(model.windowId, model);
@@ -1019,19 +1071,21 @@
       // Shelf-backed models: minimised windows keep their identity, content
       // controller and rect on disk; restore() re-floats them.
       for (const win of freeformWindows) {
-        if (!win || win.state !== 'minimised') continue;
-        if (windows.has(win.windowId)) continue;
+        if (!win || !win.ref || !shelfIds.has(win.ref.windowId)) continue;
+        if (windows.has(win.ref.windowId)) continue;
         const surfaceId = surfaceIdForEntityType(win.type, win.entityRef);
         if (!surfaceId || !CreativeSurfaces.get(surfaceId)) continue;
+        const kind = win.presentation && win.presentation.kind;
         const model = {
-          windowId: win.windowId, surfaceId,
-          title: win.windowId, entityType: win.type,
+          windowId: win.ref.windowId, surfaceId,
+          ref: { ...win.ref },
+          title: win.ref.windowId, entityType: win.type,
           entityRef: win.entityRef || null,
-          rect: clampRect({ x: win.x, y: win.y, width: win.width, height: win.height }, CreativeSurfaces.get(surfaceId)),
-          zIndex: Number(win.zIndex) || 1,
+          rect: clampRect({ x: win.spatial.x, y: win.spatial.y, width: win.spatial.width, height: win.spatial.height }, CreativeSurfaces.get(surfaceId)),
+          zIndex: Number(win.spatial.zIndex) || 1,
           state: 'minimised',
-          dock: win.dock || null,
-          collapsed: true, pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
+          dock: kind === 'docked' ? win.presentation.edge : null,
+          collapsed: true, pinned: Boolean(win.pinned), locked: Boolean(win.locked),
           restoreRect: null, onRename: null, frame: null, body: null, head: null, titleEl: null, tabsSlot: null,
         };
         windows.set(model.windowId, model);
@@ -1051,12 +1105,14 @@
       // member (its group lost) re-floats so no window restores invisible.
       const persistedGroups = ws && Array.isArray(ws.groups) ? ws.groups : [];
       for (const group of persistedGroups) {
-        if (!group || !group.groupId || !Array.isArray(group.windowIds)) continue;
-        const windowIds = group.windowIds.filter((id) => windows.has(id));
+        if (!group || !group.groupId || !Array.isArray(group.members)) continue;
+        const windowIds = group.members.map((m) => m.windowId).filter((id) => windows.has(id) && !shelfIds.has(id));
         if (windowIds.length < 2) continue;
-        const activeWindowId = windowIds.includes(group.activeWindowId) ? group.activeWindowId : windowIds[0];
-        groups.set(group.groupId, { groupId: group.groupId, windowIds, activeWindowId });
+        const activeId = group.active && group.active.windowId;
+        const activeWindowId = windowIds.includes(activeId) ? activeId : windowIds[0];
+        groups.set(group.groupId, { groupId: group.groupId, version: group.version, windowIds, activeWindowId });
       }
+      if (ws && ws.focus && windows.has(ws.focus.windowId)) focusedId = ws.focus.windowId;
       for (const model of windows.values()) {
         if (model.state === 'tabbed' && (!model.groupId || !groups.has(model.groupId))) {
           // Loudness parity (GPT Pro round-6 adversarial finding): silent
@@ -1160,7 +1216,12 @@
       if (Number.isFinite(x) && Number.isFinite(y)) {
         model.rect.x = x; model.rect.y = y;
       }
-      renderFrame(model); persist(model); persistStructure();
+      renderFrame(model);
+      if (v4 && model.ref && model.groupId === null) queueIntent({
+        kind: 'group.leave', member: { ...model.ref }, mode: 'floating',
+        floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) },
+      });
+      persist(model);
       return model;
     }
 
@@ -1192,10 +1253,21 @@
         model.groupId = groupId;
         transition(model, 'tabbed');
         renderFrame(model);
-        persist(model);
       }
-      persistStructure();
       bringToFront(activeWindowId);
+      if (v4) {
+        const refs = ids.map((id) => windows.get(id)).filter(Boolean).map((m) => ({ ...m.ref }));
+        queueIntent({ kind: 'group.create', members: refs, active: { ...(windows.get(activeWindowId) || { ref: refs[0] }).ref } })
+          .then((response) => {
+            const created = response && response.changed && response.changed.createdGroup;
+            if (created && created.groupId !== groupId) {
+              groups.delete(groupId); // provisional local id yields to the server's canonical one
+              groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: created.active && created.active.windowId });
+              for (const m of created.members) { const win = windows.get(m.windowId); if (win) win.groupId = created.groupId; }
+              renderAll();
+            }
+          });
+      }
       return groups.get(groupId);
     }
 
@@ -1211,7 +1283,7 @@
         persist(model);
       }
       groups.delete(group.groupId);
-      persistStructure();
+      if (v4) queueIntent({ kind: 'group.dissolve', groupId: group.groupId });
       return group;
     }
 
@@ -1221,7 +1293,11 @@
       group.activeWindowId = memberId;
       for (const id of group.windowIds) renderFrame(windows.get(id));
       bringToFront(memberId);
-      persistStructure();
+      if (v4) queueIntent({
+        kind: 'group.activate',
+        groupId: group.groupId,
+        member: { ...(windows.get(memberId) || {}).ref },
+      });
       return group;
     }
 
@@ -1275,18 +1351,35 @@
       if (model.locked || target.locked) return null;
       removeFromGroup(model);
       let group = target.groupId && groups.get(target.groupId);
+      let madeGroup = false;
       if (!group) {
         const groupId = `group_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
         group = { groupId, windowIds: [target.windowId], activeWindowId: target.windowId };
         groups.set(groupId, group);
         target.groupId = groupId;
         transition(target, 'tabbed');
+        madeGroup = true;
       }
       group.windowIds.push(model.windowId);
       model.groupId = group.groupId;
       transition(model, 'tabbed');
       renderAll(); renderShelf();
-      persist(model); persistStructure();
+      if (v4) {
+        if (madeGroup) {
+          queueIntent({ kind: 'group.create', members: [{ ...target.ref }, { ...model.ref }], active: { ...target.ref } })
+            .then((response) => {
+              const created = response && response.changed && response.changed.createdGroup;
+              if (created && created.groupId !== group.groupId) {
+                groups.delete(group.groupId);
+                groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: created.active && created.active.windowId });
+                for (const m of created.members) { const win = windows.get(m.windowId); if (win) win.groupId = created.groupId; }
+                renderAll();
+              }
+            });
+        } else {
+          queueIntent({ kind: 'group.join', member: { ...model.ref }, target: { groupId: group.groupId } });
+        }
+      }
       bringToFront(group.activeWindowId);
       return groups.get(group.groupId);
     }
@@ -1310,43 +1403,18 @@
       group.windowIds.splice(group.windowIds.indexOf(memberId), 1);
       group.windowIds.splice(insertAt, 0, memberId);
       renderFrame(activeModel); // re-render the strip in the new order
-      persistStructure();
+      if (v4 && model.ref) {
+        // Express the settled local order as ONE server reorder: insert the
+        // member before the member that now follows it (null = append).
+        const idx = group.windowIds.indexOf(memberId);
+        const beforeId = idx + 1 < group.windowIds.length ? group.windowIds[idx + 1] : null;
+        const beforeModel = beforeId ? windows.get(beforeId) : null;
+        queueIntent({
+          kind: 'group.reorder', groupId: group.groupId, member: { ...model.ref },
+          ...(beforeModel && beforeModel.ref ? { before: { ...beforeModel.ref } } : {}),
+        });
+      }
       return group;
-    }
-
-    /** Structural persistence: groups + shelf through the revision-gated
-     * API, with one adopt-and-retry on 409 and a bounded warning. */
-    function persistStructure() {
-      if (!api || typeof api.setWorkspaceGroups !== 'function') return Promise.resolve();
-      const attempt = (baseRevision) => api.setWorkspaceGroups(
-        [...groups.values()].map((g) => ({ groupId: g.groupId, windowIds: g.windowIds.slice(), activeWindowId: g.activeWindowId })),
-        { baseRevision },
-      ).then((res) => {
-        const ws = res && res.workspace;
-        if (ws && Number.isFinite(ws.revision)) lastRevision = Math.max(lastRevision, ws.revision);
-        groupsWarned = false;
-      }).catch((error) => {
-        // Same round-6 rule as the shelf path: only a 409 with a canonical
-        // payload adopts-and-retries; uncertain failures stay visible.
-        if (!(error && error.status === 409 && error.workspace && Number.isFinite(error.workspace.revision))) {
-          if (!groupsWarned) {
-            groupsWarned = true;
-            console.warn('[freeform] window groups are not persisting:', error && error.message || error);
-          }
-          return;
-        }
-        const ws = error.workspace;
-        // Adopt even when the retry is latched off: a stale token must never
-        // outlive a conflict we chose not to retry.
-        lastRevision = Math.max(lastRevision, ws.revision);
-        if (baseRevision !== null && !groupsWarned) {
-          groupsWarned = true;
-          return attempt(ws.revision);
-        }
-      });
-      // Serialized behind every pending workspace write.
-      writeChain = writeChain.then(() => attempt(lastRevision), () => attempt(lastRevision));
-      return writeChain;
     }
 
     return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll,

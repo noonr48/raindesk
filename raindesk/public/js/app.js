@@ -598,7 +598,7 @@
           },
         });
         state.freeform = window.RaindeskWindowManager.WindowManager({
-          root: $('stage'), document, api: API,
+          root: $('stage'), document, api: API, v4: state.v4,
           viewportMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
           geometry: window.RaindeskWorkspaceUI || {},
         });

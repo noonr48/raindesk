@@ -287,8 +287,8 @@ async function main() {
     await delay(300);
     // Poll the SERVER until the group lands (a fixed delay flakes on slow
     // runners: persistStructure may adopt-and-retry past any single delay).
-    await waitFor(page, `fetch('/api/workspace').then((r)=>r.json()).then((w)=>(w.groups||[]).some((g)=>Array.isArray(g.windowIds)&&g.windowIds.length===2))`, 'group persisted server-side', 10_000, true);
-    const serverWs = await value(page, `fetch('/api/workspace').then((r)=>r.json()).then((w)=>JSON.stringify({rev:w.revision,groups:(w.groups||[]).map((g)=>({id:g.groupId,n:g.windowIds.length}))}))`, true);
+    await waitFor(page, `fetch('/api/workspace/v4').then((r)=>r.json()).then((w)=>(w.groups||[]).some((g)=>Array.isArray(g.members)&&g.members.length===2))`, 'group persisted server-side (v4 canonical)', 10_000, true);
+    const serverWs = await value(page, `fetch('/api/workspace/v4').then((r)=>r.json()).then((w)=>JSON.stringify({rev:w.structuralRevision,groups:(w.groups||[]).map((g)=>({id:g.groupId,n:g.members.length}))}))`, true);
     console.error(`[journey] step 17 server workspace: ${serverWs}`);
     if (!JSON.parse(serverWs).groups.length) throw new Error(`group never reached the server: ${serverWs}`);
 

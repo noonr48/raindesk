@@ -37,7 +37,7 @@ const V4_PATH = path.join(DATA_DIR, 'workspace-v4.json');
 const SPACES = new Set(['world', 'screen']);
 const DOCK_EDGES = new Set(['left', 'right', 'top', 'bottom']);
 const PRESENTATION_KINDS = new Set(['floating', 'docked', 'maximised']);
-const WINDOW_TYPES = new Set(['note', 'layers_panel', 'partner_panel', 'generic_panel', 'reference_board', 'character_canvas', 'take_stack', 'character_registry', 'notes_panel', 'partner_proposals', 'sheet']);
+const WINDOW_TYPES = new Set(['note', 'layers_panel', 'partner_panel', 'generic_panel', 'reference_board', 'character_canvas', 'take_stack', 'character_registry', 'notes_panel', 'partner_proposals', 'sheet', 'sequence_strip', 'beat_trail']);
 const ID_RE = /^[a-z0-9_]{1,64}$/;
 
 function now() { return new Date().toISOString(); }
