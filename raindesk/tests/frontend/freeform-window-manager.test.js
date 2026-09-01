@@ -1510,3 +1510,32 @@ test('structural writes retry ONLY genuine 409 conflicts: diagnostics riding oth
     console.warn = origWarn;
   }
 });
+
+test('title model/DOM split (S0): state().title is always a string; span, tabs and shelf chips render it', () => {
+  const { manager, root } = freshManager();
+  manager.open('layers');
+  assert.equal(typeof manager.state('window_layers').title, 'string', 'state().title is a string, never a DOM node');
+  assert.equal(manager.state('window_layers').title, 'Layers', 'open carries the surface title (duplicate-key null-out killed)');
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const span = frame.querySelector('.freeform-window-title');
+  assert.equal(span.textContent, 'Layers', 'the title span renders the surface title IMMEDIATELY (not only after rename)');
+
+  manager.open('references', { windowId: 'window_refs', title: 'Custom Refs' });
+  const refsFrame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_refs');
+  assert.equal(refsFrame.querySelector('.freeform-window-title').textContent, 'Custom Refs');
+  assert.equal(manager.state('window_refs').title, 'Custom Refs');
+
+  // Group tabs must render the title STRING (the old span-assignment coerced to garbage)
+  manager.groupWindows(['window_layers', 'window_refs']);
+  const tabs = frame.querySelectorAll('.freeform-window-tab');
+  const refsTab = tabs.find((t) => t.dataset.tabFor === 'window_refs');
+  assert.equal(refsTab.textContent, 'Custom Refs', 'tab label is the title string');
+
+  // Shelf chips too
+  const shelf = makeNode('nav');
+  manager.attachShelf(shelf);
+  manager.minimise('window_refs');
+  const chip = shelf.children.find((c) => c.classList.contains('freeform-shelf-chip'));
+  assert.equal(chip.textContent, 'Custom Refs', 'shelf chip label is the title string');
+  assert.equal(chip.getAttribute('aria-label'), 'restore Custom Refs');
+});

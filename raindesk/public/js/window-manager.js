@@ -247,7 +247,7 @@
       });
       frame.append(tabsSlot, head, body, ...resizeHandles);
       root.appendChild(frame);
-      model.frame = frame; model.body = body; model.head = head; model.title = title; model.tabsSlot = tabsSlot;
+      model.frame = frame; model.body = body; model.head = head; model.titleEl = title; model.tabsSlot = tabsSlot;
       installDrag(model); installResize(model, resizeHandles);
       btnMin.addEventListener('click', () => minimise(model.windowId));
       btnMax.addEventListener('click', () => (model.state === 'maximised' ? unmaximise(model.windowId) : maximise(model.windowId)));
@@ -273,6 +273,10 @@
 
     function renderFrame(model) {
       const frame = ensureFrame(model);
+      // Title SSOT: model.title is ALWAYS the string; the span is a projection
+      // (S0 — kills the duplicate-key null-out and the span-overwrites-string
+      // collision that left title bars empty until a manual rename).
+      if (model.titleEl && model.titleEl.textContent !== String(model.title)) model.titleEl.textContent = String(model.title);
       const group = groupFor(model.windowId);
       const isHiddenMember = model.state === 'tabbed' && group && group.activeWindowId !== model.windowId;
       if (model.state === 'minimised' || isHiddenMember) { frame.hidden = true; return; }
@@ -679,7 +683,7 @@
         collapsed: false, pinned: false, locked: false,
         restoreRect: null,
         onRename: options.onRename || null,
-        frame: null, body: null, head: null, title: null,
+        frame: null, body: null, head: null, titleEl: null,
       };
       windows.set(windowId, model);
       if (options.state && surface.supportedStates.includes(options.state)) model.state = options.state;
@@ -688,7 +692,7 @@
       if (surface.createController) {
         controller = surface.createController({
           windowId, body: model.body, api, document, root,
-          setTitle(title) { model.title = String(title || '').slice(0, 120); if (model.title) model.titleNode = null; renderFrame(model); },
+          setTitle(title) { model.title = String(title || '').slice(0, 120); renderFrame(model); },
           close: () => close(windowId),
         }) || null;
       }
@@ -969,7 +973,7 @@
           collapsed: Boolean(win.collapsed), pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
           groupId: win.groupId || null,
           dock: win.dock || null,
-          restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null, tabsSlot: null,
+          restoreRect: null, onRename: null, frame: null, body: null, head: null, titleEl: null, tabsSlot: null,
         };
         if (model.state === 'minimised') continue; // restored below as shelf-backed models
         // Tabbed members restore with their group (rebuilt below). Docked
@@ -1028,7 +1032,7 @@
           state: 'minimised',
           dock: win.dock || null,
           collapsed: true, pinned: Boolean(win.pinned || false), locked: Boolean(win.locked || false),
-          restoreRect: null, onRename: null, frame: null, body: null, head: null, title: null, tabsSlot: null,
+          restoreRect: null, onRename: null, frame: null, body: null, head: null, titleEl: null, tabsSlot: null,
         };
         windows.set(model.windowId, model);
         zTop = Math.max(zTop, model.zIndex);
