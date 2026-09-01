@@ -1012,6 +1012,15 @@
         onRename: options.onRename || null,
         frame: null, body: null, head: null, titleEl: null,
       };
+      if (!isWorld(model)) {
+        // Stage-5: the reachable-titlebar invariant holds from birth — a
+        // screen window never OPENS unreachable (world surfaces keep any
+        // canonical rect; the endless desk reaches them by pan).
+        const m0 = metrics();
+        const HEADER0 = 40;
+        model.rect.x = Math.min(Math.max(model.rect.x, HEADER0 - model.rect.width), m0.width - HEADER0);
+        model.rect.y = Math.min(Math.max(model.rect.y, 0), m0.height - HEADER0);
+      }
       windows.set(windowId, model);
       if (options.state && surface.supportedStates.includes(options.state)) model.state = options.state;
       renderFrame(model);

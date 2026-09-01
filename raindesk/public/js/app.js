@@ -666,6 +666,9 @@
             }
             loadCast();
             loadProposals();
+            // Stage-5 V1: boot reflow — persisted extremes converge on FIRST
+            // load (scope criterion 1), not only on resize events.
+            try { state.freeform.reflow(); } catch (_e) { /* additive; never block boot */ }
           }).catch(() => {});
       }
     } catch (_freeformError) { /* the freeform desk is additive; never block boot */ }
