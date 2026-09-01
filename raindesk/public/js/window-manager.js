@@ -130,7 +130,7 @@
    *   .state(windowId) / .list()
    *   .init() — restore persisted windows (workspace v3 windows[])
    */
-  function WindowManager({ root, document, api, v4: v4Given, viewportMetrics, shelfHost, geometry } = {}) {
+  function WindowManager({ root, document, api, v4: v4Given, viewportMetrics, shelfHost, geometry, getViewport: getViewportGiven } = {}) {
     if (!root || !document) throw new Error('WindowManager requires root and document');
     // v4 client: injected in production (app.js shares the boot-replay
     // client); self-constructed as a memory-only fallback when the host
@@ -138,6 +138,15 @@
     const v4lib = (typeof RaindeskV4Client !== 'undefined' && RaindeskV4Client) || (root && root.RaindeskV4Client) || null;
     const v4 = v4Given || (v4lib && api && typeof api.applyWorkspaceIntent === 'function'
       ? v4lib.V4Client({ api, storage: null, warn: () => {} }) : null);
+    // Stage-2 P2: the world projection — the ONE world↔screen authority
+    // (public/js/world-projection.js). World-classified surfaces keep their
+    // canonical rect in WORLD units; placement renders through the
+    // projection and pointer deltas unproject at the live worldScale.
+    const WProj = (typeof RaindeskWorldProjection !== 'undefined' && RaindeskWorldProjection)
+      || (root && root.RaindeskWorldProjection)
+      || (typeof require === 'function' ? require('./world-projection.js') : null);
+    if (!WProj) throw new Error('WindowManager requires RaindeskWorldProjection (script order: world-projection.js before window-manager.js)');
+    const getViewport = getViewportGiven || (() => ({ x: 0, y: 0, zoom: 1 }));
     const geo = geometry || Geometry;
     const metrics = viewportMetrics || (() => ({ width: root.clientWidth || 1280, height: root.clientHeight || 800 }));
     const windows = new Map();        // windowId -> model
@@ -159,9 +168,36 @@
     root.classList.add('freeform-desk-windows');
 
     function surfaceFor(model) { return CreativeSurfaces.get(model.surfaceId) || null; }
+    function isWorld(model) {
+      const surface = surfaceFor(model);
+      return Boolean(surface && surface.coordinateSpace === 'world');
+    }
+    /** Screen-space rect for RENDERING a world surface: projected placement
+     * when floating/tabbed; the dock-rail presentation when docked (docking
+     * is a temporary presentation, never a coordinate authority — Round-6).
+     * Maximise is handled by the fullscreen branch (metrics-owned). */
+    function screenRectOf(model) {
+      const vp = getViewport(); const m = metrics(); const s = WProj.worldScale(vp, m) || 1;
+      if (model.state === 'docked' && geo.dockRect) {
+        return geo.dockRect(model.dock, { x: model.rect.x, y: model.rect.y, width: model.rect.width * s, height: model.rect.height * s }, m);
+      }
+      const p = WProj.worldToScreen(model.rect, vp, m);
+      return { x: p.x, y: p.y, width: model.rect.width * s, height: model.rect.height * s };
+    }
 
     function clampRect(rect, surface) {
       const min = surface ? surface.minimumSize : { width: 200, height: 140 };
+      if (surface && surface.coordinateSpace === 'world') {
+        // World surfaces clamp to per-surface minimums in WORLD units only —
+        // no metrics coupling (the desk is endless; there is no viewport
+        // edge in world space).
+        return {
+          x: Number.isFinite(rect.x) ? rect.x : 0,
+          y: Number.isFinite(rect.y) ? rect.y : 0,
+          width: Math.max(rect.width || min.width, min.width),
+          height: Math.max(rect.height || min.height, min.height),
+        };
+      }
       const m = metrics();
       return {
         x: Number.isFinite(rect.x) ? rect.x : 0,
@@ -172,6 +208,18 @@
     }
 
     function defaultRect(surface) {
+      if (surface && surface.coordinateSpace === 'world') {
+        // World surfaces default into world units around the origin, spread
+        // wide enough that siblings do not stack onto each other (the
+        // journey caught a 40-unit cascade stacking windows into an
+        // accidental drop-to-group at release).
+        const n = windows.size;
+        return clampRect({
+          x: -400 + (n % 4) * 520,
+          y: -180 + (n % 3) * 60,
+          width: 460, height: 360,
+        }, surface);
+      }
       const m = metrics();
       const place = surface.defaultPlacement || {};
       const n = windows.size;
@@ -194,11 +242,18 @@
     const mintMutationId = () => `mut_${Date.now().toString(36)}_${(mutationSeq++).toString(36)}`;
     function persist(model) {
       if (!v4 || !model.ref) return Promise.resolve(model);
-      const next = writeChain.then(() => v4.spatial(model.ref, {
+      // Commit ADOPTS the rounded canonical values into the model so the
+      // live render and the post-reload render project from identical
+      // numbers — sub-pixel drift across reload otherwise breaks exact
+      // geometry witnesses (journey step 19, journey-caught).
+      const patch = {
         x: Math.round(model.rect.x), y: Math.round(model.rect.y),
         width: Math.round(model.rect.width), height: Math.round(model.rect.height),
         zIndex: model.zIndex,
-      }, mintMutationId())).then((res) => {
+      };
+      model.rect.x = patch.x; model.rect.y = patch.y;
+      model.rect.width = patch.width; model.rect.height = patch.height;
+      const next = writeChain.then(() => v4.spatial(model.ref, patch, mintMutationId())).then((res) => {
         model.persisted = true; model.persistFailed = false;
         const row = res && res.window;
         if (row && row.ref) { model.ref = { ...row.ref }; if (row.spatialVersion) model.spatialVersion = row.spatialVersion; }
@@ -397,10 +452,13 @@
         frame.style.width = `${m.width}px`; frame.style.height = `${m.height}px`;
       } else {
         frame.classList.remove('freeform-window-maximised');
-        frame.style.left = `${model.rect.x}px`;
-        frame.style.top = `${model.rect.y}px`;
-        frame.style.width = `${model.rect.width}px`;
-        frame.style.height = `${model.rect.height}px`;
+        // Stage-2 P2: world surfaces render through the projection (screen
+        // placement is DERIVED; the canonical world rect is untouched).
+        const r = isWorld(model) ? screenRectOf(model) : model.rect;
+        frame.style.left = `${r.x}px`;
+        frame.style.top = `${r.y}px`;
+        frame.style.width = `${r.width}px`;
+        frame.style.height = `${r.height}px`;
       }
       frame.classList.toggle('freeform-window-collapsed', Boolean(model.collapsed));
       frame.classList.toggle('freeform-window-locked', Boolean(model.locked));
@@ -624,8 +682,15 @@
             try { head.setPointerCapture(ev.pointerId); } catch (_e) {}
             bringToFront(current.windowId);
           }
-          current.rect.x = start.ox + (ev.clientX - start.x);
-          current.rect.y = start.oy + (ev.clientY - start.y);
+          if (isWorld(current)) {
+            // Pointer deltas unproject at the live worldScale (P2).
+            const s = WProj.worldScale(getViewport(), metrics()) || 1;
+            current.rect.x = start.ox + (ev.clientX - start.x) / s;
+            current.rect.y = start.oy + (ev.clientY - start.y) / s;
+          } else {
+            current.rect.x = start.ox + (ev.clientX - start.x);
+            current.rect.y = start.oy + (ev.clientY - start.y);
+          }
           renderFrame(current);
           // Phase 5: preview the dock the drag would settle into.
           // Phase 6: light up the four edge zones, emphasizing the one
@@ -704,10 +769,14 @@
             let right = r.x + r.width; let bottom = r.y + r.height;
             // Moving edges clamp against the opposite (anchored) edge so the
             // per-surface minimum size holds; free edges simply grow/shrink.
-            if (dir.includes('e')) right = Math.max(right + (ev.clientX - start.x), left + min.width);
-            if (dir.includes('w')) left = Math.min(left + (ev.clientX - start.x), right - min.width);
-            if (dir.includes('s')) bottom = Math.max(bottom + (ev.clientY - start.y), top + min.height);
-            if (dir.includes('n')) top = Math.min(top + (ev.clientY - start.y), bottom - min.height);
+            // World surfaces unproject pointer deltas at the live scale (P2).
+            const ws = isWorld(current) ? (WProj.worldScale(getViewport(), metrics()) || 1) : 1;
+            const dx = (ev.clientX - start.x) / ws;
+            const dy = (ev.clientY - start.y) / ws;
+            if (dir.includes('e')) right = Math.max(right + dx, left + min.width);
+            if (dir.includes('w')) left = Math.min(left + dx, right - min.width);
+            if (dir.includes('s')) bottom = Math.max(bottom + dy, top + min.height);
+            if (dir.includes('n')) top = Math.min(top + dy, bottom - min.height);
             current.rect = { x: left, y: top, width: right - left, height: bottom - top };
             renderFrame(current);
           };
@@ -755,7 +824,18 @@
       const surface = surfaceFor(model);
       if (!surface || !surface.supportedStates.includes('docked')) return null;
       const m = metrics();
-      const rect = { ...model.rect, width: model.rect.width, height: model.rect.height };
+      // Stage-2 P2: edge detection runs in SCREEN space. World surfaces
+      // project the canonical rect first (no dock branch — a docked model
+      // being dragged must detect from where its latent rect projects, not
+      // from the rail it is leaving).
+      let rect;
+      if (isWorld(model)) {
+        const vp = getViewport(); const s = WProj.worldScale(vp, m) || 1;
+        const p = WProj.worldToScreen(model.rect, vp, m);
+        rect = { x: p.x, y: p.y, width: model.rect.width * s, height: model.rect.height * s };
+      } else {
+        rect = { ...model.rect, width: model.rect.width, height: model.rect.height };
+      }
       if (geo.edgeSnap) {
         const edge = geo.edgeSnap(rect, m, 18);
         // Dock-policy honesty (GPT Pro round-3): an edge outside the
@@ -766,7 +846,10 @@
     }
     function applySnap(model, snapped) {
       if (snapped.kind === 'dock') {
-        model.rect = { ...snapped.rect };
+        // Stage-2 P2: a docked WORLD surface keeps its canonical world rect
+        // LATENT (docking is a temporary presentation, never a coordinate
+        // authority — Round-6); screen surfaces keep the baked rail rect.
+        if (!isWorld(model)) model.rect = { ...snapped.rect };
         model.dock = snapped.dock; // durable edge: docking must survive reload (GPT Pro round-3)
         transition(model, 'docked');
         if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'docked', edge: snapped.dock }));
@@ -870,7 +953,7 @@
       const dockOk = Boolean(model.dock && surface && surface.supportedStates.includes('docked') && surface.dockEdges.includes(model.dock));
       transition(model, dockOk ? 'docked' : 'floating');
       if (dockOk) model.collapsed = false; // shelf restore must show content, not a header-only rail (GPT Pro round-5)
-      if (dockOk && geo.dockRect) model.rect = geo.dockRect(model.dock, model.rect, metrics());
+      if (dockOk && geo.dockRect && !isWorld(model)) model.rect = geo.dockRect(model.dock, model.rect, metrics()); // world surfaces render the rail from the edge; the world rect stays latent (P2)
       renderFrame(model);
       renderShelf();
       bringToFront(windowId);
@@ -1441,7 +1524,7 @@
       return group;
     }
 
-    return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll,
+    return { open, close, minimise, restore, restoreAt, maximise, unmaximise, bringToFront, focus, state, list, init, refreshAll, renderAll,
       groupWindows, ungroup, switchTab, tearOut, joinGroup, groupIds, attachShelf,
       groups: () => [...groups.values()].map((g) => ({ ...g, windowIds: g.windowIds.slice() })) };
 

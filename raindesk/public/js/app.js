@@ -471,7 +471,7 @@
       tabs: $('creativeTabs'),
       seedBuiltinSheets: Boolean(state.shot),
       getMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
-      onViewportChange: () => markDirty(),
+      onViewportChange: () => { markDirty(); if (state.freeform && typeof state.freeform.renderAll === 'function') state.freeform.renderAll(); },
       onContextChange: () => {},
     });
     await state.creativeDesk.init(state.shot);

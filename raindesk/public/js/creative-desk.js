@@ -11,7 +11,7 @@
   // surface re-serves the same names so existing test bindings stay stable.
   const WP = (typeof require === 'function' && typeof module !== 'undefined' && module.exports)
     ? require('./world-projection.js')
-    : (root.RaindeskWorldProjection || null);
+    : (typeof window !== 'undefined' ? window.RaindeskWorldProjection : null);
   if (!WP) throw new Error('RaindeskCreativeDesk requires RaindeskWorldProjection (script order: world-projection.js before creative-desk.js)');
   const { MIN_ZOOM, MAX_ZOOM, WORLD_SIZE, clamp, clampZoom, cleanViewport, baseScale, worldScale,
     worldToScreen, screenToWorld, zoomAround, focusViewport } = WP;

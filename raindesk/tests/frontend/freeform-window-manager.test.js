@@ -224,16 +224,16 @@ function freshManager({ persistCalls } = {}) {
 }
 
 wm.CreativeSurfaces.clear();
-wm.CreativeSurfaces.register({ id: 'layers', title: 'Layers', entityType: 'layers_panel', minimumSize: { width: 240, height: 160 } });
-wm.CreativeSurfaces.register({ id: 'references', title: 'Reference Board', entityType: 'reference_board' });
-wm.CreativeSurfaces.register({ id: 'dockable', title: 'Dockable', entityType: 'generic_panel', supportedStates: ['floating', 'minimised', 'maximised', 'docked'] });
-wm.CreativeSurfaces.register({ id: 'locked_only', title: 'Pinned Only', entityType: 'note', supportedStates: ['floating'] });
+wm.CreativeSurfaces.register({ id: 'layers', title: 'Layers', entityType: 'layers_panel', coordinateSpace: 'screen', minimumSize: { width: 240, height: 160 } });
+wm.CreativeSurfaces.register({ id: 'references', title: 'Reference Board', entityType: 'reference_board', coordinateSpace: 'screen' });
+wm.CreativeSurfaces.register({ id: 'dockable', title: 'Dockable', entityType: 'generic_panel', coordinateSpace: 'screen', supportedStates: ['floating', 'minimised', 'maximised', 'docked'] });
+wm.CreativeSurfaces.register({ id: 'locked_only', title: 'Pinned Only', entityType: 'note', coordinateSpace: 'screen', supportedStates: ['floating'] });
 // Shared controller-backed fixture, registered at module scope so ANY test
 // (including name-filtered runs) can open it — test-local registration made
 // isolated runs fail with 'unknown creative surface'.
 let probeDestroyed = 0;
 wm.CreativeSurfaces.register({
-  id: 'probe', title: 'Probe', entityType: 'generic_panel',
+  id: 'probe', title: 'Probe', entityType: 'generic_panel', coordinateSpace: 'screen',
   createController: ({ body, close }) => {
     body.appendChild(fakeDocument.createElement('div'));
     return { destroy() { probeDestroyed += 1; }, close, render() {} };
@@ -1431,12 +1431,42 @@ test('structural ops dispatched inside the create-response window carry the ADOP
 });
 
 test('Stage-2 P1: surfaces carry a coordinateSpace classification (world default; explicit screen chrome; bad values rejected)', () => {
-  const def = wm.CreativeSurfaces.get('layers');
-  assert.equal(def.coordinateSpace, 'world', 'content surfaces default to world');
+  wm.CreativeSurfaces.register({ id: 'default_space_probe', title: 'Default', entityType: 'generic_panel' });
+  const def = wm.CreativeSurfaces.get('default_space_probe');
+  assert.equal(def.coordinateSpace, 'world', 'unclassified registrations default to world (content surfaces)');
   wm.CreativeSurfaces.register({ id: 'chrome_probe', title: 'Chrome', entityType: 'generic_panel', coordinateSpace: 'screen' });
   assert.equal(wm.CreativeSurfaces.get('chrome_probe').coordinateSpace, 'screen', 'explicit screen chrome accepted');
   assert.throws(() => wm.CreativeSurfaces.register({ id: 'bad_space', title: 'Bad', coordinateSpace: 'pixel' }), /coordinateSpace/);
   const fs = require('node:fs');
   const src = fs.readFileSync(path.join(ROOT, 'public', 'js', 'freeform-surfaces.js'), 'utf8');
   assert.equal((src.match(/coordinateSpace: 'world',/g) || []).length, 7, 'every shipped freeform surface is explicitly world-classified');
+});
+
+test('Stage-2 P2: world surfaces keep canonical WORLD rects — pan/zoom re-project placement, drags unproject at the live scale', async () => {
+  let vp = { x: 0, y: 0, zoom: 1 };
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  wm.CreativeSurfaces.register({ id: 'worldscene', title: 'World Scenes', entityType: 'sequence_strip', coordinateSpace: 'world' });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, getViewport: () => vp, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('worldscene');
+  const base = { ...manager.state('window_worldscene').rect };
+  assert.ok(Number.isFinite(base.x) && Number.isFinite(base.width), 'world default rect in world units');
+  vp = { x: 240, y: 120, zoom: 1 };
+  manager.focus('window_worldscene');
+  assert.deepEqual(manager.state('window_worldscene').rect, base, 'pan never rewrites the canonical world rect');
+  vp = { x: 0, y: 0, zoom: 2 };
+  manager.focus('window_worldscene');
+  assert.deepEqual(manager.state('window_worldscene').rect, base, 'zoom never rewrites the canonical world rect');
+  // baseScale = min(1280/1024, 800/1024) = 0.78125; at zoom 2 s = 1.5625.
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_worldscene');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 300, clientY: 200 });
+  fakeDocument.dispatch('pointermove', { clientX: 402.5, clientY: 200, buttons: 1 }); // +102.5 screen px -> +65.6 world units
+  fakeDocument.dispatch('pointerup', { clientX: 402.5, clientY: 200 });
+  assert.ok(Math.abs(manager.state('window_worldscene').rect.x - (base.x + 65.6)) <= 0.5, 'drag delta unprojects at the live worldScale (state adopts the committed rounding)');
+  await new Promise((r) => setTimeout(r, 5));
+  const spatial = record.filter((c) => c.kind === 'spatial').pop();
+  assert.ok(spatial, 'world geometry persists through the v4 spatial lane');
+  assert.ok(Math.abs(spatial.patch.x - (base.x + 65.6)) <= 0.5, 'persisted spatial carries WORLD units (persist rounds to integer)');
 });
