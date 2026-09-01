@@ -1932,3 +1932,28 @@ test('Stage-5 V1/V2: reflow keeps screen floating windows reachable and NEVER to
   assert.ok(spatials.length >= 1, 'the normalized screen positions persisted');
   assert.equal(record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_worldfar').length, 0, 'no world spatial PATCH from reflow');
 });
+
+test('Stage-5 repair (spec F2): a RESTORED extreme screen row converges through reflow — deleting reflow reddens this gate', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record, doc: {
+    schemaVersion: 4, structuralRevision: 4, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_x5' }, type: 'layers_panel', space: 'screen', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: -3000, y: -2600, width: 400, height: 300, rotation: 0, scale: 1, zIndex: 3 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [], shelf: { version: 1, members: [] }, focus: null,
+  } });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  const st = manager.state('window_layers');
+  assert.equal(st.rect.x, -3000, 'PRECONDITION: the restored row IS extreme (restore applies no origin clamp; the birth clamp only guards open())');
+  assert.equal(st.rect.y, -2600);
+  manager.reflow();
+  const after = manager.state('window_layers');
+  assert.ok(after.rect.x >= 40 - after.rect.width && after.rect.x <= 1280 - 40, 'reflow converged the restored extreme (reachable title bar)');
+  assert.ok(after.rect.y >= 0 && after.rect.y <= 800 - 40);
+  await new Promise((r) => setTimeout(r, 5));
+  const sp = record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_layers').pop();
+  assert.ok(sp, 'the convergence persisted through the spatial lane');
+  assert.ok(sp.patch.x >= 40 - 400, 'the persisted patch carries the normalized origin');
+});

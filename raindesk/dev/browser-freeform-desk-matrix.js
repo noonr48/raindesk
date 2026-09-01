@@ -37,6 +37,7 @@ const VIEWPORTS = [
   { label: '1280x720', width: 1280, height: 720 },
   { label: '1440x900', width: 1440, height: 900 },
   { label: '1920x1080', width: 1920, height: 1080 },
+  { label: '2560x1080', width: 2560, height: 1080 },
 ];
 
 function freePort() {
@@ -133,7 +134,7 @@ async function runViewport(vp, base, browserWsUrl, index) {
   await cdp.send('Page.navigate', { url: `${base}/?freeform=1` });
   await waitFor(cdp, `document.documentElement?.dataset?.raindeskBoot==='ready'`, `${vp.label} reload boot`, 60_000);
   await waitFor(cdp, `window.raindeskFreeform && window.raindeskFreeform.state(${JSON.stringify(wid)}) && window.raindeskFreeform.state(${JSON.stringify(wid)}).state==='floating'`, `${vp.label} world window restored`, 10_000);
-  await waitFor(cdp, `(()=>{const s=window.raindeskFreeform.state(${JSON.stringify(wid)});if(!s)return false;return s.rect.x===${seededWorld.x}&&s.rect.y===${seededWorld.y}&&s.rect.width===${seededWorld.width};})()`, `${vp.label} world rect canonical across reload`, 15_000);
+  await waitFor(cdp, `(()=>{const s=window.raindeskFreeform.state(${JSON.stringify(wid)});if(!s)return false;return s.rect.x===${seededWorld.x}&&s.rect.y===${seededWorld.y}&&s.rect.width===${seededWorld.width}&&s.rect.height===${seededWorld.height};})()`, `${vp.label} world rect canonical across reload`, 15_000);
   // (The chrome window's reload-restore is structurally unprovable here: its
   // surface is registered in-page only — the fresh registry after reload
   // cannot map the row. Screen persistence is pinned at unit level.)
