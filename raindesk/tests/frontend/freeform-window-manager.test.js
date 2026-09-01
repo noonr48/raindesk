@@ -1957,3 +1957,31 @@ test('Stage-5 repair (spec F2): a RESTORED extreme screen row converges through 
   assert.ok(sp, 'the convergence persisted through the spatial lane');
   assert.ok(sp.patch.x >= 40 - 400, 'the persisted patch carries the normalized origin');
 });
+
+test('Stage-5 repair (impl F3): a floating SCREEN group frame stranded off-screen converges through reflow and commits group.setFrame — the ReferenceError dead-code class reddens this gate', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  manager.open('layers', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  // DRAG the grouped frame far off-screen (screen groups drag unclamped — recovery is reflow's job).
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 200, clientY: 150 });
+  fakeDocument.dispatch('pointermove', { clientX: -3000, clientY: 150, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: -3000, clientY: 150 });
+  await new Promise((r) => setTimeout(r, 5));
+  const gx = manager.groups()[0].frame.rect.x;
+  assert.ok(gx < -2000, `PRECONDITION: the group frame IS stranded (frame.x=${gx})`);
+  manager.reflow();
+  const g = manager.groups()[0];
+  assert.ok(g.frame.rect.x >= 40 - g.frame.rect.width, `reflow converged the stranded group frame (x=${g.frame.rect.x})`);
+  assert.ok(g.frame.rect.x <= 1280 - 40 && g.frame.rect.y >= 0 && g.frame.rect.y <= 800 - 40);
+  await new Promise((r) => setTimeout(r, 5));
+  const setF = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.setFrame').pop();
+  assert.ok(setF, 'the convergence committed through the group.setFrame lane');
+  assert.ok(setF.op.patch.rect.x >= 40 - g.frame.rect.width, `the committed patch carries the normalized frame (patch.x=${setF.op.patch.rect?.x ?? setF.op.patch.x})`);
+});

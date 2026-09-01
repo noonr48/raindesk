@@ -1271,9 +1271,9 @@
      * through renderAll from current metrics. */
     function reflow() {
       const m = metrics();
+      const HEADER = 40; // reachable title-bar strip (hoisted: used by BOTH loops — Stage-5 impl re-review caught the block-scoped copy throwing ReferenceError in the group loop)
       for (const model of windows.values()) {
         if (model.state !== 'floating' || isWorld(model)) continue;
-        const HEADER = 40; // reachable title-bar strip
         const minX = HEADER - model.rect.width;
         const maxX = m.width - HEADER;
         const minY = 0;
