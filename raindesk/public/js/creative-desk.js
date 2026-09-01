@@ -6,54 +6,20 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const MIN_ZOOM = 0.22;
-  const MAX_ZOOM = 3.5;
-  const WORLD_SIZE = 1024;
+  // Stage-2 P0: the projection math lives in world-projection.js — the ONE
+  // coordinate authority (SSOT). This module is a CONSUMER; its export
+  // surface re-serves the same names so existing test bindings stay stable.
+  const WP = (typeof require === 'function' && typeof module !== 'undefined' && module.exports)
+    ? require('./world-projection.js')
+    : (root.RaindeskWorldProjection || null);
+  if (!WP) throw new Error('RaindeskCreativeDesk requires RaindeskWorldProjection (script order: world-projection.js before creative-desk.js)');
+  const { MIN_ZOOM, MAX_ZOOM, WORLD_SIZE, clamp, clampZoom, cleanViewport, baseScale, worldScale,
+    worldToScreen, screenToWorld, zoomAround, focusViewport } = WP;
   const BUILTIN_SHEETS = [
     { sheetId: 'sheet_character_primary', title: 'Character', kind: 'character', objectId: 'world_character_primary', type: 'character_canvas', x: 650, y: -420, width: 430, height: 560, zIndex: 10 },
     { sheetId: 'sheet_references_main', title: 'References', kind: 'references', objectId: 'world_references_main', type: 'reference_board', x: -1110, y: -360, width: 500, height: 520, rotation: -1.2, zIndex: 9 },
   ];
 
-  function clamp(v, min, max) { return Math.max(min, Math.min(max, Number(v) || 0)); }
-  function clampZoom(z) { return clamp(z, MIN_ZOOM, MAX_ZOOM); }
-  function cleanViewport(v = {}) {
-    return { x: Number(v.x) || 0, y: Number(v.y) || 0, zoom: clampZoom(v.zoom == null ? 1 : v.zoom) };
-  }
-  function baseScale(metrics = {}) {
-    const w = Math.max(1, Number(metrics.width) || 1);
-    const h = Math.max(1, Number(metrics.height) || 1);
-    return Math.min(w / WORLD_SIZE, h / WORLD_SIZE);
-  }
-  function worldScale(viewport, metrics) { return baseScale(metrics) * cleanViewport(viewport).zoom; }
-  function worldToScreen(point, viewport, metrics) {
-    const vp = cleanViewport(viewport); const s = worldScale(vp, metrics);
-    return { x: (Number(metrics.width) || 0) / 2 + vp.x + (Number(point.x) || 0) * s,
-      y: (Number(metrics.height) || 0) / 2 + vp.y + (Number(point.y) || 0) * s };
-  }
-  function screenToWorld(point, viewport, metrics) {
-    const vp = cleanViewport(viewport); const s = worldScale(vp, metrics) || 1;
-    return { x: ((Number(point.x) || 0) - (Number(metrics.width) || 0) / 2 - vp.x) / s,
-      y: ((Number(point.y) || 0) - (Number(metrics.height) || 0) / 2 - vp.y) / s };
-  }
-  function zoomAround(screenPoint, nextZoom, viewport, metrics) {
-    const vp = cleanViewport(viewport);
-    const anchor = screenToWorld(screenPoint, vp, metrics);
-    const zoom = clampZoom(nextZoom);
-    const s = baseScale(metrics) * zoom;
-    return {
-      x: (Number(screenPoint.x) || 0) - (Number(metrics.width) || 0) / 2 - anchor.x * s,
-      y: (Number(screenPoint.y) || 0) - (Number(metrics.height) || 0) / 2 - anchor.y * s,
-      zoom,
-    };
-  }
-  function focusViewport(obj, viewport, metrics, opts = {}) {
-    if (!obj) return cleanViewport(viewport);
-    const zoom = clampZoom(opts.zoom == null ? cleanViewport(viewport).zoom : opts.zoom);
-    const s = baseScale(metrics) * zoom;
-    const cx = (Number(obj.x) || 0) + (Number(obj.width) || 0) * (Number(obj.scale) || 1) / 2;
-    const cy = (Number(obj.y) || 0) + (Number(obj.height) || 0) * (Number(obj.scale) || 1) / 2;
-    return { x: -cx * s, y: -cy * s, zoom };
-  }
   function safeId(value) { return String(value || 'sheet').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'sheet'; }
   function sheetIdFromEntityRef(ref) {
     const text = String(ref || '');
