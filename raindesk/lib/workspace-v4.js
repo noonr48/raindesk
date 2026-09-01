@@ -804,7 +804,13 @@ function applyAction(action = {}) {
   }
   if (type === 'dock_panel') {
     if (!row) throw httpError(404, `unknown workspace object "${targetId}"`);
-    if (row.space === 'world') throw httpError(400, 'world objects do not use screen-edge docking');
+    // No row.space guard here (Stage-2 spec review): this lane serves only
+    // `window_*` desk windows (the partner-actions prefix gate routes
+    // world_* artwork to the v3 executor, which keeps its own guard) — and
+    // desk windows with world-unit geometry dock BY DESIGN (docking is a
+    // presentation, never a coordinate authority). The old guard blocked
+    // exactly the legitimate case: partner-docking a birth-flagged
+    // space:'world' freeform surface.
     const pre = row.presentation ? { ...row.presentation } : { kind: 'floating' };
     const edge = payload.dock == null ? null : payload.dock;
     if (edge !== null && !DOCK_EDGES.has(edge)) throw httpError(400, 'invalid dock position');

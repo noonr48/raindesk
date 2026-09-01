@@ -181,7 +181,11 @@ function v4ApiFixture({ record = [], doc } = {}) {
         changed.groups.push(group);
         changed.createdGroup = group;
       } else if (op.kind === 'group.join' || op.kind === 'group.leave' || op.kind === 'group.activate' || op.kind === 'group.reorder' || op.kind === 'group.dissolve') {
-        changed.groups.push({ groupId: op.groupId || (op.target && op.target.groupId) || `grp_test_${groupSeq}`, version: 2, members: [], active: null });
+        // Realistic echo: the touched group with its members (the canned
+        // members:[] shape was unrealistic — the adopt path never observed
+        // membership through activate echoes).
+        const members = (op.member ? [op.member] : []).map((m) => ({ ...m }));
+        changed.groups.push({ groupId: op.groupId || (op.target && op.target.groupId) || `grp_test_${groupSeq}`, version: 2, members, active: op.member ? { ...op.member } : null });
       } else if (op.kind === 'window.close' && op.window) {
         changed.tombstones.push({ ...op.window });
       } else if (op.kind === 'shelf.minimise' || op.kind === 'shelf.restore') {
@@ -1513,4 +1517,21 @@ test('Stage-2 P4: creates birth-flag their coordinate space; the world cascade o
   // cascade (P2); declared defaultPlacement remains the SCREEN-chrome path.
   const a = manager.state('window_worldscene');
   assert.ok(Number.isFinite(a.rect.x) && a.rect.width >= 200, 'world cascade placement');
+});
+
+test('group-echo race class: switchTab inside the create-response window keeps the newer active and sends the SERVER group id', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const [a, b] = openThree(manager);
+  manager.groupWindows([a, b], { activeWindowId: a });
+  manager.switchTab(b); // NO await: dispatched while the create response is still in flight
+  await new Promise((r) => setTimeout(r, 5));
+  const group = manager.groups()[0];
+  assert.equal(group.activeWindowId, b, 'the newer local active survives the swap (stale echo never regresses it)');
+  const activate = record.find((c) => c.kind === 'intent' && c.op.kind === 'group.activate');
+  assert.ok(activate, 'activate recorded');
+  assert.equal(activate.op.groupId, group.groupId, 'send-time re-resolution: the SERVER-minted id, never the dead provisional id');
+  assert.ok(!activate.op.groupId.startsWith('group_'), 'provisional local id never reaches the wire');
 });

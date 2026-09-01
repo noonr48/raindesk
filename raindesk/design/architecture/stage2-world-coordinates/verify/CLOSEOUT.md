@@ -25,6 +25,6 @@ Executed 2026-08-28 on `chatgpt/raindesk-v2-integration`. Round-6's [critical] f
 
 ## Honest residuals
 
-- Legacy rows keep a stale declarative `space:"screen"` flag after client-side conversion (no behavior branches on it server-side — grep-verified); the flag trues up when a window is recreated. Revisit if any future server behavior branches on `row.space` (LEDGER L-4 would-change-mind).
+- Legacy rows keep a stale declarative `space:"screen"` flag after client-side conversion — and the ONE server branch that read it (the v4 partner dock_panel guard) was REMOVED in the clause-7 repair: it was stale v3 thinking that blocked exactly the legitimate case (partner-docking a birth-flagged space:'world' desk surface; world_* artwork never routes through the v4 partner lane — the v3 executor keeps its own guard). Post-repair, no server behavior branches on `row.space` for window_* rows (grep-verified); the flag trues up when a window is recreated. Revisit if any future server behavior branches on `row.space` (LEDGER L-4 would-change-mind).
 - CreativeDesk/WorkspaceShell still own their own render loops (Stage-3 owner retirement; they already consume the shared projection module for math).
 - defaultPlacement is now screen-chrome-only; world surfaces place via the cascade (P4 audit).

@@ -73,3 +73,17 @@ test('partner v4 revert of a closed-and-reopened window fails identity-exact: ne
   assert.equal(fresh.spatial.x, 50, 'the new incarnation is untouched');
   assert.equal(fresh.ref.generation, 2);
 });
+
+test('partner v4 dock_panel on a world-flagged window_* desk surface succeeds (Stage-2 spec-review clause-7 repair)', () => {
+  // Birth-flagged freeform surfaces carry space:'world' (world-unit
+  // geometry) and dock BY DESIGN — the stale v3-thinking space guard
+  // blocked exactly this legitimate case.
+  workspaceV4.applyIntent({ actorId: 'test_v4partner', intentId: 'dockflag_create', op: { kind: 'window.create', windowId: 'window_scenes', incarnationId: 'inc_dockflag_0001', type: 'sequence_strip', space: 'world', x: 40, y: 40, width: 300, height: 220 } });
+  const proposal = actions.recordProposal({ type: 'dock_panel', targetId: 'window_scenes', payload: { dock: 'left' } }, { permissionMode: 'act' });
+  const done = actions.execute(proposal.id);
+  assert.equal(done.status, 'completed', 'world-flagged desk windows partner-dock through the typed presentation');
+  const row = workspaceV4.readV4().windows.find((w) => w.ref.windowId === 'window_scenes');
+  assert.equal(row.presentation.kind, 'docked');
+  assert.equal(row.presentation.edge, 'left');
+  assert.equal(row.space, 'world', 'geometry authority untouched: docking is a presentation, never a coordinate rewrite');
+});
