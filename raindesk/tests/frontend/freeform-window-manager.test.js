@@ -1415,3 +1415,17 @@ test('shelf restore to docked shows content: collapsed is cleared', async () => 
   const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
   assert.ok(frame && !frame.classList.contains('freeform-window-collapsed'), 'body renders expanded');
 });
+
+test('structural ops dispatched inside the create-response window carry the ADOPTED ref (implementation-lens F2)', async () => {
+  const { manager, calls } = freshManager();
+  manager.open('references');
+  manager.minimise('window_references'); // NO flush: the create is still in flight on the chain
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  const create = calls.find((c) => c.kind === 'intent' && c.op.kind === 'window.create');
+  const min = calls.find((c) => c.kind === 'intent' && c.op.kind === 'shelf.minimise');
+  assert.ok(create, 'create recorded');
+  assert.ok(min, 'minimise recorded');
+  assert.equal(min.op.window.generation, 1, 'send-time ref construction: the ADOPTED generation, never the mint-time 0');
+  assert.equal(min.op.window.incarnationId, create.op.incarnationId, 'same incarnation the create minted');
+});

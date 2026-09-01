@@ -597,6 +597,11 @@
             },
           },
         });
+        // v4 cutover (S7 implementation-lens F1): the DURABLE client is
+        // constructed FIRST and shared by WindowManager AND boot replay —
+        // one outbox, one actor. Constructing it after the manager left the
+        // manager on its memory-only fallback and made replay() vacuous.
+        state.v4 = window.RaindeskV4Client ? window.RaindeskV4Client.V4Client({ api: API }) : null;
         state.freeform = window.RaindeskWindowManager.WindowManager({
           root: $('stage'), document, api: API, v4: state.v4,
           viewportMetrics: () => ({ width: $('stage').clientWidth, height: $('stage').clientHeight }),
@@ -636,7 +641,6 @@
         // v4 cutover S2: durable outbox reconciliation precedes restore — a
         // pending close from a previous session settles before auto-open can
         // resurrect anything (the design's boot-reconcile rule).
-        state.v4 = window.RaindeskV4Client ? window.RaindeskV4Client.V4Client({ api: API }) : null;
         (state.v4 ? state.v4.replay() : Promise.resolve()).catch(() => {})
           .then(() => state.freeform.init())
           .then(() => {

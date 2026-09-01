@@ -10,6 +10,7 @@ Executed 2026-08-28 on `chatgpt/raindesk-v2-integration`. Every step landed as i
 | S3–S5 WindowManager cutover (merged per LEDGER L-3) | `8d04732` | suite 447/447 (8 obsolete v3-class tests retired, 3 v4 replacements); journey 25/25 with server-side witness on `GET /api/workspace/v4`; animatic reload smoke ok; grep criterion: ZERO v3 workspace writes in window-manager.js |
 | S6 Partner actions through the v4 executor | `78d01c4` | partner lib tests 4/4 incl. identity-exact revert discriminator; suite 449/449 |
 | S7 spec-review repair round | (this commit) | F1: persist() now mints a per-gesture mutationId on the spatial lane (resize discriminator pins it); F2: criterion-2 deterministic reload-no-resurrection test added (lib/tests/workspace-v4-client-outbox.test.js — real store + real client, readV4 + tombstone + legacy-guard witnesses) |
+| S7 implementation-review repair round | (this commit) | IF1: the durable v4 client is now constructed BEFORE WindowManager and shared with boot replay (one outbox, one actor — the manager previously fell back to memory-only, making replay() vacuous); IF2: queueIntent builds ops AT SEND TIME (thunks) — structural ops inside the create-response window now carry the adopted generation, never the mint-time 0 (discriminator: immediate-minimise test asserts generation 1) |
 
 ## Journey-caught defect (the gate earning its keep)
 

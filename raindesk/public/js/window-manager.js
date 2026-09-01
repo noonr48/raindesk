@@ -217,26 +217,34 @@
 
     const intentWarned = new Set();
 
-    /** Serialize a v4 intent behind every pending write. Typed-terminal
-     * conflicts (our incarnation gone/replaced) settle by dropping the
-     * local ghost; transient failures warn once per kind — the outbox
-     * already holds the op durably for boot replay. */
-    function queueIntent(op) {
+    /** Serialize a v4 intent behind every pending write. The op is BUILT
+     * AT SEND TIME (makeOp thunk): UI-event-time snapshots of model.ref
+     * carried generation 0 whenever an op landed inside the create-response
+     * window — the writeChain serializes ops AFTER the create link adopts
+     * the canonical ref, so deferred construction always carries the
+     * adopted generation (implementation-lens F2). Typed-terminal conflicts
+     * (our incarnation gone/replaced) settle by dropping the local ghost;
+     * transient failures warn once per kind — the outbox holds the op. */
+    function queueIntent(makeOp) {
       if (!v4) return Promise.resolve(null);
-      const run = () => v4.intent(op).then((response) => {
-        if (response && response.changed) adoptResponse(response);
-        return response;
-      }).catch((error) => {
-        const code = error && (error.code || (error.detail && error.detail.code));
-        const target = (op.window || op.member || (op.target && op.target.window) || {}).windowId;
-        if ((code === 'WINDOW_GENERATION_GONE' || code === 'INCARNATION_REPLACED') && target) {
-          dropModel(target, `window ${target} closed elsewhere (${code})`);
-        } else if (!intentWarned.has(op.kind)) {
-          intentWarned.add(op.kind);
-          console.warn('[freeform]', op.kind, 'not persisting:', error && error.message || error);
-        }
-        return null;
-      });
+      const run = () => {
+        const op = typeof makeOp === 'function' ? makeOp() : makeOp;
+        if (!op) return Promise.resolve(null);
+        return v4.intent(op).then((response) => {
+          if (response && response.changed) adoptResponse(response);
+          return response;
+        }).catch((error) => {
+          const code = error && (error.code || (error.detail && error.detail.code));
+          const target = (op.window || op.member || (op.target && op.target.window) || {}).windowId;
+          if ((code === 'WINDOW_GENERATION_GONE' || code === 'INCARNATION_REPLACED') && target) {
+            dropModel(target, `window ${target} closed elsewhere (${code})`);
+          } else if (!intentWarned.has(op.kind)) {
+            intentWarned.add(op.kind);
+            console.warn('[freeform]', op.kind, 'not persisting:', error && error.message || error);
+          }
+          return null;
+        });
+      };
       writeChain = writeChain.then(run, run);
       return writeChain;
     }
@@ -639,7 +647,7 @@
           if (snapped) applySnap(current, snapped);
           else if (current.state === 'docked') { // dragged off the edge re-floats
             current.dock = null; transition(current, 'floating');
-            if (v4 && current.ref) queueIntent({ kind: 'window.setPresentation', window: { ...current.ref }, mode: 'floating', floatingAt: { x: Math.round(current.rect.x), y: Math.round(current.rect.y) } });
+            if (v4 && current.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...current.ref }, mode: 'floating', floatingAt: { x: Math.round(current.rect.x), y: Math.round(current.rect.y) } }));
           }
           renderFrame(current);
           await persist(current);
@@ -754,7 +762,7 @@
         model.rect = { ...snapped.rect };
         model.dock = snapped.dock; // durable edge: docking must survive reload (GPT Pro round-3)
         transition(model, 'docked');
-        if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'docked', edge: snapped.dock });
+        if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'docked', edge: snapped.dock }));
       }
     }
 
@@ -842,7 +850,7 @@
       transition(model, 'minimised');
       renderFrame(model);
       renderShelf();
-      if (v4 && model.ref) queueIntent({ kind: 'shelf.minimise', window: { ...model.ref } });
+      if (v4 && model.ref) queueIntent(() => ({ kind: 'shelf.minimise', window: { ...model.ref } }));
       return model;
     }
     function restore(windowId) {
@@ -859,11 +867,11 @@
       renderFrame(model);
       renderShelf();
       bringToFront(windowId);
-      if (v4 && model.ref) queueIntent({
+      if (v4 && model.ref) queueIntent(() => ({
         kind: 'shelf.restore', window: { ...model.ref },
         mode: dockOk ? 'resume' : 'floating',
         ...(dockOk ? {} : { floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) } }),
-      });
+      }));
       persist(model);
       return model;
     }
@@ -872,7 +880,7 @@
       if (model && Number.isFinite(x) && Number.isFinite(y)) {
         if (model.state === 'docked') { // explicit placement wins over the stored dock
           model.dock = null; transition(model, 'floating');
-          if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(x), y: Math.round(y) } });
+          if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(x), y: Math.round(y) } }));
         }
         model.rect.x = x; model.rect.y = y;
         renderFrame(model);
@@ -956,7 +964,7 @@
       if (model.state === 'maximised') return model;
       transition(model, 'maximised');
       renderFrame(model);
-      if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'maximised' });
+      if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'maximised' }));
       return model;
     }
     function unmaximise(windowId) {
@@ -966,7 +974,7 @@
       renderFrame(model);
       // v4 restore re-applies the typed beforeMaximise presentation (the
       // server remembers the dock edge the old state machine lost).
-      if (v4 && model.ref) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'restore' });
+      if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'restore' }));
       return model;
     }
     function close(windowId) {
@@ -1055,7 +1063,7 @@
           } else {
             model.state = 'floating';
             model.dock = null;
-            if (v4) queueIntent({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) } });
+            if (v4) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) } }));
           }
         }
         windows.set(model.windowId, model);
@@ -1219,10 +1227,10 @@
         model.rect.x = x; model.rect.y = y;
       }
       renderFrame(model);
-      if (v4 && model.ref && model.groupId === null) queueIntent({
+      if (v4 && model.ref && model.groupId === null) queueIntent(() => ({
         kind: 'group.leave', member: { ...model.ref }, mode: 'floating',
         floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) },
-      });
+      }));
       persist(model);
       return model;
     }
@@ -1258,8 +1266,10 @@
       }
       bringToFront(activeWindowId);
       if (v4) {
-        const refs = ids.map((id) => windows.get(id)).filter(Boolean).map((m) => ({ ...m.ref }));
-        queueIntent({ kind: 'group.create', members: refs, active: { ...(windows.get(activeWindowId) || { ref: refs[0] }).ref } })
+        queueIntent(() => {
+          const refs = ids.map((id) => windows.get(id)).filter(Boolean).map((m) => ({ ...m.ref }));
+          return { kind: 'group.create', members: refs, active: { ...(windows.get(activeWindowId) || { ref: refs[0] }).ref } };
+        })
           .then((response) => {
             const created = response && response.changed && response.changed.createdGroup;
             if (created && created.groupId !== groupId) {
@@ -1295,11 +1305,11 @@
       group.activeWindowId = memberId;
       for (const id of group.windowIds) renderFrame(windows.get(id));
       bringToFront(memberId);
-      if (v4) queueIntent({
+      if (v4) queueIntent(() => ({
         kind: 'group.activate',
         groupId: group.groupId,
         member: { ...(windows.get(memberId) || {}).ref },
-      });
+      }));
       return group;
     }
 
@@ -1368,7 +1378,7 @@
       renderAll(); renderShelf();
       if (v4) {
         if (madeGroup) {
-          queueIntent({ kind: 'group.create', members: [{ ...target.ref }, { ...model.ref }], active: { ...target.ref } })
+          queueIntent(() => ({ kind: 'group.create', members: [{ ...target.ref }, { ...model.ref }], active: { ...target.ref } }))
             .then((response) => {
               const created = response && response.changed && response.changed.createdGroup;
               if (created && created.groupId !== group.groupId) {
@@ -1379,7 +1389,7 @@
               }
             });
         } else {
-          queueIntent({ kind: 'group.join', member: { ...model.ref }, target: { groupId: group.groupId } });
+          queueIntent(() => ({ kind: 'group.join', member: { ...model.ref }, target: { groupId: group.groupId } }));
         }
       }
       bringToFront(group.activeWindowId);
@@ -1411,9 +1421,14 @@
         const idx = group.windowIds.indexOf(memberId);
         const beforeId = idx + 1 < group.windowIds.length ? group.windowIds[idx + 1] : null;
         const beforeModel = beforeId ? windows.get(beforeId) : null;
-        queueIntent({
-          kind: 'group.reorder', groupId: group.groupId, member: { ...model.ref },
-          ...(beforeModel && beforeModel.ref ? { before: { ...beforeModel.ref } } : {}),
+        queueIntent(() => {
+          const idx2 = group.windowIds.indexOf(memberId);
+          const beforeId2 = idx2 + 1 < group.windowIds.length ? group.windowIds[idx2 + 1] : null;
+          const beforeModel2 = beforeId2 ? windows.get(beforeId2) : null;
+          return {
+            kind: 'group.reorder', groupId: group.groupId, member: { ...model.ref },
+            ...(beforeModel2 && beforeModel2.ref ? { before: { ...beforeModel2.ref } } : {}),
+          };
         });
       }
       return group;
