@@ -77,11 +77,19 @@ function seedFromV3() {
       const generation = 1;
       identities[win.windowId] = { lastGeneration: generation, latestIncarnationId: incarnationId };
       const isMinimised = win.state === 'minimised';
-      const presentation = win.state === 'docked'
+      // Adapter-family A1: edges validate everywhere they are retained —
+      // an invalid dock edge converts to floating (one reconciliation pass,
+      // the §6 rule), and maximised rows keep their MAXIMISED presentation
+      // with the v3 rect as the floating fallback (v3 stored the pre-max
+      // rect; unmaximise floats there).
+      const edgeIsValid = DOCK_EDGES.has(win.dock);
+      const presentation = (win.state === 'docked' && edgeIsValid)
         ? { kind: 'docked', edge: win.dock }
-        : (isMinimised && win.space === 'screen' && win.dock)
-          ? { kind: 'docked', edge: win.dock } // recoverable dock under shelf membership
-          : { kind: 'floating' };
+        : win.state === 'maximised'
+          ? { kind: 'maximised' }
+          : (isMinimised && win.space === 'screen' && edgeIsValid)
+            ? { kind: 'docked', edge: win.dock } // recoverable dock under shelf membership
+            : { kind: 'floating' };
       const g = groupOf.get(win.windowId);
       windows.push({
         ref: { windowId: win.windowId, generation, incarnationId },
@@ -102,13 +110,25 @@ function seedFromV3() {
     }
   }
   // Canonical groups keep stored order; members reference generation-1 rows.
+  // Adapter-family A1: duplicate membership resolves deterministically in
+  // STORED GROUP ORDER (the first group claiming an id keeps it) and the
+  // removal is recorded as a migration-repair receipt (auditable, never
+  // silent). Empty-after-dedupe groups dissolve.
+  const claimed = new Set();
+  const duplicateMemberships = [];
   if (v3 && Array.isArray(v3.groups)) {
     for (const g of v3.groups) {
-      const members = (Array.isArray(g.windowIds) ? g.windowIds : [])
-        .map((id) => windows.find((w) => w.ref.windowId === id))
-        .filter(Boolean)
-        .filter((w) => !w._shelved) // shelf owns minimised membership (canonical exclusion)
-        .map((w) => ({ ...w.ref }));
+      const members = [];
+      for (const id of (Array.isArray(g.windowIds) ? g.windowIds : [])) {
+        const w = windows.find((row) => row.ref.windowId === id);
+        if (!w || w._shelved) continue; // shelf owns minimised membership (canonical exclusion)
+        if (claimed.has(id)) {
+          duplicateMemberships.push({ windowId: id, keptBy: null, removedFrom: g.groupId });
+          continue;
+        }
+        claimed.add(id);
+        members.push({ ...w.ref });
+      }
       if (!members.length) continue;
       groups.push({
         groupId: g.groupId,
@@ -118,6 +138,10 @@ function seedFromV3() {
           ? members.find((m) => m.windowId === g.activeWindowId)
           : members[0],
       });
+    }
+    for (const d of duplicateMemberships) {
+      const keeper = groups.find((g) => g.members.some((m) => m.windowId === d.windowId));
+      if (keeper) d.keptBy = keeper.groupId;
     }
   }
   if (v3 && Array.isArray(v3.shelf && v3.shelf.windowIds)) {
@@ -131,6 +155,9 @@ function seedFromV3() {
     schemaVersion: 4,
     seededAt: now(),
     seededFromV3Revision: v3 ? v3.revision : null,
+    migration: { // Adapter-family A1: the audit receipt — what the migration decided
+      repairedDuplicateMemberships: duplicateMemberships,
+    },
     identities,
     tombstones: {},
     receipts: {},
@@ -157,7 +184,16 @@ function read() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   let raw = null;
   try { raw = fs.readFileSync(V4_PATH, 'utf8'); } catch (e) {
-    if (e && e.code === 'ENOENT') { cache = seedFromV3(); atomicWrite(cache); return cache; }
+    if (e && e.code === 'ENOENT') {
+      // Adapter-family A1: exact .pre-v4.bak backup of the v3 store, written
+      // EXACTLY ONCE (a later reseed never overwrites the original evidence).
+      const V3_PATH = path.join(DATA_DIR, 'workspace.json');
+      const BACKUP_PATH = `${V3_PATH}.pre-v4.bak`;
+      try {
+        if (fs.existsSync(V3_PATH) && !fs.existsSync(BACKUP_PATH)) fs.copyFileSync(V3_PATH, BACKUP_PATH);
+      } catch (_e) { /* best-effort evidence: migration proceeds even on a read-only dir */ }
+      cache = seedFromV3(); atomicWrite(cache); return cache;
+    }
     throw e;
   }
   let parsed;
