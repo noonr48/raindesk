@@ -277,3 +277,13 @@
   font-size: 12px;
 }
 .freeform-add-layer:hover { background: rgba(35, 30, 24, 0.05); }
+
+/* Stage-6 K1: keyboard focus must be VISIBLE and deterministic */
+.freeform-window-title:focus-visible,
+.freeform-window-tab:focus-visible,
+.freeform-shelf-chip:focus-visible {
+  outline: 2px solid #7cf;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.freeform-window-head { position: relative; }

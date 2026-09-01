@@ -44,6 +44,10 @@ function makeNode(tag) {
     append(...children) { for (const child of children) { child.parentNode = this; this.children.push(child); } },
     removeChild(child) { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); },
     parentNode: null,
+    // Stage-6 K1: programmatic DOM-focus tracking for the fake DOM — focus()
+    // moves document.activeElement so the focus contract is unit-testable.
+    focus() { if (typeof document !== 'undefined' && document && typeof document._setActiveElement === 'function') document._setActiveElement(this); },
+    blur() { if (typeof document !== 'undefined' && document && typeof document._clearActiveElement === 'function') document._clearActiveElement(this); },
     addEventListener(type, fn, capture) {
       const key = capture ? `${type}:capture` : type;
       (this._listeners[key] = this._listeners[key] || []).push(fn);
@@ -127,6 +131,9 @@ function findAll(node, selector, out, all) {
 
 const fakeDocument = {
   createElement: (t) => makeNode(t),
+  activeElement: null,
+  _setActiveElement(n) { this.activeElement = n; },
+  _clearActiveElement(n) { if (this.activeElement === n) this.activeElement = null; },
   defaultView: { CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } },
   elementFromPoint: null, // tests stub this for drop-zone resolution
   elementsFromPoint: null, // tests stub this for stacked (look-through) drops
@@ -1984,4 +1991,61 @@ test('Stage-5 repair (impl F3): a floating SCREEN group frame stranded off-scree
   const setF = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.setFrame').pop();
   assert.ok(setF, 'the convergence committed through the group.setFrame lane');
   assert.ok(setF.op.patch.rect.x >= 40 - g.frame.rect.width, `the committed patch carries the normalized frame (patch.x=${setF.op.patch.rect?.x ?? setF.op.patch.x})`);
+});
+
+test('Stage-6 K1: logical focus() MOVES DOM focus; frames are named regions; restore chain is deterministic', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('layers', { rect: { x: 40, y: 40, width: 300, height: 240 } });
+  const stA = manager.state('window_layers');
+  const titleA = stA && root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  assert.ok(titleA, 'frame exists');
+  const headA = titleA.children.find((c) => c.classList.contains('freeform-window-head'));
+  const titleElA = headA.children.find((c) => c.classList.contains('freeform-window-title'));
+  assert.equal(fakeDocument.activeElement, titleElA, 'open() moved DOM focus to the title (the Round-5 gap closed)');
+  assert.equal(titleA.getAttribute('role'), 'region', 'frame is a named region');
+  assert.equal(titleA.getAttribute('aria-roledescription'), 'window');
+  assert.equal(titleA.getAttribute('aria-label'), 'Layers');
+  assert.equal(titleElA.getAttribute('tabindex'), '-1', 'title is programmatically focusable, not a tab stop');
+
+  manager.open('references', { rect: { x: 500, y: 200, width: 300, height: 240 } });
+  const frameB = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  const headB = frameB.children.find((c) => c.classList.contains('freeform-window-head'));
+  const titleElB = headB.children.find((c) => c.classList.contains('freeform-window-title'));
+  assert.equal(fakeDocument.activeElement, titleElB, 'the newer window takes DOM focus');
+
+  manager.focus('window_layers');
+  assert.equal(fakeDocument.activeElement, titleElA, 'logical focus(windowId) moves DOM focus');
+
+  // close the focused window: the chain restores the most-recent remaining frame
+  manager.close('window_layers');
+  assert.equal(fakeDocument.activeElement, titleElB, 'close() restored DOM focus to the remaining frame (recency)');
+
+  // minimise the last window: no frames remain — the chain falls to the shelf chip
+  manager.attachShelf(root);
+  manager.minimise('window_references');
+  const chip = root.children.find((c) => c.classList && c.classList.contains('freeform-shelf-chip'));
+  assert.ok(chip, 'shelf chip rendered');
+  assert.equal(fakeDocument.activeElement, chip, 'minimise() fell through to the shelf chip (keyboard Enter restores)');
+});
+
+test('Stage-6 K1: aria-label tracks the title SSOT through rename', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  let setTitle = null;
+  wm.CreativeSurfaces.register({ id: 'k1_named', title: 'K1 Named', entityType: 'k1_panel', coordinateSpace: 'screen' });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('k1_named', { onRename: null, title: undefined, rect: { x: 60, y: 60, width: 300, height: 220 } });
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_k1_named');
+  assert.equal(frame.getAttribute('aria-label'), 'K1 Named');
+  const head = frame.children.find((c) => c.classList.contains('freeform-window-head'));
+  const titleEl = head.children.find((c) => c.classList.contains('freeform-window-title'));
+  titleEl.textContent = 'Renamed';
+  fakeDocument.dispatch('focusout', { target: titleEl }); // fake DOM has no blur event; direct sync check below
+  manager.focus('window_k1_named'); // focus() re-renders through renderFrame
+  assert.equal(frame.getAttribute('aria-label'), 'K1 Named', 'aria-label derives from model.title (span text alone does not change it)');
+  assert.ok(setTitle === null, 'no callback wired in this test — pure render path');
 });

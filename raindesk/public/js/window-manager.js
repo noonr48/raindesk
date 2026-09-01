@@ -156,6 +156,7 @@
     let shelfHostEl = shelfHost || null; // attachShelf() may bind it later
     let zTop = 100;
     let focusedId = null;
+    let focusOrder = []; // Stage-6 K1: recency list backing the deterministic restore chain
     let lastRevision = null;          // optimistic-concurrency token for structural writes
     let groupsWarned = false; // per-route: a shelf conflict must not silence the groups self-heal
     let shelfWarned = false;
@@ -460,10 +461,16 @@
       const frame = el(document, 'section', 'freeform-window');
       frame.dataset.windowId = model.windowId;
       frame.dataset.surface = model.surfaceId;
+      // Stage-6 K1: named window regions (Round-5) + a programmatic focus
+      // target that is NOT a tab stop (title carries it; tabindex=-1).
+      frame.setAttribute('role', 'region');
+      frame.setAttribute('aria-roledescription', 'window');
+      frame.setAttribute('aria-label', String(model.title));
       const head = el(document, 'header', 'freeform-window-head');
       const tabsSlot = el(document, 'nav', 'freeform-window-tabs');
       tabsSlot.setAttribute('aria-label', 'window tabs');
       const title = el(document, 'span', 'freeform-window-title', model.title);
+      title.setAttribute('tabindex', '-1');
       const actions = el(document, 'span', 'freeform-window-actions');
       const btnMin = el(document, 'button', 'freeform-window-btn minimise', '—');
       btnMin.type = 'button'; btnMin.setAttribute('aria-label', 'minimise window');
@@ -520,6 +527,7 @@
       // (S0 — kills the duplicate-key null-out and the span-overwrites-string
       // collision that left title bars empty until a manual rename).
       if (model.titleEl && model.titleEl.textContent !== String(model.title)) model.titleEl.textContent = String(model.title);
+      if (model.frame) model.frame.setAttribute('aria-label', String(model.title)); // aria-label tracks the title SSOT
       const group = groupFor(model.windowId);
       const isHiddenMember = model.state === 'tabbed' && group && group.activeWindowId !== model.windowId;
       if (model.state === 'minimised' || isHiddenMember) { frame.hidden = true; return; }
@@ -1070,8 +1078,38 @@
       const model = windows.get(windowId); if (!model) return null;
       focusedId = windowId;
       model.zIndex = ++zTop;
+      // Stage-6 K1: logical focus MOVES DOM focus (Round-5 gap) and feeds the
+      // recency order the deterministic restore chain walks. Rename editing
+      // keeps its own focus (contenteditable owns the caret).
+      focusOrder = [windowId, ...focusOrder.filter((id) => id !== windowId)].slice(0, 16);
+      if (model.titleEl && !model.titleEl.hasAttribute('contenteditable')) model.titleEl.focus();
       renderAll();
       return model;
+    }
+
+    /** Stage-6 K1: deterministic focus restore after a frame leaves the desk
+     * (close/minimise): the most-recently-focused REMAINING visible frame,
+     * else the first shelf chip (Enter restores), else nothing. Pure function
+     * of (focusOrder, windows, groups, shelf) — no timing dependence. */
+    function restoreFocusAfter(removedWindowId) {
+      const groupOf = (id) => { for (const g of groups.values()) if (g.windowIds.includes(id)) return g; return null; };
+      for (const id of focusOrder) {
+        if (id === removedWindowId) continue;
+        const model = windows.get(id);
+        if (!model) continue;
+        const group = groupOf(id);
+        const hiddenMember = model.state === 'tabbed' && group && group.activeWindowId !== id;
+        if (model.state === 'minimised' || hiddenMember) continue;
+        return focus(id);
+      }
+      const chip = shelfHostEl && shelfHostEl.children && shelfHostEl.children.find
+        ? shelfHostEl.children.find((c) => c.dataset && c.dataset.windowId)
+        : null;
+      if (chip) { chip.focus(); return null; }
+      if (typeof document !== 'undefined' && document.activeElement && document.activeElement.blur) {
+        try { document.activeElement.blur(); } catch (_e) {}
+      }
+      return null;
     }
 
     function minimise(windowId) {
@@ -1080,6 +1118,7 @@
       transition(model, 'minimised');
       renderFrame(model);
       renderShelf();
+      restoreFocusAfter(windowId); // Stage-6 K1: deterministic chain (the new chip is a candidate)
       if (v4 && model.ref) queueIntent(() => ({ kind: 'shelf.minimise', window: { ...model.ref } }));
       return model;
     }
@@ -1238,6 +1277,7 @@
       if (model.frame && model.frame.parentNode) model.frame.parentNode.removeChild(model.frame);
       windows.delete(windowId); controllers.delete(windowId); saves.delete(windowId);
       if (focusedId === windowId) focusedId = null;
+      restoreFocusAfter(windowId); // Stage-6 K1: focus never dies with a frame
       if (v4 && model.ref) {
         // v4 close: identity-exact and durable — the outbox holds the intent
         // until the server confirms THIS incarnation tombstoned; boot replay
