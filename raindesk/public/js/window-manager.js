@@ -205,9 +205,8 @@
     /** Stage-4 G3: grouped geometry/lifecycle commits ride group.setFrame —
      * the member's own spatial stays latent (the G3 contract). */
     function persistFrame(model) {
-      const group = groupFor(model.windowId);
       const frame = groupedFrame(model);
-      if (!v4 || !frame || !group) return Promise.resolve(null);
+      if (!v4 || !frame) return Promise.resolve(null);
       const patch = {
         rect: { x: Math.round(frame.rect.x), y: Math.round(frame.rect.y), width: Math.round(frame.rect.width), height: Math.round(frame.rect.height) },
         zIndex: frame.zIndex,
@@ -215,7 +214,16 @@
       frame.rect.x = patch.rect.x; frame.rect.y = patch.rect.y;
       frame.rect.width = patch.rect.width; frame.rect.height = patch.rect.height;
       renderFrame(model);
-      return queueIntent(() => ({ kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: group.version, patch }));
+      // Stage-4 repair (impl F1): expectedGroupVersion re-resolves at SEND
+      // time — adoptResponse REPLACES group records, so an eagerly captured
+      // version goes stale whenever a group op resolves in-flight (the
+      // sibling sites' pattern; an eager capture sent a stale version that
+      // the server refused with a terminal 409, silently dropping the
+      // commit while the local frame had already adopted it).
+      return queueIntent(() => {
+        const g = groupFor(model.windowId);
+        return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch };
+      });
     }
     /** Stage-4 G3: gesture-origin restore targets the frame when grouped. */
     function restoreGestureOrigin(model, ox, oy) {
@@ -346,7 +354,25 @@
           const target = (op.window || op.member || (op.target && op.target.window) || {}).windowId;
           if ((code === 'WINDOW_GENERATION_GONE' || code === 'INCARNATION_REPLACED') && target) {
             dropModel(target, `window ${target} closed elsewhere (${code})`);
-          } else if (!intentWarned.has(op.kind)) {
+          } else if (code === 'GROUP_CHANGED') {
+            // Stage-4 repair (impl F2): the 409 detail carries the FRESH
+            // group — adopt it or every subsequent frame commit stalls
+            // behind a permanently stale local version (the dropped op
+            // itself merges as lost-to-the-concurrent-writer, which is
+            // correct cross-client semantics).
+            const fresh = (error && error.group && error.group.groupId ? error.group : null) || (error && error.detail && error.detail.group && error.detail.group.groupId ? error.detail.group : null);
+            if (fresh && Array.isArray(fresh.members)) {
+              const existingG = groups.get(fresh.groupId);
+              const activeId = existingG && fresh.members.some((m) => m.windowId === existingG.activeWindowId) ? existingG.activeWindowId : (fresh.active && fresh.active.windowId);
+              groups.set(fresh.groupId, {
+                groupId: fresh.groupId, version: fresh.version,
+                windowIds: fresh.members.map((m) => m.windowId),
+                activeWindowId: activeId,
+                frame: fresh.frame ? JSON.parse(JSON.stringify(fresh.frame)) : (existingG && existingG.frame ? existingG.frame : null),
+              });
+            }
+          }
+          if (!intentWarned.has(op.kind)) {
             intentWarned.add(op.kind);
             console.warn('[freeform]', op.kind, 'not persisting:', error && error.message || error);
           }
@@ -1628,6 +1654,7 @@
       const model = windows.get(windowId); const target = windows.get(targetWindowId);
       if (!model || !target || model === target) return null;
       if (model.locked || target.locked) return null;
+      const previousGroupId = model.groupId; // captured BEFORE the local leave (impl F3)
       removeFromGroup(model);
       let group = target.groupId && groups.get(target.groupId);
       let madeGroup = false;
@@ -1659,6 +1686,13 @@
               }
             });
         } else {
+          // Stage-4 repair (impl F3): a member crossing from ANOTHER group
+          // leaves on the wire BEFORE joining — the server's join refuses
+          // already-grouped members (terminal CONTAINER_CHANGED), which
+          // silently dropped the whole move while local state joined anyway.
+          if (previousGroupId && previousGroupId !== group.groupId) {
+            queueIntent(() => ({ kind: 'group.leave', member: { ...model.ref }, mode: 'resume' }));
+          }
           queueIntent(() => ({ kind: 'group.join', member: { ...model.ref }, target: { groupId: (groupFor(model.windowId) || group).groupId } })); // re-resolve at SEND time (F1 class)
         }
       }

@@ -167,9 +167,15 @@ test.after(() => { if (savedDocument === undefined) delete global.document; else
 function v4ApiFixture({ record = [], doc } = {}) {
   let structuralRevision = 1;
   let groupSeq = 0;
-  return {
+  const groupMembers = {}; // canonical membership per groupId (fixture realism)
+  const rejectOnce = [];
+  const fixtureApi = {
+    /** Test hook: rejectOnce(error) makes the NEXT intent reject with it
+     * (fault injection for 409-detail adoption lanes). */
+    rejectOnce(error) { rejectOnce.push(error); },
     applyWorkspaceIntent(payload) {
       record.push({ kind: 'intent', op: payload.op, intentId: payload.intentId });
+      if (rejectOnce.length) return Promise.reject(rejectOnce.shift());
       structuralRevision += 1;
       const op = payload.op || {};
       const changed = { kind: op.kind, windows: [], groups: [], tombstones: [] };
@@ -178,18 +184,42 @@ function v4ApiFixture({ record = [], doc } = {}) {
       } else if (op.kind === 'group.create') {
         groupSeq += 1;
         const group = { groupId: `grp_test_${groupSeq}`, version: 1, members: op.members.map((m) => ({ ...m })), active: { ...(op.active || op.members[0]) } };
+        groupMembers[group.groupId] = group.members.map((m) => ({ ...m }));
         changed.groups.push(group);
         changed.createdGroup = group;
+      } else if (op.kind === 'group.setFrame') {
+        // Realistic setFrame echo (impl-review gap): the server echoes the
+        // group with version bumped and the PATCHED frame — exercising the
+        // version-refresh adoption lane. Members come from the tracked
+        // canonical membership (a single-member echo would clobber the
+        // local record — the fixture-realism lesson).
+        const sfGid = op.groupId || `grp_test_${groupSeq}`;
+        const frame = {
+          rect: { x: 0, y: 0, width: 460, height: 360, ...((op.patch && op.patch.rect) || {}) },
+          presentation: (op.patch && op.patch.presentation) || { kind: 'floating' },
+          zIndex: (op.patch && op.patch.zIndex) || 0,
+        };
+        const sfMembers = groupMembers[sfGid] || (op.member ? [{ ...op.member }] : []);
+        changed.groups.push({ groupId: sfGid, version: 3, members: sfMembers.map((m) => ({ ...m })), active: { ...(op.member || sfMembers[0] || {}) }, frame });
       } else if (op.kind === 'group.join' || op.kind === 'group.leave' || op.kind === 'group.activate' || op.kind === 'group.reorder' || op.kind === 'group.dissolve') {
-        // Realistic echo: the touched group with its members (the canned
-        // members:[] shape was unrealistic — the adopt path never observed
-        // membership through activate echoes). DISSOLVE echoes the group
-        // EMPTIED (members: [], active: null) — mirroring the real server —
-        // so the adopt loop deletes the local record instead of resurrecting
-        // a fictional one.
+        // Realistic echo: the touched group with its TRACKED members — the
+        // fixture maintains canonical membership so joins add, leaves
+        // remove, and activate/setFrame preserve (single-member echoes
+        // clobbered the adopt path). DISSOLVE echoes the group EMPTIED
+        // (members: [], active: null) — mirroring the real server — so the
+        // adopt loop deletes the local record.
+        const gGid = op.groupId || (op.target && op.target.groupId) || `grp_test_${groupSeq}`;
+        const tracked = groupMembers[gGid] || [];
+        if (op.kind === 'group.join' && op.member && !tracked.some((m) => m.windowId === op.member.windowId)) tracked.push({ ...op.member });
+        if (op.kind === 'group.leave' && op.member) {
+          const idx = tracked.findIndex((m) => m.windowId === op.member.windowId);
+          if (idx >= 0) tracked.splice(idx, 1);
+        }
+        groupMembers[gGid] = tracked;
         const dissolved = op.kind === 'group.dissolve';
-        const members = dissolved ? [] : (op.member ? [op.member] : []).map((m) => ({ ...m }));
-        changed.groups.push({ groupId: op.groupId || (op.target && op.target.groupId) || `grp_test_${groupSeq}`, version: 2, members, active: dissolved ? null : (op.member ? { ...op.member } : null) });
+        if (dissolved) groupMembers[gGid] = [];
+        const members = (dissolved ? [] : tracked).map((m) => ({ ...m }));
+        changed.groups.push({ groupId: gGid, version: 2, members, active: dissolved ? null : (op.member ? { ...op.member } : null) });
       } else if (op.kind === 'window.close' && op.window) {
         changed.tombstones.push({ ...op.window });
       } else if (op.kind === 'shelf.minimise' || op.kind === 'shelf.restore') {
@@ -215,6 +245,7 @@ function v4ApiFixture({ record = [], doc } = {}) {
       return Promise.resolve(doc || { schemaVersion: 4, windows: [], groups: [], shelf: { version: 1, members: [] }, focus: null, structuralRevision: 1, spatialRevision: 1, viewportRevision: 1 });
     },
   };
+  return fixtureApi;
 }
 
 function freshManager({ persistCalls } = {}) {
@@ -1785,3 +1816,90 @@ test('Stage-4 G3 repair: grouped RESIZE commit rides the frame, cancel rolls bac
   manager.unmaximise('window_references');
   assert.ok(!frame.classList.contains('freeform-window-maximised'), 'unmaximise restores the frame render');
 });
+
+test('Stage-4 repair (impl F1): rapid activate→setFrame commits with the ADOPTED version, never the stale eager capture', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  manager.open('layers', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5)); // swap landed; local version = 1
+  // Queue an activate (echo will adopt version 2) and IMMEDIATELY drag the
+  // now-active member WITHOUT flushing — the persistFrame thunk runs after
+  // the activate adopts, so it must send the ADOPTED version.
+  manager.switchTab('window_layers');
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 300, clientY: 300 });
+  fakeDocument.dispatch('pointermove', { clientX: 380, clientY: 300, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 380, clientY: 300 });
+  await new Promise((r) => setTimeout(r, 5));
+  const setFrameOp = record.filter((c) => c.op && c.op.kind === 'group.setFrame').pop();
+  assert.ok(setFrameOp, 'setFrame recorded');
+  assert.equal(setFrameOp.op.expectedGroupVersion, 2, 'the ADOPTED version (activate echo bumped it) — the stale eager capture would send 1');
+});
+
+test('Stage-4 repair (impl F2): the GROUP_CHANGED 409 detail is adopted — the session recovers instead of stalling', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  manager.open('layers', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  const gid = manager.groups()[0].groupId;
+  const refs = { windowId: 'window_references', generation: 1, incarnationId: expectRef(record, 'window_references') };
+  const lays = { windowId: 'window_layers', generation: 1, incarnationId: expectRef(record, 'window_layers') };
+  // Simulate a CONCURRENT writer: the next group op 409s with fresh state.
+  api.rejectOnce(Object.assign(new Error('GROUP_CHANGED'), {
+    status: 409, code: 'GROUP_CHANGED',
+    detail: { code: 'GROUP_CHANGED', group: { groupId: gid, version: 9, members: [refs, lays], active: lays, frame: { rect: { x: 11, y: 22, width: 460, height: 360 }, presentation: { kind: 'floating' }, zIndex: 4 } } },
+  }));
+  manager.switchTab('window_layers'); // the activate 409s -> the detail must be adopted
+  await new Promise((r) => setTimeout(r, 5));
+  const g = manager.groups()[0];
+  assert.equal(g.version, 9, 'the FRESH version from the 409 detail was adopted');
+  assert.equal(g.frame.rect.x, 11, 'the fresh frame was adopted too');
+  // The NEXT frame commit sends the adopted version — the stall is cured.
+  const frameEl = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers');
+  const head = frameEl.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 300, clientY: 300 });
+  fakeDocument.dispatch('pointermove', { clientX: 360, clientY: 300, buttons: 1 });
+  fakeDocument.dispatch('pointerup', { clientX: 360, clientY: 300 });
+  await new Promise((r) => setTimeout(r, 5));
+  const setFrameOp = record.filter((c) => c.op && c.op.kind === 'group.setFrame').pop();
+  assert.ok(setFrameOp, 'setFrame recorded after the 409 recovery');
+  assert.equal(setFrameOp.op.expectedGroupVersion, 9, 'subsequent commits ride the adopted version (no permanent stall)');
+});
+
+test('Stage-4 repair (impl F3): cross-group join leaves on the wire BEFORE joining', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references');
+  manager.open('layers');
+  manager.open('worldscene');
+  manager.open('probe');
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  manager.groupWindows(['window_worldscene', 'window_probe'], { activeWindowId: 'window_worldscene' });
+  await new Promise((r) => setTimeout(r, 5));
+  manager.switchTab('window_layers'); // layers active in group A
+  await new Promise((r) => setTimeout(r, 5));
+  manager.joinGroup('window_layers', 'window_probe'); // layers crosses A -> B
+  await new Promise((r) => setTimeout(r, 5));
+  const leaveIdx = record.findIndex((c) => c.op && c.op.kind === 'group.leave' && c.op.member && c.op.member.windowId === 'window_layers');
+  const joinIdx = record.findIndex((c) => c.op && c.op.kind === 'group.join' && c.op.member && c.op.member.windowId === 'window_layers');
+  assert.ok(leaveIdx > -1, 'the cross-group lane sends group.leave on the wire');
+  assert.ok(joinIdx > leaveIdx, 'the join is serialized AFTER the leave');
+  const g = manager.groups().find((x) => x.windowIds.includes('window_layers'));
+  assert.ok(g, 'layers grouped locally after the cross');
+});
+
+function expectRef(record, windowId) {
+  const created = record.find((c) => c.op && c.op.kind === 'window.create' && c.op.windowId === windowId);
+  return created ? created.op.incarnationId : 'inc_unknown_00';
+}
