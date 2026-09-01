@@ -253,6 +253,13 @@
       };
       model.rect.x = patch.x; model.rect.y = patch.y;
       model.rect.width = patch.width; model.rect.height = patch.height;
+      if (model.frame) {
+        // Adoption re-renders (idempotent): the live frame and the post-
+        // reload render must project from identical numbers — the smoke
+        // caught a 0.377px drift when the last drag render kept the
+        // unrounded projection while reload rendered the rounded one.
+        renderFrame(model);
+      }
       const next = writeChain.then(() => v4.spatial(model.ref, patch, mintMutationId(), extra)).then((res) => {
         model.persisted = true; model.persistFailed = false;
         const row = res && res.window;

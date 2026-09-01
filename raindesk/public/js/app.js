@@ -397,7 +397,14 @@
       shotLabel,
       contextProvider: partnerCanvasContext,
     });
-    state.beatTrail = BEATS.BeatTrail($('beatTrail'), {
+    // Stage-3 (Round-6 [major]): ownership decided BEFORE constructing
+    // controllers — in freeform mode the registry owns the Beats surface
+    // (mountBeatTrail builds the trail INTO the window), so the legacy
+    // bespoke trail is never constructed there (no unreachable duplicate,
+    // no façade dangling after window destroy).
+    const useFreeformDesk = new URLSearchParams(location.search).get('freeform') === '1' &&
+      Boolean(window.RaindeskWindowManager && window.RaindeskFreeformSurfaces);
+    if (!useFreeformDesk) state.beatTrail = BEATS.BeatTrail($('beatTrail'), {
       api: API,
       direction: DIR,
       shot: state.shot,
@@ -423,25 +430,27 @@
     $('scenesClose').addEventListener('click', () => $('scenesPanel').classList.remove('open'));
 
     state.workspaceUI = WSPACE.WorkspaceShell({ api: API, shelf: $('panelShelf') });
-    // Freeform-desk routing flag, computed once so the Beats panel can be
-    // retired from the bespoke shell on the desktop path while the legacy
-    // experience keeps it everywhere else.
-    const useFreeformDesk = new URLSearchParams(location.search).get('freeform') === '1' &&
-      Boolean(window.RaindeskWindowManager && window.RaindeskFreeformSurfaces);
-    state.workspaceUI.registerPanel({
-      id: 'panel_layers', key: 'layers', type: 'layers_panel', label: 'Layers',
-      element: $('layersPanel'), handle: $('layersPanel').querySelector('h4'),
-      visibilityTarget: $('layersPanel'), visibleClass: 'open',
-      open: () => { panelOpen = true; $('layersPanel').classList.add('open'); renderPanel(); },
-      close: () => { panelOpen = false; $('layersPanel').classList.remove('open'); },
-    });
-    state.workspaceUI.registerPanel({
-      id: 'panel_scenes', key: 'scenes', type: 'sequence_strip', label: 'Scenes',
-      element: $('scenesPanel'), handle: $('scenesPanel').querySelector('.workspace-panel-head'),
-      visibilityTarget: $('scenesPanel'), visibleClass: 'open',
-      open: () => { $('scenesPanel').classList.add('open'); renderScenesPanel(); },
-      close: () => $('scenesPanel').classList.remove('open'),
-    });
+    // (useFreeformDesk is hoisted above the BeatTrail construction — Stage-3.)
+    // Stage-3 T1: registry-owned surfaces are NEVER dual-registered — in
+    // freeform mode the WindowManager owns Layers and Scenes (the legacy
+    // panels' only opener was this registration, so their DOM stays inert);
+    // default mode is byte-identical.
+    if (!useFreeformDesk) {
+      state.workspaceUI.registerPanel({
+        id: 'panel_layers', key: 'layers', type: 'layers_panel', label: 'Layers',
+        element: $('layersPanel'), handle: $('layersPanel').querySelector('h4'),
+        visibilityTarget: $('layersPanel'), visibleClass: 'open',
+        open: () => { panelOpen = true; $('layersPanel').classList.add('open'); renderPanel(); },
+        close: () => { panelOpen = false; $('layersPanel').classList.remove('open'); },
+      });
+      state.workspaceUI.registerPanel({
+        id: 'panel_scenes', key: 'scenes', type: 'sequence_strip', label: 'Scenes',
+        element: $('scenesPanel'), handle: $('scenesPanel').querySelector('.workspace-panel-head'),
+        visibilityTarget: $('scenesPanel'), visibleClass: 'open',
+        open: () => { $('scenesPanel').classList.add('open'); renderScenesPanel(); },
+        close: () => $('scenesPanel').classList.remove('open'),
+      });
+    }
     // Phase 3 migration: when the registry desk mounts, the bespoke Beats
     // shell is not registered — window_beats owns the surface instead.
     if (!useFreeformDesk) {
@@ -944,6 +953,18 @@
   /** Desktop Beats entry point: open / restore / minimise the registry
    * window (toggle parity with the old bespoke shell). Returns false when
    * the freeform desk is absent so callers fall back to the legacy path. */
+  /** Desktop Layers entry point (Stage-3): the registry owns the Layers
+   * surface in freeform mode — open/restore/minimise the window; returns
+   * false when the desk is absent so the legacy path falls back. */
+  function toggleLayersSurface() {
+    if (!state.freeform) return false;
+    const win = state.freeform.state('window_layers');
+    if (!win) { state.freeform.open('layers'); return true; }
+    if (win.state === 'minimised' || win.state === 'tabbed') state.freeform.restore('window_layers');
+    else state.freeform.minimise('window_layers');
+    return true;
+  }
+
   function toggleBeatsSurface() {
     const win = beatsWindowState();
     if (!win) {
@@ -975,7 +996,7 @@
     document.querySelectorAll('.tool').forEach((btn) => {
       btn.addEventListener('click', () => {
         const t = btn.dataset.tool;
-        if (t === 'layers') { togglePanel(); return; }
+        if (t === 'layers') { if (!toggleLayersSurface()) togglePanel(); return; }
         if (t === 'beats') { if (!toggleBeatsSurface() && state.beatTrail) state.beatTrail.toggle(); return; }
         if (t === 'pen' && state.tool === 'pen') { togglePenPop(); return; }
         setTool(t);

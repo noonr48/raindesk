@@ -1613,3 +1613,19 @@ test('group-echo F1 class: dissolve is identity-exact by member (no id race, eve
   assert.ok(dissolve.op.member && dissolve.op.member.windowId, 'dissolve carries the identity-exact MEMBER locator');
   assert.equal(dissolve.op.groupId, undefined, 'no groupId guess on the wire');
 });
+
+test('Stage-3 T1/T2: freeform mode owns registry surfaces — legacy trail gated before construction, layers/scenes panels unregistered, layers tool routes surface-first', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8');
+  const flagAt = src.indexOf('const useFreeformDesk');
+  const gateAt = src.indexOf('if (!useFreeformDesk) state.beatTrail = BEATS.BeatTrail');
+  assert.ok(flagAt > -1 && gateAt > flagAt, 'the mode flag is computed BEFORE the gated legacy trail construction');
+  const layersRegAt = src.indexOf("id: 'panel_layers'");
+  const scenesRegAt = src.indexOf("id: 'panel_scenes'");
+  const beatsRegAt = src.indexOf("id: 'panel_beats'");
+  const panelGate = src.indexOf('// Stage-3 T1: registry-owned surfaces are NEVER dual-registered');
+  assert.ok(panelGate > -1 && layersRegAt > panelGate && scenesRegAt > panelGate && beatsRegAt > scenesRegAt, 'layers+scenes registrations sit inside the Stage-3 gate');
+  assert.ok(/if \(!useFreeformDesk\) \{/.test(src.slice(panelGate, layersRegAt)), 'the gate condition wraps the registrations');
+  assert.ok(/function toggleLayersSurface\(\) \{/.test(src), 'surface toggle exists');
+  assert.ok(src.includes("if (t === 'layers') { if (!toggleLayersSurface()) togglePanel(); return; }"), 'layers tool routes surface-first with legacy fallback');
+});
