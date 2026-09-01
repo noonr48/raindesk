@@ -565,6 +565,11 @@
             const idx = ids.indexOf(model.windowId);
             const nextIdx = e.shiftKey ? (idx - 1 + ids.length) % ids.length : (idx + 1) % ids.length;
             switchTab(ids[nextIdx]);
+            // Impl-F2: the OLD member's frame hides on switch — real DOM blurs
+            // its focused title, so the next Ctrl+Tab would land on body.
+            // Re-focus the new active member (fake DOM models no hidden→blur,
+            // which is why the unit lane never caught the single-shot cycle).
+            focus(ids[nextIdx]);
             return;
           }
           if (e.key === 't' || e.key === 'T') {
@@ -1248,6 +1253,10 @@
       if (geo.dockRect && !isWorld(model)) model.rect = geo.dockRect(edge, model.rect, metrics());
       model.dock = edge;
       transition(model, 'docked');
+      // Impl-F1: re-bake AFTER transition — maximise→docked adoption of
+      // restoreRect overwrote the rail, rendering the pre-max floating rect
+      // while state said docked (announcer contradicted the render).
+      if (geo.dockRect && !isWorld(model)) model.rect = geo.dockRect(edge, model.rect, metrics());
       renderFrame(model);
       announceLifecycle(model, `docked ${edge}`);
       if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'docked', edge }));
@@ -1469,6 +1478,9 @@
       if (controller && typeof controller.destroy === 'function') { try { controller.destroy(); } catch (_e) {} }
       if (model.frame && model.frame.parentNode) model.frame.parentNode.removeChild(model.frame);
       windows.delete(windowId); controllers.delete(windowId); saves.delete(windowId);
+      // Impl-F3: cancel a pending keyboard-nudge debounce — the settle path
+      // is benign (GENERATION_GONE → no-op), but a closed window owes no wire call.
+      if (keyPersistTimers.has(windowId)) { clearTimeout(keyPersistTimers.get(windowId)); keyPersistTimers.delete(windowId); }
       if (focusedId === windowId) focusedId = null;
       announceLifecycle(model, 'closed');
       restoreFocusAfter(windowId); // Stage-6 K1: focus never dies with a frame

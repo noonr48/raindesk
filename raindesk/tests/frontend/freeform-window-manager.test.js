@@ -2306,3 +2306,55 @@ test('Stage-6 spec-repair F4: F2 enters rename on titled surfaces (keyboard pari
   assert.equal(renamed, 'Renamed via F2', 'the blur commit persisted through onRename');
   assert.equal(title.getAttribute('contenteditable'), null, 'editing mode exited after commit');
 });
+
+test('Stage-6 impl-repair: dock-from-maximised bakes the rail AFTER transition; Ctrl+Tab re-focuses the new member; close cancels a pending nudge debounce', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const railRect = { x: 0, y: 0, width: 300, height: 800 };
+  const api = v4ApiFixture({ record });
+  const geometry = { dockRect: () => ({ ...railRect }) }; // screen rail stub
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry });
+  const titleOf = (wid) => {
+    const f = root.children.find((c) => c.dataset && c.dataset.windowId === wid);
+    const h = f.children.find((c) => c.classList.contains('freeform-window-head'));
+    return h.children.find((c) => c.classList.contains('freeform-window-title'));
+  };
+  // F1: maximise a SCREEN surface, then keyboard-dock — the rail must win
+  // over the restoreRect adoption (impl lens: the announcer said docked while
+  // the render kept the pre-max floating rect).
+  manager.open('references', { rect: { x: 400, y: 300, width: 320, height: 240 } });
+  manager.focus('window_references');
+  titleOf('window_references').dispatch('keydown', { key: 'Enter', ctrlKey: true });
+  assert.equal(manager.state('window_references').state, 'maximised');
+  titleOf('window_references').dispatch('keydown', { key: 'ArrowLeft', ctrlKey: true });
+  const st = manager.state('window_references');
+  assert.equal(st.state, 'docked', 'maximise -> dock transitions');
+  assert.equal(st.rect.x, railRect.x, 'the rail bake survived the restoreRect adoption (baked AFTER transition)');
+  assert.equal(st.rect.width, railRect.width, 'the rail geometry won, not the pre-max floating rect');
+
+  // F2: Ctrl+Tab cycles AND re-focuses the new active member's title
+  manager.open('layers', { rect: { x: 60, y: 60, width: 300, height: 220 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  manager.focus('window_references');
+  titleOf('window_references').dispatch('keydown', { key: 'Tab', ctrlKey: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.groups()[0].activeWindowId, 'window_layers', 'Ctrl+Tab switched');
+  const headB = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_layers').children.find((c) => c.classList.contains('freeform-window-head'));
+  assert.equal(fakeDocument.activeElement, headB.children.find((c) => c.classList.contains('freeform-window-title')), 'the NEW active member owns DOM focus (title-lane cycling survives the hidden-frame blur)');
+  // second cycle proves it is not single-shot
+  titleOf('window_layers').dispatch('keydown', { key: 'Tab', ctrlKey: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.groups()[0].activeWindowId, 'window_references', 'second Ctrl+Tab cycled back (not single-shot)');
+
+  // F3: close cancels a pending keyboard-nudge debounce (no spatial PATCH owed)
+  manager.open('references', { windowId: 'window_nudge', rect: { x: 200, y: 200, width: 300, height: 220 } });
+  manager.focus('window_nudge');
+  titleOf('window_nudge').dispatch('keydown', { key: 'ArrowRight' }); // debounce starts
+  manager.close('window_nudge'); // close BEFORE the 120ms flush
+  const nudgeSpats = record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_nudge');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(nudgeSpats.length, 0, 'the cancelled debounce committed nothing (the closed window owes no wire call)');
+  const afterFlush = record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_nudge');
+  assert.equal(afterFlush.length, 0, 'still nothing after the would-be flush window');
+});
