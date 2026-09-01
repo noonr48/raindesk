@@ -510,6 +510,14 @@
       title.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); title.blur(); }
         if (e.key === 'Escape') { e.preventDefault(); title.textContent = model.title; title.blur(); }
+        // Stage-6 K2: keyboard move/resize — only when NOT renaming.
+        if (title.hasAttribute('contenteditable')) return;
+        const GRID = e.altKey ? 32 : 8;
+        const MOVES = { ArrowLeft: [-GRID, 0], ArrowRight: [GRID, 0], ArrowUp: [0, -GRID], ArrowDown: [0, GRID] };
+        if (!(e.key in MOVES)) return;
+        e.preventDefault();
+        const [dx, dy] = MOVES[e.key];
+        keyboardNudge(model, e.shiftKey ? { dw: dx, dh: dy } : { dx, dy });
       });
       title.addEventListener('blur', () => {
         title.removeAttribute('contenteditable');
@@ -1085,6 +1093,40 @@
       if (model.titleEl && !model.titleEl.hasAttribute('contenteditable')) model.titleEl.focus();
       renderAll();
       return model;
+    }
+
+    /** Stage-6 K2: keyboard nudge — moves/resizes in the frame's OWN space
+     * (screen px; world units via WProj inverse at current zoom so movement
+     * feels constant on screen — the risks.md zoom discriminator). Grouped
+     * members operate on the GROUP frame (the frame owns presentation
+     * geometry; the member's latent rect is untouched). Commits coalesce per
+     * window (120ms) so held-key repeat emits ONE spatial/group.setFrame. */
+    const keyPersistTimers = new Map();
+    function keyboardNudge(model, mode) {
+      if (model.state === 'maximised' || model.state === 'docked') return; // restore/undock first (K3 keys)
+      const group = groupFor(model.windowId);
+      const grouped = model.state === 'tabbed' && group && group.frame && group.frame.rect;
+      const surface = surfaceFor(model);
+      const s = isWorld(model) ? (WProj.worldScale(getViewport(), metrics()) || 1) : 1;
+      const rect = grouped ? group.frame.rect : model.rect;
+      if ('dx' in mode) { rect.x += mode.dx / s; rect.y += mode.dy / s; }
+      else { rect.width += mode.dw / s; rect.height += mode.dh / s; }
+      if (!isWorld(model)) {
+        if (grouped) {
+          const m = metrics(); const HEADER0 = 40; // Stage-5 F3 reachable band for screen group frames
+          group.frame.rect.x = Math.min(Math.max(rect.x, HEADER0 - rect.width), m.width - HEADER0);
+          group.frame.rect.y = Math.min(Math.max(rect.y, 0), m.height - HEADER0);
+        } else if (surface) {
+          const clamped = clampRect(model.rect, surface); // minimums + size clamps
+          model.rect.x = clamped.x; model.rect.y = clamped.y; model.rect.width = clamped.width; model.rect.height = clamped.height;
+        }
+      }
+      renderFrame(model);
+      if (keyPersistTimers.has(model.windowId)) clearTimeout(keyPersistTimers.get(model.windowId));
+      keyPersistTimers.set(model.windowId, setTimeout(() => {
+        keyPersistTimers.delete(model.windowId);
+        if (grouped) persistFrame(model); else persist(model);
+      }, 120));
     }
 
     /** Stage-6 K1: deterministic focus restore after a frame leaves the desk

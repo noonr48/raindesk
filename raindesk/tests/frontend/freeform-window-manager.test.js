@@ -2049,3 +2049,55 @@ test('Stage-6 K1: aria-label tracks the title SSOT through rename', async () => 
   assert.equal(frame.getAttribute('aria-label'), 'K1 Named', 'aria-label derives from model.title (span text alone does not change it)');
   assert.ok(setTitle === null, 'no callback wired in this test — pure render path');
 });
+
+test('Stage-6 K2: keyboard arrows move/resize — screen clamp + minimums, world zoom-correct, group-frame nudge, held-key coalescing', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {}, getViewport: () => ({ x: 0, y: 0, zoom: 0.5 }) });
+  const titleOf = (wid) => {
+    const f = root.children.find((c) => c.dataset && c.dataset.windowId === wid);
+    const h = f.children.find((c) => c.classList.contains('freeform-window-head'));
+    return h.children.find((c) => c.classList.contains('freeform-window-title'));
+  };
+  manager.open('layers', { rect: { x: 40, y: 40, width: 300, height: 240 } });
+  manager.focus('window_layers');
+  titleOf('window_layers').dispatch('keydown', { key: 'ArrowRight' });
+  titleOf('window_layers').dispatch('keydown', { key: 'ArrowDown', altKey: true });
+  assert.equal(manager.state('window_layers').rect.x, 48, 'one arrow = 8px screen move');
+  assert.equal(manager.state('window_layers').rect.y, 72, 'Alt = 32px multiplier');
+  for (let i = 0; i < 5; i++) titleOf('window_layers').dispatch('keydown', { key: 'ArrowRight' });
+  await new Promise((r) => setTimeout(r, 200));
+  const spatials = record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_layers');
+  assert.equal(spatials.length, 1, 'held-key repeat coalesced to ONE spatial PATCH (120ms debounce)');
+  assert.equal(spatials[0].patch.x, 40 + 8 + 40, 'the flushed patch carries the FINAL x (rounding adoption)');
+  titleOf('window_layers').dispatch('keydown', { key: 'ArrowLeft', shiftKey: true });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(manager.state('window_layers').rect.width, 292, 'Shift+Arrow resizes by the grid');
+  for (let i = 0; i < 12; i++) titleOf('window_layers').dispatch('keydown', { key: 'ArrowLeft', shiftKey: true });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(manager.state('window_layers').rect.width, 240, 'registry minimumSize floors screen resize (layers: 240)');
+
+  // world move at zoom 0.5: an 8px SCREEN delta becomes 8/worldScale world units
+  wm.CreativeSurfaces.register({ id: 'k2world', title: 'K2 World', entityType: 'sequence_strip', coordinateSpace: 'world' });
+  const k2Scale = require('../../public/js/world-projection.js').worldScale({ x: 0, y: 0, zoom: 0.5 }, { width: 1280, height: 800 });
+  assert.ok(k2Scale > 0 && k2Scale < 1, `worldScale at zoom 0.5 is a fit-adjusted ratio (< 1): ${k2Scale}`);
+  manager.open('k2world', { rect: { x: 1000, y: 2000, width: 400, height: 300 } });
+  manager.focus('window_k2world');
+  titleOf('window_k2world').dispatch('keydown', { key: 'ArrowRight' });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(manager.state('window_k2world').rect.x, Math.round(1000 + 8 / k2Scale), `8px screen at worldScale ${k2Scale} (zoom 0.5) = ${8 / k2Scale} world units (WProj inverse)`);
+  assert.equal(manager.state('window_k2world').rect.y, 2000, 'untouched axis unchanged');
+
+  // group-frame nudge: the FRAME moves, the member stays latent, group.setFrame commits
+  manager.open('references', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  const before = manager.state('window_references').rect.x;
+  manager.focus('window_references');
+  titleOf('window_references').dispatch('keydown', { key: 'ArrowRight' });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(manager.state('window_references').rect.x, before, 'member latent rect UNTOUCHED by grouped nudge');
+  const setF = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.setFrame').pop();
+  assert.ok(setF, 'grouped nudge committed through group.setFrame (the frame owner)');
+});
