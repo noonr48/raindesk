@@ -338,10 +338,16 @@
         if (!group || !group.groupId) continue;
         if (Array.isArray(group.members) && group.members.length === 0) groups.delete(group.groupId);
         else if (Array.isArray(group.members)) {
+          // Echoes reflect intent time: never REGRESS a newer local active
+          // (the create/swap race class — journey-caught).
+          const existing = groups.get(group.groupId);
+          const activeId = existing && group.members.some((m) => m.windowId === existing.activeWindowId)
+            ? existing.activeWindowId
+            : (group.active && group.active.windowId);
           groups.set(group.groupId, {
             groupId: group.groupId, version: group.version,
             windowIds: group.members.map((m) => m.windowId),
-            activeWindowId: group.active && group.active.windowId,
+            activeWindowId: activeId,
           });
           for (const m of group.members) { const win = windows.get(m.windowId); if (win) win.groupId = group.groupId; }
         }
@@ -1390,8 +1396,15 @@
           .then((response) => {
             const created = response && response.changed && response.changed.createdGroup;
             if (created && created.groupId !== groupId) {
+              // Read the LIVE provisional record at swap time — a switchTab
+              // may have advanced its active while the create response was
+              // in flight (journey-caught race); never regress it.
+              const provisional = groups.get(groupId);
+              const activeStillMember = provisional && provisional.windowIds.includes(provisional.activeWindowId)
+                ? provisional.activeWindowId
+                : (created.active && created.active.windowId);
               groups.delete(groupId); // provisional local id yields to the server's canonical one
-              groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: created.active && created.active.windowId });
+              groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: activeStillMember });
               for (const m of created.members) { const win = windows.get(m.windowId); if (win) win.groupId = created.groupId; }
               renderAll();
             }
@@ -1422,11 +1435,14 @@
       group.activeWindowId = memberId;
       for (const id of group.windowIds) renderFrame(windows.get(id));
       bringToFront(memberId);
-      if (v4) queueIntent(() => ({
-        kind: 'group.activate',
-        groupId: group.groupId,
-        member: { ...(windows.get(memberId) || {}).ref },
-      }));
+      if (v4) queueIntent(() => {
+        const live = groupFor(memberId) || group; // re-resolve at SEND time: the provisional record may have been swapped for the server's
+        return {
+          kind: 'group.activate',
+          groupId: live.groupId,
+          member: { ...(windows.get(memberId) || {}).ref },
+        };
+      });
       return group;
     }
 
@@ -1500,7 +1516,10 @@
               const created = response && response.changed && response.changed.createdGroup;
               if (created && created.groupId !== group.groupId) {
                 groups.delete(group.groupId);
-                groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: created.active && created.active.windowId });
+                const activeStillMember = group.windowIds.includes(group.activeWindowId)
+                  ? group.activeWindowId
+                  : (created.active && created.active.windowId);
+                groups.set(created.groupId, { groupId: created.groupId, version: created.version, windowIds: created.members.map((m) => m.windowId), activeWindowId: activeStillMember });
                 for (const m of created.members) { const win = windows.get(m.windowId); if (win) win.groupId = created.groupId; }
                 renderAll();
               }
