@@ -149,6 +149,20 @@
     const getViewport = getViewportGiven || (() => ({ x: 0, y: 0, zoom: 1 }));
     const geo = geometry || Geometry;
     const metrics = viewportMetrics || (() => ({ width: root.clientWidth || 1280, height: root.clientHeight || 800 }));
+
+    // Stage-6 K5: polite lifecycle announcer — one live region, announced at
+    // the same seams that persist/render; text is DERIVED from state (title +
+    // op), bounded to 120 chars. The zero-width tick guarantees re-announcement
+    // of identical strings (live regions dedupe otherwise).
+    const announcerEl = el(document, 'div', 'freeform-announcer');
+    announcerEl.setAttribute('role', 'status');
+    announcerEl.setAttribute('aria-live', 'polite');
+    root.appendChild(announcerEl);
+    let announceTick = 0;
+    function announce(text) {
+      announceTick += 1;
+      announcerEl.textContent = String(text).slice(0, 120) + (announceTick % 2 ? '\u00a0' : '');
+    }
     const windows = new Map();        // windowId -> model
     const controllers = new Map();    // windowId -> controller
     const groups = new Map();         // groupId -> { groupId, windowIds, activeWindowId }
@@ -1084,6 +1098,7 @@
       windows.set(windowId, model);
       if (options.state && surface.supportedStates.includes(options.state)) model.state = options.state;
       renderFrame(model);
+      announceLifecycle(model, 'opened');
       let controller = null;
       if (surface.createController) {
         controller = surface.createController({
@@ -1173,6 +1188,10 @@
       }, 120));
     }
 
+    // Stage-6 K5: lifecycle announcements (derived from state at the
+    // persist/render seams — never fire-and-forget strings).
+    function announceLifecycle(model, verb) { announce(`${String(model.title)} ${verb}`); }
+
     /** Stage-6 K3: keyboard dock/undock — mirrors the drag lanes exactly:
      * grouped frames ride group.setFrame presentations; screen surfaces bake
      * the rail rect (geo.dockRect), world surfaces keep the canonical rect
@@ -1186,6 +1205,7 @@
       if (gf) {
         gf.presentation = { kind: 'docked', edge };
         renderAll();
+        announceLifecycle(model, `docked ${edge}`);
         if (v4 && model.ref) queueIntent(() => {
           const g = groupFor(model.windowId);
           return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'docked', edge } } };
@@ -1196,6 +1216,7 @@
       model.dock = edge;
       transition(model, 'docked');
       renderFrame(model);
+      announceLifecycle(model, `docked ${edge}`);
       if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'docked', edge }));
     }
     function keyboardUndock(model) {
@@ -1203,6 +1224,7 @@
       if (gf) {
         gf.presentation = { kind: 'floating' };
         renderAll();
+        announceLifecycle(model, 'floating');
         if (v4 && model.ref) queueIntent(() => {
           const g = groupFor(model.windowId);
           return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'floating' } } };
@@ -1212,6 +1234,7 @@
       if (model.state !== 'docked') return;
       model.dock = null; transition(model, 'floating');
       renderFrame(model);
+      announceLifecycle(model, 'floating');
       if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) } }));
     }
 
@@ -1246,6 +1269,7 @@
       transition(model, 'minimised');
       renderFrame(model);
       renderShelf();
+      announceLifecycle(model, 'minimised to shelf');
       restoreFocusAfter(windowId); // Stage-6 K1: deterministic chain (the new chip is a candidate)
       if (v4 && model.ref) queueIntent(() => ({ kind: 'shelf.minimise', window: { ...model.ref } }));
       return model;
@@ -1264,6 +1288,7 @@
       renderFrame(model);
       renderShelf();
       bringToFront(windowId);
+      announceLifecycle(model, 'restored');
       if (v4 && model.ref) queueIntent(() => ({
         kind: 'shelf.restore', window: { ...model.ref },
         mode: dockOk ? 'resume' : 'floating',
@@ -1359,6 +1384,7 @@
     function maximise(windowId) {
       const model = windows.get(windowId); if (!model) return null;
       if (model.state === 'maximised') return model;
+      announceLifecycle(model, 'maximised');
       const gfMax = groupedFrame(model);
       if (gfMax) {
         // Stage-4 G3: the FRAME owns the presentation — the member stays tabbed.
@@ -1383,6 +1409,7 @@
         if (!gfUn || !gfUn.presentation || gfUn.presentation.kind !== 'maximised') return model;
         gfUn.presentation = { kind: 'floating' };
         renderAll();
+        announceLifecycle(model, 'restored from maximise');
         if (v4 && model.ref) queueIntent(() => {
           const g = groupFor(model.windowId);
           return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'floating' } } };
@@ -1391,6 +1418,7 @@
       }
       transition(model, 'floating');
       renderFrame(model);
+      announceLifecycle(model, 'restored from maximise');
       // v4 restore re-applies the typed beforeMaximise presentation (the
       // server remembers the dock edge the old state machine lost).
       if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'restore' }));
@@ -1405,6 +1433,7 @@
       if (model.frame && model.frame.parentNode) model.frame.parentNode.removeChild(model.frame);
       windows.delete(windowId); controllers.delete(windowId); saves.delete(windowId);
       if (focusedId === windowId) focusedId = null;
+      announceLifecycle(model, 'closed');
       restoreFocusAfter(windowId); // Stage-6 K1: focus never dies with a frame
       if (v4 && model.ref) {
         // v4 close: identity-exact and durable — the outbox holds the intent
@@ -1475,6 +1504,7 @@
 
     /** Stage-5 V2: bring every floating screen window FULLY into view. */
     function bringAllIntoView() {
+      announce('bringing all windows into view');
       const m = metrics();
       for (const model of windows.values()) {
         if (model.state !== 'floating' || isWorld(model)) continue;
@@ -1753,6 +1783,7 @@
       const model = windows.get(memberId); if (!model) return null;
       removeFromGroup(model);
       transition(model, 'floating');
+      announceLifecycle(model, 'torn out');
       if (Number.isFinite(x) && Number.isFinite(y)) {
         model.rect.x = x; model.rect.y = y;
       }
@@ -1799,6 +1830,7 @@
         renderFrame(model);
       }
       bringToFront(activeWindowId);
+      announce(`grouped ${ids.length} windows`);
       if (v4) {
         queueIntent(() => {
           const refs = ids.map((id) => windows.get(id)).filter(Boolean).map((m) => ({ ...m.ref }));
@@ -1849,6 +1881,8 @@
       const group = groupFor(memberId);
       if (!group) return null;
       group.activeWindowId = memberId;
+      const sm = windows.get(memberId);
+      if (sm) announceLifecycle(sm, 'tab active');
       for (const id of group.windowIds) renderFrame(windows.get(id));
       bringToFront(memberId);
       if (v4) queueIntent(() => {

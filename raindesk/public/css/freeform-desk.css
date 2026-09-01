@@ -287,3 +287,16 @@
   border-radius: 4px;
 }
 .freeform-window-head { position: relative; }
+
+/* Stage-6 K5: the announcer is visually hidden but live for screen readers */
+.freeform-announcer {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; pointer-events: none;
+}
+
+/* Stage-6 K5: resize handles keep their 9-15px VISUAL size but gain a >=20px
+ * invisible hit target (Round-5: pointer-only handles were too thin) */
+.freeform-window-resize { position: absolute; }
+.freeform-window-resize::after { content: ''; position: absolute; inset: -6px; }
+.freeform-window-resize.n, .freeform-window-resize.s { left: 0; right: 0; }
+.freeform-window-resize.e, .freeform-window-resize.w { top: 0; bottom: 0; }

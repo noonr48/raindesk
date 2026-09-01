@@ -2213,3 +2213,29 @@ test('Stage-6 K4: tablist semantics + group keys — role/tab/aria-selected/rovi
   assert.ok(gids.includes('window_k4third+window_references'), `Ctrl+G paired the focused frame with the floating partner by recency (${gids.join(', ')})`);
   assert.equal(manager.groups().find((g) => g.windowIds.includes('window_references')).activeWindowId, 'window_references', 'the initiator is the active member');
 });
+
+test('Stage-6 K5: the announcer is a polite live region; lifecycle ops announce state-derived text (<=120 chars)', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const announcer = root.children.find((c) => c.classList.contains('freeform-announcer'));
+  assert.ok(announcer, 'the announcer is mounted with the desk');
+  assert.equal(announcer.getAttribute('role'), 'status');
+  assert.equal(announcer.getAttribute('aria-live'), 'polite');
+  manager.open('layers', { rect: { x: 40, y: 40, width: 300, height: 240 } });
+  assert.ok(String(announcer.textContent).startsWith('Layers opened'), `open announced: ${announcer.textContent}`);
+  manager.focus('window_layers');
+  const titleOf = (wid) => {
+    const f = root.children.find((c) => c.dataset && c.dataset.windowId === wid);
+    const h = f.children.find((c) => c.classList.contains('freeform-window-head'));
+    return h.children.find((c) => c.classList.contains('freeform-window-title'));
+  };
+  titleOf('window_layers').dispatch('keydown', { key: 'Enter', ctrlKey: true });
+  assert.ok(String(announcer.textContent).startsWith('Layers maximised'), `maximise announced: ${announcer.textContent}`);
+  const shelfHost = makeNode('div');
+  manager.attachShelf(shelfHost);
+  titleOf('window_layers').dispatch('keydown', { key: 'm', ctrlKey: true });
+  assert.ok(String(announcer.textContent).startsWith('Layers minimised to shelf'), `minimise announced: ${announcer.textContent}`);
+  assert.ok(announcer.textContent.length <= 121, 'announcements bounded (120 chars + the zero-width tick)');
+});
