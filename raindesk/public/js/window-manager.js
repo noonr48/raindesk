@@ -58,10 +58,17 @@
         throw new Error(`surface id must be a short slug: ${surface && surface.id}`);
       }
       if (registry.has(surface.id)) return registry.get(surface.id);
+      // Stage-2 P1: the coordinate authority of this surface's persisted
+      // geometry. Content surfaces default to WORLD (canonical units);
+      // only explicitly classified application chrome stays 'screen'.
+      if (surface.coordinateSpace !== undefined && surface.coordinateSpace !== 'world' && surface.coordinateSpace !== 'screen') {
+        throw new Error(`surface coordinateSpace must be 'world' or 'screen': ${surface.coordinateSpace}`);
+      }
       const def = Object.freeze({
         id: surface.id,
         title: String(surface.title || surface.id),
         entityType: surface.entityType || 'generic_panel',
+        coordinateSpace: surface.coordinateSpace === 'screen' ? 'screen' : 'world',
         createController: typeof surface.createController === 'function' ? surface.createController : null,
         minimumSize: Object.freeze({
           width: Math.max(120, Number(surface.minimumSize && surface.minimumSize.width) || 280),

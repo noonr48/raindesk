@@ -1429,3 +1429,14 @@ test('structural ops dispatched inside the create-response window carry the ADOP
   assert.equal(min.op.window.generation, 1, 'send-time ref construction: the ADOPTED generation, never the mint-time 0');
   assert.equal(min.op.window.incarnationId, create.op.incarnationId, 'same incarnation the create minted');
 });
+
+test('Stage-2 P1: surfaces carry a coordinateSpace classification (world default; explicit screen chrome; bad values rejected)', () => {
+  const def = wm.CreativeSurfaces.get('layers');
+  assert.equal(def.coordinateSpace, 'world', 'content surfaces default to world');
+  wm.CreativeSurfaces.register({ id: 'chrome_probe', title: 'Chrome', entityType: 'generic_panel', coordinateSpace: 'screen' });
+  assert.equal(wm.CreativeSurfaces.get('chrome_probe').coordinateSpace, 'screen', 'explicit screen chrome accepted');
+  assert.throws(() => wm.CreativeSurfaces.register({ id: 'bad_space', title: 'Bad', coordinateSpace: 'pixel' }), /coordinateSpace/);
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'public', 'js', 'freeform-surfaces.js'), 'utf8');
+  assert.equal((src.match(/coordinateSpace: 'world',/g) || []).length, 7, 'every shipped freeform surface is explicitly world-classified');
+});
