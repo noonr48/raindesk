@@ -2156,3 +2156,60 @@ test('Stage-6 K3: lifecycle keys — Ctrl+Enter maximise/restore toggle, Ctrl+M 
   titleOf('window_k3world').dispatch('keydown', { key: 'w', ctrlKey: true, shiftKey: true });
   assert.equal(manager.state('window_k3world'), null, 'Ctrl+Shift+W real close');
 });
+
+test('Stage-6 K4: tablist semantics + group keys — role/tab/aria-selected/roving tabindex, arrow keynav switches, Ctrl+Tab cycles, Ctrl+T tears out, Ctrl+G groups by focus recency', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const titleOf = (wid) => {
+    const f = root.children.find((c) => c.dataset && c.dataset.windowId === wid);
+    const h = f.children.find((c) => c.classList.contains('freeform-window-head'));
+    return h.children.find((c) => c.classList.contains('freeform-window-title'));
+  };
+  const frameOf = (wid) => root.children.find((c) => c.dataset && c.dataset.windowId === wid);
+  const tabsOf = (wid) => { const f = frameOf(wid); return f.children.find((c) => c.classList.contains('freeform-window-tabs')).children; };
+
+  manager.open('references', { rect: { x: 100, y: 100, width: 300, height: 220 } });
+  manager.open('layers', { rect: { x: 500, y: 300, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+
+  const tabs = tabsOf('window_references');
+  assert.equal(tabs.length, 2, 'tab strip renders both members');
+  assert.ok(tabs.every((tb) => tb.getAttribute('role') === 'tab'), 'tabs carry role=tab');
+  assert.equal(frameOf('window_references').children.find((c) => c.classList.contains('freeform-window-tabs')).getAttribute('role'), 'tablist', 'strip carries role=tablist');
+  assert.equal(tabs.find((tb) => tb.dataset.tabFor === 'window_references').getAttribute('aria-selected'), 'true', 'active tab aria-selected=true');
+  assert.equal(tabs.find((tb) => tb.dataset.tabFor === 'window_layers').getAttribute('aria-selected'), 'false');
+  assert.equal(tabs.find((tb) => tb.dataset.tabFor === 'window_references').getAttribute('tabindex'), '0', 'roving tabindex: active is the tab stop');
+  assert.equal(tabs.find((tb) => tb.dataset.tabFor === 'window_layers').getAttribute('tabindex'), '-1');
+
+  // arrow keynav on the tab element switches (and group.activate persists)
+  tabs.find((tb) => tb.dataset.tabFor === 'window_references').dispatch('keydown', { key: 'ArrowRight' });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.state('window_layers').state === 'tabbed' && manager.groups()[0].activeWindowId, 'window_layers', 'ArrowRight switched the active tab');
+  const act = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.activate').pop();
+  assert.ok(act, 'the switch committed group.activate');
+
+  // Ctrl+Tab cycles on the title
+  titleOf('window_layers').dispatch('keydown', { key: 'Tab', ctrlKey: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.groups()[0].activeWindowId, 'window_references', 'Ctrl+Tab cycled back');
+
+  // Ctrl+T tears the active member out
+  titleOf('window_references').dispatch('keydown', { key: 't', ctrlKey: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.state('window_references').state, 'floating', 'Ctrl+T tore the active member out to floating');
+  assert.equal(manager.groups()[0].windowIds.includes('window_layers'), true, 'the group survives with the remaining member');
+
+  // Ctrl+G groups the focused frame with the most-recently-focused OTHER floating frame
+  // (window_layers stayed TABBED in its singleton group — the partner filter rightly skips it)
+  wm.CreativeSurfaces.register({ id: 'k4third', title: 'K4 Third', entityType: 'k4_panel', coordinateSpace: 'screen' });
+  manager.open('k4third', { rect: { x: 700, y: 120, width: 280, height: 200 } });
+  manager.focus('window_references');
+  titleOf('window_references').dispatch('keydown', { key: 'g', ctrlKey: true });
+  await new Promise((r) => setTimeout(r, 5));
+  const gids = manager.groups().map((g) => g.windowIds.slice().sort().join('+'));
+  assert.ok(gids.includes('window_k4third+window_references'), `Ctrl+G paired the focused frame with the floating partner by recency (${gids.join(', ')})`);
+  assert.equal(manager.groups().find((g) => g.windowIds.includes('window_references')).activeWindowId, 'window_references', 'the initiator is the active member');
+});

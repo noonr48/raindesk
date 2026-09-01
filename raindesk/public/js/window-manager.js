@@ -469,6 +469,7 @@
       const head = el(document, 'header', 'freeform-window-head');
       const tabsSlot = el(document, 'nav', 'freeform-window-tabs');
       tabsSlot.setAttribute('aria-label', 'window tabs');
+      tabsSlot.setAttribute('role', 'tablist'); // Stage-6 K4: the ARIA tablist pattern
       const title = el(document, 'span', 'freeform-window-title', model.title);
       title.setAttribute('tabindex', '-1');
       const actions = el(document, 'span', 'freeform-window-actions');
@@ -525,6 +526,34 @@
           if ((e.key === 'w' || e.key === 'W') && e.shiftKey) { e.preventDefault(); close(model.windowId); return; } // shift guards the destructive close
           if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); keyboardDock(model, e.key === 'ArrowLeft' ? 'left' : 'right'); return; }
           if (e.key === 'ArrowDown') { e.preventDefault(); keyboardUndock(model); return; }
+          // Stage-6 K4: group keys — tab cycle (best-effort where the browser
+          // delivers Ctrl+Tab), tear-out, pairwise grouping by focus recency.
+          if (e.key === 'Tab') {
+            const g = groupFor(model.windowId);
+            if (!g) return;
+            e.preventDefault();
+            const ids = g.windowIds;
+            const idx = ids.indexOf(model.windowId);
+            const nextIdx = e.shiftKey ? (idx - 1 + ids.length) % ids.length : (idx + 1) % ids.length;
+            switchTab(ids[nextIdx]);
+            return;
+          }
+          if (e.key === 't' || e.key === 'T') {
+            const g = groupFor(model.windowId);
+            if (!g) return;
+            e.preventDefault();
+            const fr = effectiveRect(model);
+            tearOut(model.windowId, fr.x + 40, fr.y + 40);
+            return;
+          }
+          if (e.key === 'g' || e.key === 'G') {
+            const partner = focusOrder.find((id) => id !== model.windowId && windows.has(id)
+              && windows.get(id).state !== 'minimised' && windows.get(id).state !== 'tabbed');
+            if (!partner) return;
+            e.preventDefault();
+            groupWindows([model.windowId, partner], { activeWindowId: model.windowId });
+            return;
+          }
           return;
         }
         const GRID = e.altKey ? 32 : 8;
@@ -1639,12 +1668,34 @@
         const tab = el(document, 'button', 'freeform-window-tab' + (memberId === model.windowId ? ' active' : ''));
         tab.type = 'button';
         tab.textContent = member.title;
+        // Stage-6 K4: the ARIA tablist pattern — role=tab, aria-selected,
+        // roving tabindex (active tab is the tab stop), arrow keynav.
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-selected', memberId === model.windowId ? 'true' : 'false');
+        tab.setAttribute('tabindex', memberId === model.windowId ? '0' : '-1');
+        tab.setAttribute('aria-label', String(member.title));
         // Distinct attribute from frames: tabs must never collide with
         // window elements on data-window-id (live-caught: querySelector
         // returned the embedded tab before the frame and the smoke's
         // hidden-check timed out while the product state was correct).
         tab.dataset.tabFor = memberId;
         tab.addEventListener('click', () => switchTab(memberId));
+        tab.addEventListener('keydown', (e) => {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+          e.preventDefault();
+          const ids = groupFor(memberId).windowIds; // live: the group may have changed since render
+          const idx = ids.indexOf(memberId);
+          const nextIdx = e.key === 'ArrowRight' ? (idx + 1) % ids.length : (idx - 1 + ids.length) % ids.length;
+          switchTab(ids[nextIdx]);
+          // Roving focus follows the selection (ARIA tabs pattern)
+          const activeFrame = windows.get(ids[nextIdx]);
+          if (activeFrame && activeFrame.frame) {
+            const tabs = activeFrame.tabsSlot ? activeFrame.tabsSlot.children : [];
+            const nextTab = tabs.find((tn) => tn.dataset && tn.dataset.tabFor === ids[nextIdx]);
+            if (nextTab && nextTab.focus) nextTab.focus();
+          }
+        });
         installTabTear(tab, memberId);
         model.tabsSlot.appendChild(tab);
       }
