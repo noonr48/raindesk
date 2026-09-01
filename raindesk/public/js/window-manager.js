@@ -569,6 +569,15 @@
      * blur, tab hidden — is a TERMINAL that cancels, never commits.
      * close() revokes any live gesture before destroying the window. */
     const activeGestures = new Map(); // windowId -> { onCancel, onHidden, cancel }
+    /** Stage-4 G4: grouped members share ONE gesture identity — the
+     * group's. A second contact on another member's tab is refused by the
+     * same per-key lock (Round-6: one group-scoped gesture lock governs
+     * the aggregate). */
+    function gestureOwnerKey(model) {
+      if (!model) return null;
+      const group = groupFor(model.windowId);
+      return model.state === 'tabbed' && group ? `group:${group.groupId}` : model.windowId;
+    }
     function beginGesture(windowId, pointerId, cancel) {
       if (activeGestures.has(windowId)) return null; // busy: another gesture owns this window
       const samePointer = (ev) => !ev || ev.pointerId === undefined || ev.pointerId === pointerId;
@@ -606,10 +615,16 @@
       activeGestures.delete(windowId);
     }
     function abortGesturesFor(windowId) {
-      const bundle = activeGestures.get(windowId);
-      if (!bundle) return;
-      endGesture(windowId);
-      try { bundle.cancel(); } catch (_e) {}
+      // Stage-4 G4: a grouped member's close/drop aborts under BOTH keys —
+      // its own and the group's shared gesture identity.
+      const groupKey = gestureOwnerKey(windows.get(windowId));
+      for (const key of [windowId, groupKey && groupKey !== windowId ? groupKey : null]) {
+        if (!key) continue;
+        const bundle = activeGestures.get(key);
+        if (!bundle) continue;
+        endGesture(key);
+        try { bundle.cancel(); } catch (_e) {}
+      }
     }
 
     /* Phase 5: live snap preview — a calm ghost of where a drag would
@@ -719,7 +734,7 @@
         };
         // One gesture per window, for the whole down->up lifecycle: a second
         // contact on this window is refused (kernel lock, GPT Pro round-3).
-        session = beginGesture(current.windowId, start.pointerId, cancel);
+        session = beginGesture(gestureOwnerKey(current), start.pointerId, cancel);
         if (!session) return; // another gesture owns this window
         const move = (ev) => {
           if (ev.pointerId !== start.pointerId) return; // foreign pointer: never steer another gesture
@@ -813,7 +828,7 @@
           // The lock is acquired BEFORE pointer capture so a refused second
           // pointer is never left captured without an owning session
           // (GPT Pro round-4).
-          const session = beginGesture(model.windowId, e.pointerId, () => cancel({ pointerId: start.pointerId }));
+          const session = beginGesture(gestureOwnerKey(model), e.pointerId, () => cancel({ pointerId: start.pointerId }));
           if (!session) return; // another gesture owns this window
           try { grip.setPointerCapture(e.pointerId); } catch (_e) {}
           const move = (ev) => {
@@ -1408,7 +1423,7 @@
         };
         // Kernel: one gesture per window; environment interruption cancels
         // cleanly (tab tear mutates only at up, so cancel = detach).
-        const session = beginGesture(memberId, pid, detach);
+        const session = beginGesture(gestureOwnerKey(windows.get(memberId)) || memberId, pid, detach);
         if (!session) return; // another gesture owns this window
         // Pointer capture (GPT Pro round-5): without it, a release OUTSIDE
         // the viewport never delivers pointerup to the document, stranding

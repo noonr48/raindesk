@@ -1690,3 +1690,34 @@ test('Stage-4 G3: grouped geometry/lifecycle commits ride group.setFrame — mem
   assert.equal(manager.groups()[0].frame.presentation.kind, 'floating');
   assert.equal(manager.state('window_references').state, 'tabbed');
 });
+
+test('Stage-4 G4: one group-scoped gesture lock — a second contact on another member tab is refused', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  manager.open('layers', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+  // Live group gesture: pointer 1 drags the ACTIVE member's header.
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  const head = frame.querySelector('.freeform-window-head');
+  head.dispatch('pointerdown', { button: 0, clientX: 200, clientY: 150, pointerId: 1 });
+  fakeDocument.dispatch('pointermove', { clientX: 260, clientY: 150, buttons: 1, pointerId: 1 });
+  // Second contact (pointer 2) on the OTHER member's tab: the group-scoped
+  // lock must refuse it — the tear never starts.
+  const strip = frame.querySelector('.freeform-window-tabs');
+  strip._rect = { left: 0, top: 0, right: 1000, bottom: 40 };
+  const tab = strip.querySelectorAll('.freeform-window-tab').find((t) => t.dataset.tabFor === 'window_layers');
+  tab._rect = { left: 10, top: 0, right: 80, bottom: 40 };
+  tab.dispatch('pointerdown', { button: 0, clientX: 40, clientY: 20, pointerId: 2 });
+  fakeDocument.dispatch('pointermove', { clientX: 900, clientY: 500, buttons: 1, pointerId: 2 });
+  fakeDocument.dispatch('pointerup', { clientX: 900, clientY: 500, pointerId: 2 });
+  assert.equal(manager.groups().length, 1, 'the refused second gesture never tore the member out');
+  assert.equal(manager.groups()[0].windowIds.length, 2, 'membership intact');
+  // Release the live gesture.
+  fakeDocument.dispatch('pointerup', { clientX: 260, clientY: 150, pointerId: 1 });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(manager.groups()[0].windowIds.length, 2, 'settled cleanly');
+});
