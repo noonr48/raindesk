@@ -9,6 +9,7 @@ Executed 2026-08-28 on `chatgpt/raindesk-v2-integration`. Every step landed as i
 | S2 boot reconciliation seam | `7f50952` | full suite green + real-Chrome journey `{"ok":true,"steps":25}` zero console errors |
 | S3–S5 WindowManager cutover (merged per LEDGER L-3) | `8d04732` | suite 447/447 (8 obsolete v3-class tests retired, 3 v4 replacements); journey 25/25 with server-side witness on `GET /api/workspace/v4`; animatic reload smoke ok; grep criterion: ZERO v3 workspace writes in window-manager.js |
 | S6 Partner actions through the v4 executor | `78d01c4` | partner lib tests 4/4 incl. identity-exact revert discriminator; suite 449/449 |
+| S7 spec-review repair round | (this commit) | F1: persist() now mints a per-gesture mutationId on the spatial lane (resize discriminator pins it); F2: criterion-2 deterministic reload-no-resurrection test added (lib/tests/workspace-v4-client-outbox.test.js — real store + real client, readV4 + tombstone + legacy-guard witnesses) |
 
 ## Journey-caught defect (the gate earning its keep)
 

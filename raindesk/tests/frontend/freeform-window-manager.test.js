@@ -200,7 +200,7 @@ function v4ApiFixture({ record = [], doc } = {}) {
       return Promise.resolve({ ok: true, intentId: payload.intentId, duplicate: false, structuralRevision, changed });
     },
     patchWorkspaceSpatial(windowId, generation, body) {
-      record.push({ kind: 'spatial', windowId, generation, patch: body.patch || {} });
+      record.push({ kind: 'spatial', windowId, generation, patch: body.patch || {}, mutationId: body.mutationId });
       return Promise.resolve({ ok: true, spatialRevision: 1, spatialVersion: 2, structuralRevision, window: { ref: { windowId, generation, incarnationId: body.incarnationId } } });
     },
     getWorkspaceV4() {
@@ -672,6 +672,7 @@ test('resize commit persists once with the final rect', async () => {
   assert.equal(last.windowId, id);
   assert.equal(last.patch.width, 420);
   assert.equal(last.patch.height, 330);
+  assert.ok(last.mutationId, 'gesture commits carry a per-gesture mutationId (plan S4: the deduped spatial lane)');
 });
 
 test('snap zones render during a header drag for a default-supported surface and emphasize the settling edge', () => {

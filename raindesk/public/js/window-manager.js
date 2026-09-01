@@ -183,13 +183,15 @@
      * our own incarnation means the server closed/replaced it — drop the
      * local ghost instead of fighting; transient failures warn once and
      * keep the window usable (the next gesture re-commits latest truth). */
+    let mutationSeq = 0;
+    const mintMutationId = () => `mut_${Date.now().toString(36)}_${(mutationSeq++).toString(36)}`;
     function persist(model) {
       if (!v4 || !model.ref) return Promise.resolve(model);
       const next = writeChain.then(() => v4.spatial(model.ref, {
         x: Math.round(model.rect.x), y: Math.round(model.rect.y),
         width: Math.round(model.rect.width), height: Math.round(model.rect.height),
         zIndex: model.zIndex,
-      })).then((res) => {
+      }, mintMutationId())).then((res) => {
         model.persisted = true; model.persistFailed = false;
         const row = res && res.window;
         if (row && row.ref) { model.ref = { ...row.ref }; if (row.spatialVersion) model.spatialVersion = row.spatialVersion; }
