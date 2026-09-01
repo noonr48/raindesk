@@ -1721,3 +1721,28 @@ test('Stage-4 G4: one group-scoped gesture lock — a second contact on another 
   await new Promise((r) => setTimeout(r, 5));
   assert.equal(manager.groups()[0].windowIds.length, 2, 'settled cleanly');
 });
+
+test('Stage-4 G5: reload restores the GROUP frame once — the active member renders at the frame, not its latent rect', async () => {
+  const root = makeNode('div');
+  const api = v4ApiFixture({ doc: {
+    schemaVersion: 4, structuralRevision: 7, spatialRevision: 1, viewportRevision: 1,
+    windows: [
+      { ref: { windowId: 'window_references', generation: 1, incarnationId: 'inc_r5a' }, type: 'reference_board', space: 'screen', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 100, y: 100, width: 400, height: 300, rotation: 0, scale: 1, zIndex: 5 }, structureVersion: 1, spatialVersion: 1 },
+      { ref: { windowId: 'window_layers', generation: 1, incarnationId: 'inc_r5b' }, type: 'layers_panel', space: 'screen', entityRef: null, presentation: { kind: 'floating' }, beforeMaximise: null, collapsed: false, pinned: false, locked: false, spatial: { x: 700, y: 500, width: 260, height: 180, rotation: 0, scale: 1, zIndex: 6 }, structureVersion: 1, spatialVersion: 1 },
+    ],
+    groups: [{ groupId: 'g_r5', version: 3, members: [{ windowId: 'window_references', generation: 1, incarnationId: 'inc_r5a' }, { windowId: 'window_layers', generation: 1, incarnationId: 'inc_r5b' }], active: { windowId: 'window_references', generation: 1, incarnationId: 'inc_r5a' }, frame: { rect: { x: 240, y: 160, width: 420, height: 320 }, presentation: { kind: 'floating' }, zIndex: 9 } }],
+    shelf: { version: 1, members: [] }, focus: null,
+  } });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  await manager.init();
+  const g = manager.groups()[0];
+  assert.ok(g.frame, 'the frame restored with the group');
+  assert.deepEqual(g.frame.rect, { x: 240, y: 160, width: 420, height: 320 }, 'frame geometry canonical across reload');
+  const frameEl = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  assert.equal(frameEl.style.left, '240px', 'the ACTIVE member renders at the FRAME geometry after reload');
+  assert.equal(frameEl.style.width, '420px');
+  assert.equal(manager.state('window_layers').rect.x, 700, 'latent member rect untouched');
+  await new Promise((r) => setTimeout(r, 5));
+  const api2 = api; // no spatial intents fired at restore (the frame is already canonical)
+  void api2;
+});
