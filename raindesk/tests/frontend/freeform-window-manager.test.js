@@ -2024,9 +2024,10 @@ test('Stage-6 K1: logical focus() MOVES DOM focus; frames are named regions; res
   assert.equal(fakeDocument.activeElement, titleElB, 'close() restored DOM focus to the remaining frame (recency)');
 
   // minimise the last window: no frames remain — the chain falls to the shelf chip
-  manager.attachShelf(root);
+  const shelfHost = makeNode('div'); // dedicated host, mirroring app.js — renderShelf's innerHTML='' would clear a shared root
+  manager.attachShelf(shelfHost);
   manager.minimise('window_references');
-  const chip = root.children.find((c) => c.classList && c.classList.contains('freeform-shelf-chip'));
+  const chip = shelfHost.children.find((c) => c.classList && c.classList.contains('freeform-shelf-chip'));
   assert.ok(chip, 'shelf chip rendered');
   assert.equal(fakeDocument.activeElement, chip, 'minimise() fell through to the shelf chip (keyboard Enter restores)');
 });
@@ -2100,4 +2101,58 @@ test('Stage-6 K2: keyboard arrows move/resize — screen clamp + minimums, world
   assert.equal(manager.state('window_references').rect.x, before, 'member latent rect UNTOUCHED by grouped nudge');
   const setF = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.setFrame').pop();
   assert.ok(setF, 'grouped nudge committed through group.setFrame (the frame owner)');
+});
+
+test('Stage-6 K3: lifecycle keys — Ctrl+Enter maximise/restore toggle, Ctrl+M minimise, Ctrl+Shift+W real close, Ctrl+arrows dock/undock with the same intents pointer gestures emit', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  const titleOf = (wid) => {
+    const f = root.children.find((c) => c.dataset && c.dataset.windowId === wid);
+    const h = f.children.find((c) => c.classList.contains('freeform-window-head'));
+    return h.children.find((c) => c.classList.contains('freeform-window-title'));
+  };
+  manager.open('references', { rect: { x: 100, y: 100, width: 300, height: 220 } });
+  manager.focus('window_references');
+  const t = titleOf('window_references');
+
+  t.dispatch('keydown', { key: 'Enter', ctrlKey: true });
+  assert.equal(manager.state('window_references').state, 'maximised', 'Ctrl+Enter maximises');
+  t.dispatch('keydown', { key: 'Enter', ctrlKey: true });
+  assert.equal(manager.state('window_references').state, 'floating', 'Ctrl+Enter again restores');
+
+  t.dispatch('keydown', { key: 'ArrowLeft', ctrlKey: true });
+  assert.equal(manager.state('window_references').state, 'docked', 'Ctrl+Left docks left');
+  assert.equal(manager.state('window_references').dock, 'left');
+  await new Promise((r) => setTimeout(r, 5));
+  const dockIntent = record.filter((c) => c.kind === 'intent' && c.op.kind === 'window.setPresentation' && c.op.mode === 'docked').pop();
+  assert.ok(dockIntent, 'dock committed through window.setPresentation (the drag lane)');
+  assert.equal(dockIntent.op.edge, 'left');
+
+  t.dispatch('keydown', { key: 'ArrowDown', ctrlKey: true });
+  assert.equal(manager.state('window_references').state, 'floating', 'Ctrl+Down undocks to floating');
+  assert.equal(manager.state('window_references').dock, null);
+  await new Promise((r) => setTimeout(r, 5));
+  const floatIntent = record.filter((c) => c.kind === 'intent' && c.op.kind === 'window.setPresentation' && c.op.mode === 'floating').pop();
+  assert.ok(floatIntent, 'undock committed with floatingAt placement (the drag-off-edge lane)');
+
+  // world surface docking keeps the canonical rect latent (Stage-2 P2)
+  wm.CreativeSurfaces.register({ id: 'k3world', title: 'K3 World', entityType: 'sequence_strip', coordinateSpace: 'world' });
+  manager.open('k3world', { rect: { x: 5000, y: 9000, width: 400, height: 300 } });
+  manager.focus('window_k3world');
+  titleOf('window_k3world').dispatch('keydown', { key: 'ArrowRight', ctrlKey: true });
+  assert.equal(manager.state('window_k3world').state, 'docked', 'world surface docks (rail presentation)');
+  assert.equal(manager.state('window_k3world').rect.x, 5000, 'canonical world rect LATENT under dock (P2: docking is presentation only)');
+  titleOf('window_k3world').dispatch('keydown', { key: 'ArrowDown', ctrlKey: true });
+  assert.equal(manager.state('window_k3world').state, 'floating');
+
+  // Ctrl+M minimises to the shelf (dedicated host — a shared root would lose every frame to renderShelf's innerHTML='')
+  const shelfHost = makeNode('div');
+  manager.attachShelf(shelfHost);
+  t.dispatch('keydown', { key: 'm', ctrlKey: true });
+  assert.equal(manager.state('window_references').state, 'minimised', 'Ctrl+M minimises');
+  // Ctrl+Shift+W really closes (the shift guard keeps accidental closes off)
+  titleOf('window_k3world').dispatch('keydown', { key: 'w', ctrlKey: true, shiftKey: true });
+  assert.equal(manager.state('window_k3world'), null, 'Ctrl+Shift+W real close');
 });

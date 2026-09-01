@@ -512,6 +512,21 @@
         if (e.key === 'Escape') { e.preventDefault(); title.textContent = model.title; title.blur(); }
         // Stage-6 K2: keyboard move/resize — only when NOT renaming.
         if (title.hasAttribute('contenteditable')) return;
+        // Stage-6 K3: lifecycle keys ride the SAME lanes pointer gestures do.
+        if (e.ctrlKey || e.metaKey) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const gfT = groupedFrame(model);
+            if (model.state === 'maximised' || (gfT && gfT.presentation && gfT.presentation.kind === 'maximised')) unmaximise(model.windowId);
+            else maximise(model.windowId);
+            return;
+          }
+          if (e.key === 'm' || e.key === 'M') { e.preventDefault(); minimise(model.windowId); return; }
+          if ((e.key === 'w' || e.key === 'W') && e.shiftKey) { e.preventDefault(); close(model.windowId); return; } // shift guards the destructive close
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); keyboardDock(model, e.key === 'ArrowLeft' ? 'left' : 'right'); return; }
+          if (e.key === 'ArrowDown') { e.preventDefault(); keyboardUndock(model); return; }
+          return;
+        }
         const GRID = e.altKey ? 32 : 8;
         const MOVES = { ArrowLeft: [-GRID, 0], ArrowRight: [GRID, 0], ArrowUp: [0, -GRID], ArrowDown: [0, GRID] };
         if (!(e.key in MOVES)) return;
@@ -1127,6 +1142,48 @@
         keyPersistTimers.delete(model.windowId);
         if (grouped) persistFrame(model); else persist(model);
       }, 120));
+    }
+
+    /** Stage-6 K3: keyboard dock/undock — mirrors the drag lanes exactly:
+     * grouped frames ride group.setFrame presentations; screen surfaces bake
+     * the rail rect (geo.dockRect), world surfaces keep the canonical rect
+     * latent (Stage-2 P2 — docking is presentation, never a coordinate
+     * authority). Registry policy gates edges (default left/right). */
+    function keyboardDock(model, edge) {
+      if (model.state === 'minimised') return;
+      const surface = surfaceFor(model);
+      if (!surface || !surface.supportedStates.includes('docked') || !surface.dockEdges.includes(edge)) return;
+      const gf = groupedFrame(model);
+      if (gf) {
+        gf.presentation = { kind: 'docked', edge };
+        renderAll();
+        if (v4 && model.ref) queueIntent(() => {
+          const g = groupFor(model.windowId);
+          return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'docked', edge } } };
+        });
+        return;
+      }
+      if (geo.dockRect && !isWorld(model)) model.rect = geo.dockRect(edge, model.rect, metrics());
+      model.dock = edge;
+      transition(model, 'docked');
+      renderFrame(model);
+      if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'docked', edge }));
+    }
+    function keyboardUndock(model) {
+      const gf = groupedFrame(model);
+      if (gf) {
+        gf.presentation = { kind: 'floating' };
+        renderAll();
+        if (v4 && model.ref) queueIntent(() => {
+          const g = groupFor(model.windowId);
+          return { kind: 'group.setFrame', member: { ...model.ref }, expectedGroupVersion: g ? g.version : undefined, patch: { presentation: { kind: 'floating' } } };
+        });
+        return;
+      }
+      if (model.state !== 'docked') return;
+      model.dock = null; transition(model, 'floating');
+      renderFrame(model);
+      if (v4 && model.ref) queueIntent(() => ({ kind: 'window.setPresentation', window: { ...model.ref }, mode: 'floating', floatingAt: { x: Math.round(model.rect.x), y: Math.round(model.rect.y) } }));
     }
 
     /** Stage-6 K1: deterministic focus restore after a frame leaves the desk
