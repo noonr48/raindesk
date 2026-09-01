@@ -3,8 +3,8 @@
 /**
  * Stage-5 V3 — the viewport/browser matrix harness.
  *
- * One server, one Chromium, five viewports (320×568, 768×1024, 1280×720,
- * 1440×900, 1920×1080). Per viewport: fresh page (metrics override set
+ * One server, one Chromium, six viewports (320×568, 768×1024, 1280×720,
+ * 1440×900, 1920×1080, 2560×1080). Per viewport: fresh page (metrics override set
  * BEFORE navigation), boot ?freeform=1, seed an extreme off-screen screen
  * window, wait for the reflow convergence (reachable title bar), reload at
  * the same viewport, prove the window restores reachable, and require zero
