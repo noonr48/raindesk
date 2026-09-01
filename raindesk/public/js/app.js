@@ -633,14 +633,20 @@
             if (state.freeform) state.freeform.refreshAll();
           } catch (_e) { /* proposals need the local server */ }
         };
-        state.freeform.init().then(() => {
-          if (!state.freeform.list().length) {
-            state.freeform.open('scenes');
-            state.freeform.open('layers');
-          }
-          loadCast();
-          loadProposals();
-        }).catch(() => {});
+        // v4 cutover S2: durable outbox reconciliation precedes restore — a
+        // pending close from a previous session settles before auto-open can
+        // resurrect anything (the design's boot-reconcile rule).
+        state.v4 = window.RaindeskV4Client ? window.RaindeskV4Client.V4Client({ api: API }) : null;
+        (state.v4 ? state.v4.replay() : Promise.resolve()).catch(() => {})
+          .then(() => state.freeform.init())
+          .then(() => {
+            if (!state.freeform.list().length) {
+              state.freeform.open('scenes');
+              state.freeform.open('layers');
+            }
+            loadCast();
+            loadProposals();
+          }).catch(() => {});
       }
     } catch (_freeformError) { /* the freeform desk is additive; never block boot */ }
 
