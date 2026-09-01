@@ -191,7 +191,7 @@ function read() {
       const BACKUP_PATH = `${V3_PATH}.pre-v4.bak`;
       try {
         if (fs.existsSync(V3_PATH) && !fs.existsSync(BACKUP_PATH)) fs.copyFileSync(V3_PATH, BACKUP_PATH);
-      } catch (_e) { /* best-effort evidence: migration proceeds even on a read-only dir */ }
+      } catch (e) { console.warn('[workspace-v4] .pre-v4.bak backup failed (migration proceeds):', e && e.message || e); }
       cache = seedFromV3(); atomicWrite(cache); return cache;
     }
     throw e;

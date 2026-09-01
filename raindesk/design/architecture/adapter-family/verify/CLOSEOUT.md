@@ -16,7 +16,7 @@ suite 500/500 · journey {ok:true,steps:38} zero console errors · matrix 6/6 (i
 
 ## Honest limitations
 - The groups diff translator is coarse-grained per-group (membership diff + activate), not a full reorder translator (group.reorder exists on the v4 lane; legacy setGroups carries no order semantics beyond windowIds — mapped as leave/join).
-- v4-mirror failures on structural routes surface typed but leave the request half-served only in the v3-write-fails-after-v4 path (single-process sequential; no such failure observed; the next request re-syncs from v4).
+- Impl-repair round (validate-first architecture): every adapter route now runs v3 validation and the v3 write FIRST (a v3-refusing payload leaves BOTH stores untouched), with the v4 mirror reading the v3 row as SSOT afterwards. A v4-mirror typed failure surfaces with the v3 row standing — retry repairs (the live-row branch re-mirrors), replacing the old unrepairable v4-only half-serve.
 - The .pre-v4.bak backup is best-effort (a read-only data dir proceeds without it — logged in code, not silently).
 
 ## Scope deviations

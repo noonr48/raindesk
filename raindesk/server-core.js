@@ -465,13 +465,20 @@ async function handleApi(req, res, url, deps) {
           { code: 'WINDOW_NAMESPACE_RESERVED' },
         ));
       }
-      if (!liveRow) {
-        // (2) missing LEGACY ids (world_*/panel_*/...) with no identity
-        // history create generation 1 through a synthetic v4 intent — the
-        // row lands in BOTH stores in one request; v4 first (identity
-        // leads, the v3 upsert follows in this same request).
-        try {
-          const type = body && WINDOW_TYPES_COMPAT.has(body.type) ? body.type : 'generic_panel';
+      // Adapter-family impl-repair (validate-first): the v3 upsert LEADS —
+      // its validation is authoritative for the legacy API, and a 400 now
+      // leaves BOTH stores untouched (the old v4-first order persisted a
+      // synthetic row that a v3 rejection could never repair). The v4
+      // mirror follows, reading the v3 row as SSOT (space/entityRef/geometry).
+      const hadV4Row = Boolean(workspaceV4.read().windows.find((w) => w.ref.windowId === legacyId));
+      const bodyCarriesGeometry = body && [body.x, body.y, body.width, body.height, body.zIndex].some(Number.isFinite);
+      const object = workspace.upsertObject(body); // v3 validates + writes first
+      const v3row = workspace.read().windows.find((w) => w.windowId === legacyId);
+      try {
+        if (!hadV4Row) {
+          // (2) missing LEGACY ids create generation 1 through a synthetic v4
+          // intent — space/entityRef/geometry carried FROM THE V3 ROW (the
+          // v4 defaults would mislabel world rows as screen and drop the ref).
           workspaceV4.applyIntent({
             actorId: 'legacy_adapter',
             intentId: `syn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
@@ -479,39 +486,37 @@ async function handleApi(req, res, url, deps) {
               kind: 'window.create',
               windowId: legacyId,
               incarnationId: `inc_${Math.random().toString(36).slice(2, 14)}`,
-              type,
-              x: body && body.x, y: body && body.y,
-              width: body && body.width, height: body && body.height,
+              type: WINDOW_TYPES_COMPAT.has(v3row && v3row.type) ? v3row.type : 'generic_panel',
+              space: v3row && v3row.space,
+              entityRef: (v3row && v3row.entityRef) || undefined,
+              x: v3row && v3row.x, y: v3row && v3row.y,
+              width: v3row && v3row.width, height: v3row && v3row.height,
             },
           });
-        } catch (error) {
-          if (error instanceof HttpError && error.code) return v4Envelope(res, error);
-          throw error;
-        }
-      } else if (body && [body.x, body.y, body.width, body.height, body.zIndex].some(Number.isFinite)) {
-        // (3) live legacy row updates land in v4 SPATIALLY too (the stores
-        // must not diverge; a patch v4 refuses surfaces typed — never a
-        // silent mirror gap).
-        try {
-          workspaceV4.applySpatial(legacyId, liveRow.ref.generation, {
-            incarnationId: liveRow.ref.incarnationId, // compaction guard keys on the incarnation (the client always sends it)
+        } else if (bodyCarriesGeometry && v3row) {
+          // (3) live legacy row updates land in v4 SPATIALLY too — mirrored
+          // from the v3 row's STORED values (already clamped by v3 finite();
+          // v4 rounds to its canonical integer convention — no divergence).
+          const live = workspaceV4.read().windows.find((w) => w.ref.windowId === legacyId);
+          workspaceV4.applySpatial(legacyId, live.ref.generation, {
+            incarnationId: live.ref.incarnationId,
             patch: {
-              ...(Number.isFinite(body.x) ? { x: Math.round(body.x) } : {}),
-              ...(Number.isFinite(body.y) ? { y: Math.round(body.y) } : {}),
-              ...(Number.isFinite(body.width) ? { width: Math.round(body.width) } : {}),
-              ...(Number.isFinite(body.height) ? { height: Math.round(body.height) } : {}),
-              ...(Number.isFinite(body.zIndex) ? { zIndex: Math.round(body.zIndex) } : {}),
+              x: Math.round(v3row.x), y: Math.round(v3row.y),
+              width: Math.round(v3row.width), height: Math.round(v3row.height),
+              zIndex: Math.round(v3row.zIndex || 0),
             },
           });
-        } catch (error) {
-          if (error instanceof HttpError && error.code) return v4Envelope(res, error);
-          throw error;
         }
+        workspaceV4.bumpLegacyRevision(workspace.read().revision); // the object route couples too (impl follow-up e)
+      } catch (error) {
+        if (error instanceof HttpError && error.code) return v4Envelope(res, error); // typed mirror failure: v3 stands, retry repairs
+        throw error;
       }
+      // Revision rides along so freeform clients keep lastRevision in sync with
+      // ungated upserts (each upsert bumps it; without adoption every later
+      // gated structural write 409s).
+      return sendJson(res, 200, { ok: true, object, revision: workspace.read().revision, legacyRevision: workspaceV4.read().legacyRevision });
     }
-    // Revision rides along so freeform clients keep lastRevision in sync with
-    // ungated upserts (each upsert bumps it; without adoption every later
-    // gated structural write 409s).
     return sendJson(res, 200, { ok: true, object: workspace.upsertObject(body), revision: workspace.read().revision, legacyRevision: workspaceV4.read().legacyRevision });
   }
   if (method === 'POST' && route === '/api/workspace/viewport') {
@@ -533,13 +538,26 @@ async function handleApi(req, res, url, deps) {
   const mirrorOp = (op) => workspaceV4.applyIntent({ actorId: 'legacy_adapter', intentId: mintIntentId(), op });
   const v4RowOf = (id) => workspaceV4.read().windows.find((w) => w.ref.windowId === id) || null;
   function mirrorGroupsToV4(requested) {
+    // Impl-repair (order-insensitivity): dissolves FIRST (locators need
+    // members), then ALL leaves (freeing cross-group movers), then creates/
+    // joins/activations — a legal cross-group move with destination before
+    // source in the payload can no longer 409 mid-request.
     const requestedIds = new Set(requested.map((g) => g.groupId));
     for (const g of workspaceV4.read().groups) {
       if (!requestedIds.has(g.groupId) && g.members.length) mirrorOp({ kind: 'group.dissolve', member: { ...g.members[0] } });
     }
     for (const req of requested) {
       const live = workspaceV4.read().groups.find((g) => g.groupId === req.groupId);
-      const memberRefs = (Array.isArray(req.windowIds) ? req.windowIds : []).map(v4RowOf).filter(Boolean).map((r) => ({ ...r.ref }));
+      if (!live) continue;
+      const wanted = Array.isArray(req.windowIds) ? req.windowIds : [];
+      for (const m of live.members) if (!wanted.includes(m.windowId)) {
+        mirrorOp({ kind: 'group.leave', member: { ...m }, expectedGroupId: live.groupId });
+      }
+    }
+    for (const req of requested) {
+      const wanted = Array.isArray(req.windowIds) ? req.windowIds : [];
+      const memberRefs = wanted.map(v4RowOf).filter(Boolean).map((r) => ({ ...r.ref }));
+      const live = workspaceV4.read().groups.find((g) => g.groupId === req.groupId);
       if (!live) {
         if (memberRefs.length) {
           const activeRow = req.activeWindowId ? v4RowOf(req.activeWindowId) : null;
@@ -548,10 +566,6 @@ async function handleApi(req, res, url, deps) {
         continue;
       }
       const liveIds = live.members.map((m) => m.windowId);
-      const wanted = Array.isArray(req.windowIds) ? req.windowIds : [];
-      for (const id of liveIds) if (!wanted.includes(id)) {
-        const row = v4RowOf(id); if (row) mirrorOp({ kind: 'group.leave', member: { ...row.ref }, expectedGroupId: live.groupId });
-      }
       for (const id of wanted) if (!liveIds.includes(id)) {
         const row = v4RowOf(id); if (row) mirrorOp({ kind: 'group.join', member: { ...row.ref }, target: { groupId: live.groupId } });
       }
@@ -559,6 +573,17 @@ async function handleApi(req, res, url, deps) {
       if (activeRow && (!live.active || live.active.windowId !== req.activeWindowId)) {
         mirrorOp({ kind: 'group.activate', groupId: live.groupId, member: { ...activeRow.ref } });
       }
+    }
+  }
+  // Impl-repair (half-serve): replicate v3's group validation BEFORE any
+  // mutation — a v3-refusing payload must leave BOTH stores untouched.
+  function validateGroupsPayload(groups) {
+    const known = new Set(workspace.read().windows.map((w) => w.windowId));
+    for (const group of groups) {
+      if (!group || typeof group !== 'object') throw new HttpError(400, 'group must be an object');
+      if (!Array.isArray(group.windowIds) || !group.windowIds.length) throw new HttpError(400, 'group windowIds must be a non-empty array');
+      for (const id of group.windowIds) if (!known.has(id)) throw new HttpError(400, `groups reference unknown window ${id}`);
+      if (group.activeWindowId != null && !known.has(group.activeWindowId)) throw new HttpError(400, `groups reference unknown window ${group.activeWindowId}`);
     }
   }
   function mirrorShelfToV4(requestedIds) {
@@ -577,11 +602,15 @@ async function handleApi(req, res, url, deps) {
     const body = await readJson(req, 256 * 1024);
     if (Array.isArray(body && body.groups)) {
       if (legacyStale(body)) return legacyConflict(res);
-      try { mirrorGroupsToV4(body.groups); }
-      catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; }
+      try { validateGroupsPayload(body.groups); }
+      catch (error) { if (error instanceof HttpError) return sendJson(res, error.status, { error: error.message, workspace: workspace.read(), ...DEPRECATION }); throw error; }
     }
     try {
-      const ws = workspace.setGroups(body && body.groups, { baseRevision: undefined });
+      const ws = workspace.setGroups(body && body.groups, { baseRevision: undefined }); // v3 validates + writes first
+      if (Array.isArray(body && body.groups)) {
+        try { mirrorGroupsToV4(body.groups); }
+        catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; } // typed mirror failure: v3 stands, retry repairs
+      }
       workspaceV4.bumpLegacyRevision(workspace.read().revision);
       return sendJson(res, 200, { ok: true, workspace: ws, ...DEPRECATION });
     } catch (error) {
@@ -593,13 +622,13 @@ async function handleApi(req, res, url, deps) {
   }
   if (method === 'POST' && route === '/api/workspace/shelf') {
     const body = await readJson(req, 64 * 1024);
-    if (Array.isArray(body && body.windowIds)) {
-      if (legacyStale(body)) return legacyConflict(res);
-      try { mirrorShelfToV4(body.windowIds); }
-      catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; }
-    }
+    if (Array.isArray(body && body.windowIds) && legacyStale(body)) return legacyConflict(res);
     try {
-      const ws = workspace.setShelf(body && body.windowIds, { baseRevision: undefined });
+      const ws = workspace.setShelf(body && body.windowIds, { baseRevision: undefined }); // v3 validates + writes first
+      if (Array.isArray(body && body.windowIds)) {
+        try { mirrorShelfToV4(body.windowIds); }
+        catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; }
+      }
       workspaceV4.bumpLegacyRevision(workspace.read().revision);
       return sendJson(res, 200, { ok: true, workspace: ws, ...DEPRECATION });
     } catch (error) {
@@ -612,16 +641,14 @@ async function handleApi(req, res, url, deps) {
   if (method === 'POST' && route === '/api/workspace/window/delete') {
     const body = await readJson(req, 64 * 1024);
     const deleteTarget = body && body.windowId;
-    if (deleteTarget && workspace.read().windows.some((w) => w.windowId === deleteTarget)) {
-      if (legacyStale(body)) return legacyConflict(res);
-      const row = v4RowOf(deleteTarget);
-      if (row) {
-        try { mirrorOp({ kind: 'window.close', window: { ...row.ref } }); }
+    if (deleteTarget && workspace.read().windows.some((w) => w.windowId === deleteTarget) && legacyStale(body)) return legacyConflict(res);
+    const v4RowBeforeDelete = deleteTarget ? v4RowOf(deleteTarget) : null;
+    try {
+      const ws = workspace.deleteWindow(body && body.windowId, { baseRevision: undefined }); // v3 validates + deletes first
+      if (v4RowBeforeDelete) {
+        try { mirrorOp({ kind: 'window.close', window: { ...v4RowBeforeDelete.ref } }); }
         catch (error) { if (error instanceof HttpError && error.code) return v4Envelope(res, error); throw error; }
       }
-    }
-    try {
-      const ws = workspace.deleteWindow(body && body.windowId, { baseRevision: undefined });
       workspaceV4.bumpLegacyRevision(workspace.read().revision);
       return sendJson(res, 200, { ok: true, workspace: ws, ...DEPRECATION });
     } catch (error) {
