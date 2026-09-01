@@ -1,5 +1,7 @@
 # STAGE-1 v4 layer — accepted risks & deferred items
 
+STATUS 2026-08-28: the client cutover LANDED (S0–S6, commits 67f8708→78d01c4 on `chatgpt/raindesk-v2-integration`; see design/architecture/stage1-client-cutover/verify/CLOSEOUT.md). WindowManager reads readV4 and writes identity-exact intents + spatial PATCHes through a durable localStorage outbox; Partner workspace actions for `window_*` targets route through the v4 executor with WindowRef-bearing receipts/inverses. The register below stands unchanged; F8's aliasing caveat now applies to the in-process v4 client seam (adoptResponse clones refs at the boundary).
+
 Recorded 2026-08-27 after the dual-lens review cycles: `b8cbaed` (blocked, 11 findings) → `d074732` (repairs) → advisory-closure tip.
 Scope context: STAGE-1 lib/server layer, PRE-cutover, single-user desk, Node single-process. Each item names the stage where it must be revisited.
 
