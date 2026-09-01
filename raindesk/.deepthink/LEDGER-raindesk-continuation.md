@@ -24,3 +24,16 @@ STATE: integration branch b452dd1 pushed (441/441, journey 25/25, animatic reloa
 LIVE THREADS: execute shelf steps S0→S7 sequentially; per-step commits; sequential dual review at S7 (crew 1).
 OPEN FORKS: none; Stage-2 world-coordinate shelf comes AFTER cutover per Round-6 order.
 NEXT ENTRY POINT: S0 — title model/DOM split in public/js/window-manager.js with discriminator tests, then S1 v4-client module.
+
+### L-3 — Shelf steps S3/S4/S5 as three commits, or one cutover commit?
+Phase: S2 landed (boot seam), before WindowManager cutover
+Options:
+  A Three incremental commits (init-read-v4, then spatial, then structural) — works if each intermediate state is coherent / dead if read and write cutovers disagree: init reading v4 while persist still writes v3 breaks the round-trip (v4 seeds from v3 ONCE; new v3 rows never appear in v4 — restored desks would silently lose every window opened after the flip).
+  B ONE cutover commit flipping read AND write together — works because the design itself treats client migration as one move ("Move WindowManager to v4 create/intent/spatial APIs and durable outbox" is a single migration-order step) / dead if the commit grows too large to review — mitigated by the shelf's per-path contracts already naming every seam.
+Chosen: B — deciding criterion: store coherence trumps commit granularity; a partial flip is not a shippable intermediate state.
+Rejected: A — each intermediate state ships a broken round-trip.
+Resources: consulted workspace-v4 seeded-once code (read) + STAGE-1 DESIGN migration order; did NOT consult reviewers pre-hoc (S7 dual review covers the merged commit).
+Would change my mind: the merged red-test surface proves unmanageable mid-flight (then split along read-only vs write-only seams, still shipping both before journey runs).
+
+STATE: S0 67f8708, S1 2042009, S2 7f50952 pushed; cutover (merged S3-S5) in flight.
+NEXT ENTRY POINT: read OPS payloads (group.*, setFlags, close), rewrite WindowManager write/read paths, rebase frontend tests to v4 adapters, switch journey server asserts to GET /api/workspace/v4, suite+journey, commit as the cutover.
