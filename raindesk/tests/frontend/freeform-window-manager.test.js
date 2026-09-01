@@ -1746,3 +1746,42 @@ test('Stage-4 G5: reload restores the GROUP frame once — the active member ren
   const api2 = api; // no spatial intents fired at restore (the frame is already canonical)
   void api2;
 });
+
+test('Stage-4 G3 repair: grouped RESIZE commit rides the frame, cancel rolls back the frame, maximised frames render fullscreen', async () => {
+  const record = [];
+  const root = makeNode('div');
+  const api = v4ApiFixture({ record });
+  const manager = wm.WindowManager({ root, document: fakeDocument, api, viewportMetrics: () => ({ width: 1280, height: 800 }), geometry: {} });
+  manager.open('references', { rect: { x: 100, y: 100, width: 400, height: 300 } });
+  manager.open('layers', { rect: { x: 600, y: 420, width: 260, height: 180 } });
+  manager.groupWindows(['window_references', 'window_layers'], { activeWindowId: 'window_references' });
+  await new Promise((r) => setTimeout(r, 5));
+
+  // RESIZE COMMIT: the frame grows; the member's latent rect and spatial lane untouched.
+  const frame = root.children.find((f) => f.dataset && f.dataset.windowId === 'window_references');
+  const h = resizeHandleFor(frame, 'se');
+  h.dispatch('pointerdown', { button: 0, clientX: 500, clientY: 400, pointerId: 1 });
+  h.dispatch('pointermove', { clientX: 540, clientY: 440, pointerId: 1 });
+  h.dispatch('pointerup', { clientX: 540, clientY: 440, pointerId: 1 });
+  await new Promise((r) => setTimeout(r, 5));
+  const g = manager.groups()[0];
+  assert.equal(g.frame.rect.width, 440, 'the GROUP frame grew by the resize');
+  assert.equal(manager.state('window_references').rect.width, 400, 'member latent rect untouched');
+  assert.equal(record.filter((c) => c.kind === 'spatial' && c.windowId === 'window_references').length, 0, 'ZERO member spatial PATCH for grouped resize (spec F1)');
+  const rs = record.filter((c) => c.kind === 'intent' && c.op.kind === 'group.setFrame').pop();
+  assert.ok(rs && rs.op.patch.rect && rs.op.patch.rect.width === 440, 'the resize committed through group.setFrame');
+
+  // RESIZE CANCEL: the frame rolls back; the member's latent rect is never clobbered.
+  h.dispatch('pointerdown', { button: 0, clientX: 540, clientY: 440, pointerId: 2 });
+  h.dispatch('pointermove', { clientX: 600, clientY: 520, pointerId: 2 });
+  h.dispatch('pointercancel', { clientX: 600, clientY: 520, pointerId: 2 });
+  assert.equal(manager.groups()[0].frame.rect.width, 440, 'the frame restored to the pre-gesture rect (spec F2)');
+  assert.equal(manager.state('window_references').rect.width, 400, 'member latent rect never received frame geometry (spec F2)');
+  assert.equal(manager.state('window_references').rect.x, 100, 'latent position intact');
+
+  // MAXIMISED FRAME renders fullscreen (spec F3): the frame owns the presentation.
+  manager.maximise('window_references');
+  assert.ok(frame.classList.contains('freeform-window-maximised'), 'the maximised GROUP frame renders fullscreen (spec F3)');
+  manager.unmaximise('window_references');
+  assert.ok(!frame.classList.contains('freeform-window-maximised'), 'unmaximise restores the frame render');
+});

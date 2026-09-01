@@ -500,7 +500,7 @@
       frame.hidden = false;
       const gfRender = model.state === 'tabbed' ? groupedFrame(model) : null;
       const frameMaximised = Boolean(gfRender && gfRender.presentation && gfRender.presentation.kind === 'maximised');
-      if (model.state === 'maximised' && model.restoreRect) {
+      if ((model.state === 'maximised' && model.restoreRect) || frameMaximised) {
         const m = metrics();
         frame.classList.add('freeform-window-maximised');
         frame.style.left = '0px'; frame.style.top = '0px';
@@ -868,7 +868,11 @@
             session.end();
             try { grip.releasePointerCapture(ev.pointerId); } catch (_e) {}
             detach();
-            await persist(current);
+            // Stage-4 G3 (spec F1): grouped resize commits ride the GROUP frame
+            // (group.setFrame) — never a member spatial PATCH (the drag
+            // path's pattern, else the resize is lost on reload).
+            if (groupedFrame(current)) await persistFrame(current);
+            else await persist(current);
           };
           // Interrupted resize reverts to the pre-gesture rect instead of
           // committing half a gesture (GPT Pro round-4 finding). The kernel
@@ -881,7 +885,13 @@
             // mid-resize anchored-edge undock must restore state and dock
             // too — rect alone left a floating model with the docked row on
             // the server, visibly flipping again on reload.
-            current.rect = { ...start.rect };
+            // Stage-4 G3 (spec F2): for a GROUPED member the gesture mutated
+            // the GROUP frame's rect — roll THAT back (start.rect captured
+            // from effectiveRect = the frame) and leave the member's latent
+            // rect untouched.
+            const gfCancel = groupedFrame(current);
+            if (gfCancel) gfCancel.rect = { ...start.rect };
+            else current.rect = { ...start.rect };
             if (current.state !== start.state || current.dock !== start.dock || current.collapsed !== start.collapsed) {
               current.dock = start.dock;
               current.collapsed = start.collapsed;
