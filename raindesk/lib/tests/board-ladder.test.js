@@ -125,3 +125,13 @@ test('manual lane moves pick the state the lane implies — lane and state never
   assert.throws(() => board.moveShot('S03', 'limbo'), (e) => e.status === 400);
   assert.throws(() => board.moveShot('S99', 'set'), (e) => e.status === 404);
 });
+
+test('a hand-edited board whose lane disagrees with its state is reconciled on read (lane derives from state)', () => {
+  const raw = JSON.parse(fs.readFileSync(board.BOARD_PATH, 'utf8'));
+  const s05 = raw.shots.find((s) => s.id === 'S05');
+  s05.state = 'queued'; s05.lane = 'set'; // contradiction written by hand
+  fs.writeFileSync(board.BOARD_PATH, JSON.stringify(raw, null, 2));
+  const read = board.readBoard().shots.find((s) => s.id === 'S05');
+  assert.equal(read.state, 'queued');
+  assert.equal(read.lane, 'unplanned', 'read-time coercion wins over the hand-edited lane');
+});

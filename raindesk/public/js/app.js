@@ -1480,8 +1480,15 @@
     if (state.shot.lane === lane) { toast(`already ${lane}`); return; }
     try {
       const res = await API.moveShot(state.shot.id, lane);
-      if (res && res.board) state.board = res.board;
-      state.shot.lane = lane;
+      if (res && res.board) {
+        state.board = res.board;
+        // Re-point the active shot into the FRESH board: the server derives
+        // lane from the ladder state (set->locked, unplanned->queued, ...), so
+        // the stale alias would show the new lane with the old state.
+        const fresh = res.board.shots.find((s) => s.id === state.shot.id);
+        if (fresh) state.shot = fresh;
+      }
+      if (state.shot.lane !== lane) state.shot.lane = lane;
       updateHint(true);
       renderPanel();
       toast(`moved ${state.shot.id} → ${lane} 🎬`);

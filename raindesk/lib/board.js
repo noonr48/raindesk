@@ -100,13 +100,24 @@ function readBoard({ seed = null } = {}) {
     throw new HttpError(500, 'data/board.json is not valid JSON');
   }
   if (!isValidBoard(board)) throw new HttpError(500, 'data/board.json is malformed');
+  return reconcileLanes(board);
+}
+
+/** Lanes are derived from ladder state; a hand-edited board.json (or one
+ * written before the ladder existed) may disagree. Coerce on read so every
+ * reader sees one truth; the next write persists it. */
+function reconcileLanes(board) {
+  for (const shot of board.shots) {
+    const lane = laneForState(STATES.includes(shot.state) ? shot.state : PRE_LADDER);
+    if (shot.lane !== lane) shot.lane = lane;
+  }
   return board;
 }
 
 function readBoardFile() {
   const board = JSON.parse(fs.readFileSync(BOARD_PATH, 'utf8'));
   if (!isValidBoard(board)) throw new HttpError(500, 'data/board.json is malformed');
-  return board;
+  return reconcileLanes(board);
 }
 
 function getShot(shotId) {
@@ -217,5 +228,5 @@ function ladderCounts(board = readBoard()) {
 module.exports = {
   LANES, LADDER, PRE_LADDER, STATES, VERBS, AGENT_ADVANCES, PICK_ADVANCES,
   SEED_BOARD, BOARD_PATH, readBoard, writeBoard, moveShot, getShot,
-  laneForState, applyVerb, advanceShot, ladderCounts,
+  laneForState, reconcileLanes, applyVerb, advanceShot, ladderCounts,
 };
