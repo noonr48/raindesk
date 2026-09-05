@@ -52,6 +52,8 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 6. **The agent gets eyes and hands.** Context compiler (shot context packet from the decision-structured docs), visual observer (clean/markup/mask/reference channels), typed operations, candidate critic (scope/canon/continuity checks), project librarian (decisions, rejections with reasons, next useful action).
 7. **Open taste question — default imagery.** Unresolved: the register of default imagery, or whether every shot should start from an agent blocking pass instead of any canned default.
 
+**Direction update 2026-09-05 (owner):** the current visual target is the owner's desk concept in `open-design-artifacts/owner-concept-2026-08-19/` — a warm paper desk of freely arranged, snapping paper panels (Scenes, Layers, storyboard sheet, Reference Board, Takes, Beat Sheet, Partner) where the agent proposes in sticky notes and the owner accepts or corrects. Verbatim: *"the user only does the correction, with the bulk of it controlled by the agent … most of it is chatting with the agent to nail down concept and designs and have the agent generate and the user there to refine … both working from a baseline of comprehensive documents like The Held Sky design documentation."* The v1 phone mockup (`open-design-artifacts/companion-app-v1/`) is historical.
+
 **Shipped in the 2026-08-15 foundation pass:** tool-state honesty fix (UI pin test), same-origin asset mirroring (phone-safe delivery via /api/assets), real shot switching (click chips/title, `[`/`]` keys, last-shot restore).
 
 ## 5 · Repo map
