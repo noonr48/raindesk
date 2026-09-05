@@ -114,15 +114,24 @@ function getShot(shotId) {
   return board.shots.find((s) => s.id === shotId) || null;
 }
 
-/** Move a shot to a lane; validates both ids; returns the updated board. */
+/** Manual lane move (the v1 lanes-sheet buttons). Lanes are DERIVED from the
+ * ladder state, so a manual move is an owner override that picks the state
+ * the lane implies: set -> locked, unplanned -> queued, in_dev -> the shot's
+ * current ladder state if it is already on the ladder, else breakdown.
+ * Lane and state can therefore never disagree (reviewer finding, 2026-09-05). */
 function moveShot(shotId, lane) {
   if (!LANES.includes(lane)) {
     throw new HttpError(400, `unknown lane "${lane}" (expected one of: ${LANES.join(', ')})`);
   }
   const board = readBoard();
-  const shot = board.shots.find((s) => s.id === shotId);
-  if (!shot) throw new HttpError(404, `unknown shot "${shotId}"`);
-  shot.lane = lane;
+  const shot = findShot(board, shotId);
+  const state = shot.state || PRE_LADDER;
+  let to;
+  if (lane === 'set') to = 'locked';
+  else if (lane === 'unplanned') to = PRE_LADDER;
+  else to = (LADDER.includes(state) && state !== 'locked') ? state : 'breakdown';
+  if (to !== state) transition(shot, to, { actor: 'owner', verb: 'MOVE', note: `lane ${lane}` });
+  else shot.lane = laneForState(state);
   board.updatedAt = new Date().toISOString();
   writeBoard(board);
   return board;

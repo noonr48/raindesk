@@ -102,3 +102,26 @@ test('routes: /api/board/verb, /api/board/advance, /api/board/ladder', async () 
   const unknown = await post('/api/board/verb', { shotId: 'S02', verb: 'DANCE' });
   assert.equal(unknown.status, 400);
 });
+
+test('manual lane moves pick the state the lane implies — lane and state never disagree (reviewer finding)', () => {
+  let b = board.moveShot('S03', 'set');
+  let s03 = b.shots.find((s) => s.id === 'S03');
+  assert.equal(s03.state, 'locked');
+  assert.equal(s03.lane, 'set');
+  assert.equal(s03.history.at(-1).verb, 'MOVE');
+  b = board.moveShot('S03', 'unplanned');
+  s03 = b.shots.find((s) => s.id === 'S03');
+  assert.equal(s03.state, 'queued');
+  assert.equal(s03.lane, 'unplanned');
+  b = board.moveShot('S03', 'in_dev');
+  s03 = b.shots.find((s) => s.id === 'S03');
+  assert.equal(s03.state, 'breakdown', 'in_dev re-enters the ladder at its start');
+  assert.equal(s03.lane, 'in_dev');
+  b = board.advanceShot('S03', 'candidates');
+  b = board.moveShot('S03', 'in_dev');
+  s03 = b.shots.find((s) => s.id === 'S03');
+  assert.equal(s03.state, 'candidates', 'a shot already on the ladder keeps its state on an in_dev move');
+  for (const shot of b.shots) assert.equal(shot.lane, board.laneForState(shot.state || 'queued'), `${shot.id} lane derives from state`);
+  assert.throws(() => board.moveShot('S03', 'limbo'), (e) => e.status === 400);
+  assert.throws(() => board.moveShot('S99', 'set'), (e) => e.status === 404);
+});
