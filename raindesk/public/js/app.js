@@ -1400,7 +1400,7 @@
       const id = document.createElement('strong'); id.textContent = shot.id;
       const copy = document.createElement('span');
       const beat = shot.beat || 'untitled scene'; copy.textContent = beat.length > 58 ? beat.slice(0, 57) + '…' : beat;
-      const lane = document.createElement('small'); lane.textContent = String(shot.lane || '').replace('_', ' ');
+      const lane = document.createElement('small'); lane.textContent = `${String(shot.state || 'queued')} · ${String(shot.lane || '').replace('_', ' ')}`;
       row.append(id, copy, lane);
       row.addEventListener('click', () => openShot(shot.id));
       wrap.appendChild(row);

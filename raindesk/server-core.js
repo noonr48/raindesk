@@ -389,6 +389,27 @@ async function handleApi(req, res, url, deps) {
   }
 
   /* Spatial workspace: stable world-space objects shared by UI and Partner. */
+  // The film's shot ladder (BOARD.md): owner verbs and agent advances.
+  if (method === 'POST' && route === '/api/board/verb') {
+    const body = await readJson(req, 64 * 1024);
+    const shotId = body.shotId ?? body.shot;
+    if (typeof shotId !== 'string' || !shotId) throw new HttpError(400, 'shotId is required');
+    if (typeof body.verb !== 'string' || !body.verb) throw new HttpError(400, 'verb is required (PICK, RED-LINE, SKIP)');
+    const updated = board.applyVerb(shotId, body.verb.toUpperCase(), { note: typeof body.note === 'string' ? body.note : '' });
+    return sendJson(res, 200, { ok: true, board: updated, ladder: board.ladderCounts(updated) });
+  }
+  if (method === 'POST' && route === '/api/board/advance') {
+    const body = await readJson(req, 64 * 1024);
+    const shotId = body.shotId ?? body.shot;
+    if (typeof shotId !== 'string' || !shotId) throw new HttpError(400, 'shotId is required');
+    if (typeof body.to !== 'string' || !body.to) throw new HttpError(400, 'to (next ladder state) is required');
+    const updated = board.advanceShot(shotId, body.to, { note: typeof body.note === 'string' ? body.note : '', actor: 'agent' });
+    return sendJson(res, 200, { ok: true, board: updated, ladder: board.ladderCounts(updated) });
+  }
+  if (method === 'GET' && route === '/api/board/ladder') {
+    const current = board.readBoard();
+    return sendJson(res, 200, { ladder: board.LADDER, preLadder: board.PRE_LADDER, verbs: board.VERBS, counts: board.ladderCounts(current), shots: current.shots.map((s) => ({ id: s.id, state: s.state || board.PRE_LADDER, lane: s.lane, redlines: s.redlines || 0, skips: s.skips || 0 })) });
+  }
   if (method === 'GET' && route === '/api/workspace') {
     return sendJson(res, 200, workspace.readClient());
   }
