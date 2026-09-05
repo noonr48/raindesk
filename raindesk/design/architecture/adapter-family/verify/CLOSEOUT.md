@@ -17,6 +17,7 @@ suite 500/500 · journey {ok:true,steps:38} zero console errors · matrix 6/6 (i
 ## Honest limitations
 - The groups diff translator is coarse-grained per-group (membership diff + activate), not a full reorder translator (group.reorder exists on the v4 lane; legacy setGroups carries no order semantics beyond windowIds — mapped as leave/join).
 - Impl-repair round (validate-first architecture): every adapter route now runs v3 validation and the v3 write FIRST (a v3-refusing payload leaves BOTH stores untouched), with the v4 mirror reading the v3 row as SSOT afterwards. A v4-mirror typed failure surfaces with the v3 row standing — retry repairs (the live-row branch re-mirrors), replacing the old unrepairable v4-only half-serve.
+- Round-trip repair (2026-09-05, 566f28b): the legacy object route's strict LEGACY_IN set rejected the projection's own `updatedAt` stamp, so every SECOND save of a panel 400'd on seeded/real data (fixture data never showed it — first saves are client-built). Server-stamped fields are now stripped before the unknown-key check; regression test + bogus-key discriminator in workspace-legacy-object-adapter.test.js.
 - The .pre-v4.bak backup is best-effort (a read-only data dir proceeds without it — logged in code, not silently).
 
 ## Scope deviations

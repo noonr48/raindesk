@@ -78,6 +78,8 @@ tabbed window's rect belongs to its group frame.
 - **Validation**: whitelist-and-reject (not silent-drop): typed `entityRef`
   (`^(sheet|shot|comic_page|character|note|board|partner|beats|layers|scenes|takes):…`),
   unique `windowId`s, referential integrity for groups/shelf/activeWindowId,
+  (legacy-object input only: server stamps `updatedAt`/`createdAt` that the
+  projection itself emits are IGNORED, not rejected — 566f28b, 2026-09-05),
   numeric clamps retained.
 - `space`/`dock` retained from v2 (utility docking state must survive
   migration).
