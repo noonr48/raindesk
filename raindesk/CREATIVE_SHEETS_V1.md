@@ -107,6 +107,8 @@ A complete post-fix GitHub-hosted five-smoke rerun is **not currently available*
 
 This is an external CI/billing block, not a test assertion. The permanent `Creative Sheets v1` workflow remains read-only and ready to rerun unchanged once Actions execution is restored. Until that happens, this slice must not be described as fully browser-accepted.
 
+**Update 2026-09-05:** Actions runner allocation recovered 2026-08-20. On the integration line (`chatgpt/raindesk-v2-integration` @ 566f28b) `dev/browser-creative-sheets-smoke.js` was re-run locally against a scratch server on 2026-09-05 and passed — after fixing a regression the smoke itself caught: the legacy object route rejected its own `updatedAt` stamp on second saves (commit 566f28b). The five-smoke pending note above is historical.
+
 ## Permanent acceptance gate
 
 `.github/workflows/creative-sheets.yml` is read-only (`contents: read`) and is configured to run:

@@ -97,7 +97,7 @@ async function main() {
     const browserWs = await waitForDevtools(child); cdp = await connectPage(browserWs, APP_URL);
     await waitBoot(cdp); await delay(900);
     let ws = await workspace(cdp);
-    if (ws.schemaVersion !== 2) throw new Error(`expected workspace v2, got ${ws.schemaVersion}`);
+    if (ws.schemaVersion < 2) throw new Error(`expected workspace schema >= 2 (v2 legacy projection still served on v3+), got ${ws.schemaVersion}`);
     for (const id of ['world_shot_S01', 'world_character_primary', 'world_references_main']) {
       const obj = object(ws, id); if (!obj || obj.space !== 'world') throw new Error(`missing world object ${id}: ${JSON.stringify(obj)}`);
     }

@@ -110,7 +110,9 @@ A complete GitHub-hosted native-browser run is currently **pending for an extern
 
 The permanent `.github/workflows/reference-board.yml` workflow is read-only (`contents: read`) and is ready to run the full deterministic suite plus all six native Chromium journeys unchanged once Actions execution is restored.
 
-Reference Board v1 must therefore remain a draft/unaccepted browser slice until that runner executes. The 160/160 deterministic result is not a substitute for the native six-smoke acceptance gate.
+Reference Board v1 must therefore remain a draft/unaccepted browser slice until that runner executes.
+
+**Update 2026-09-05:** GitHub Actions runner allocation recovered on 2026-08-20 (workflow runs on `chatgpt/animatic-adapter-slice-v1` completed with conclusion `success`). On the integration line (`chatgpt/raindesk-v2-integration` @ 566f28b) the native Chromium smoke `dev/browser-reference-board-smoke.js` was re-run locally against a scratch server on 2026-09-05 and passed; `npm test` 506/506. The draft label above is therefore historical.
 
 ## Explicit non-goals
 

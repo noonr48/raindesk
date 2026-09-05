@@ -15,6 +15,15 @@ env:
   # OR the keyless mode (trusted networks only — anyone on the network
   # reaches the desk with no key):
   RAINDESK_REMOTE_UNPROTECTED=1
+  # Where the artist's data lives (default: ./data next to the app). The
+  # owner's real data lives OUTSIDE this tree — point at it explicitly:
+  RAINDESK_DATA_DIR=/absolute/path/to/data
+  # Animatic execution (CPU; no GPU): without all three the animatic
+  # "Preview this" path is fail-closed (planning_only), see
+  # lib/production-adapters.js configuredAnimaticRuntime.
+  RAINDESK_ANIMATIC_EXECUTOR=/absolute/path/to/animatic-executor   # #!/bin/sh wrapper: exec python3 '<creative-contracts>/tools/animatic_compile.py' "$@"
+  RAINDESK_ANIMATIC_PROJECT_ROOT=/absolute/writable/dir
+  RAINDESK_SOURCE_RIGHTS="<explicit rights assertion that travels with every snapshot>"
 ```
 
 - The server refuses remote binds without a long token, and wildcards without

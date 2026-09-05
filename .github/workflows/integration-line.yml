@@ -1,0 +1,27 @@
+name: Integration line (node:test)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'chatgpt/raindesk-v2-integration'
+      - 'main'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: raindesk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Unit + route suites (no browser)
+        run: npm test

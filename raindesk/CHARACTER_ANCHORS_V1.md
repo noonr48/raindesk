@@ -77,6 +77,8 @@ The exact scoped Character Anchors product tree passes **174/174 deterministic N
 
 GitHub Actions is currently refusing runner allocation for this repository due to the account billing/spending-limit state. Therefore the native seven-smoke acceptance run is configured but externally pending. This slice must remain draft until that read-only workflow can execute unchanged.
 
+**Update 2026-09-05:** Actions runner allocation recovered 2026-08-20. On the integration line (`chatgpt/raindesk-v2-integration` @ 566f28b) `dev/browser-character-anchors-smoke.js` was re-run locally against a scratch server on 2026-09-05 and passed; `npm test` 506/506. The draft note above is historical.
+
 ## Non-goals
 
 - no automatic face/identity model invocation yet;

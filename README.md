@@ -4,7 +4,9 @@
 
 Raindesk exists because of one observation: the owner is an excellent **reviewer** and reluctant **producer**. Blank pages stop work; button-chains stop work; tab-switching stops work. So the machine does the producing, the owner reacts — and the reaction *is* the creative act. The product goal is not "a drawing tool"; it is **a place the owner wants to be, where staying costs 30 seconds and still moves the film forward.**
 
-> Status: **v1.1 foundation shipped, hardened through 2026-08-19** — world-space creative desk, revisioned sheets, beat-scoped directing, reference board, durable approvals, and the reviewer-first animatic vertical slice (pacing proposals → Preview this → playable Takes → Keep). A growing node:test suite plus native-Chromium journey smokes (run `cd raindesk && npm test` for the live count); mutation-proven regression tests; receipted verification discipline (see *How we work*). **Open-sourced 2026-08-19 under AGPL-3.0** — use it, improve it, contribute back. AI agents (human- or GPT-driven) are welcome contributors; see `AGENTS.md`.
+> Status (2026-09-05): **integration line `chatgpt/raindesk-v2-integration`** — the v1.1 foundation below plus the Freeform Desk v2 program (unified world-space window manager on the v4 identity-safe workspace protocol; six external-review stages and the adapter family closed 2026-09-02, shelves under `raindesk/design/architecture/`). The freeform desk boots only with `?freeform=1`; the default boot stays the v1.1 desk until the owner accepts it. Serving requires `RAINDESK_DATA_DIR` (the owner's data lives outside the tree) and the animatic executor env (see `raindesk/DEPLOY.md`).
+>
+> Earlier status: **v1.1 foundation shipped, hardened through 2026-08-19** — world-space creative desk, revisioned sheets, beat-scoped directing, reference board, durable approvals, and the reviewer-first animatic vertical slice (pacing proposals → Preview this → playable Takes → Keep). A growing node:test suite plus native-Chromium journey smokes (run `cd raindesk && npm test` for the live count); mutation-proven regression tests; receipted verification discipline (see *How we work*). **Open-sourced 2026-08-19 under AGPL-3.0** — use it, improve it, contribute back. AI agents (human- or GPT-driven) are welcome contributors; see `AGENTS.md`.
 
 ---
 
@@ -13,18 +15,18 @@ Raindesk exists because of one observation: the owner is an excellent **reviewer
 - **Owner = reviewer.** Every loop is: the machine generates candidates → the owner picks / draws corrections / skips. Skipping is always free; offers re-warm later. No streaks, no shame mechanics, no guilt accumulation. (The interaction grammar is borrowed from the owner's own game-design law: *verbs, not branches; offers never expire; refusal is a lawful outcome.*)
 - **One surface.** Phone and desktop, nothing else to open. The companion agent lives *in* the app and never leaves the owner alone while background work runs.
 - **The agent owns all machinery.** ComfyUI, GPU placement, workflow building, model sync, versioning — invisible. The owner never sees a terminal, a node graph, or a file path.
-- **Psychology is a first-class feature.** Variable-reward reveals (each GEN pull is a "will this be THE one?"), visible investment (every correction becomes the agent's carried-forward knowledge), open loops closed kindly.
+- **Psychology is a first-class feature.** Return-state continuity — the owner comes back because state is preserved and something useful is ready, never slot-machine pulls (the earlier variable-reward framing was dropped in the 2026-08-15 amendment, §4); visible investment (every correction becomes the agent's carried-forward knowledge); open loops closed kindly.
 
 ## 2 · What v1 does today
 
 | Capability | Detail |
 |---|---|
 | Full-screen layered canvas | 1024×1024 artboard, contain-fit; phone + desktop layouts (desktop: docked companion drawer) |
-| **Lasso → GEN → commit** | Free-lasso a region → GEN runs **local ComfyUI SDXL inpaint** (Illustrious-XL-v0.1) that redraws *only* the circled region, painted **in place** as a temp overlay — never a mini-preview. Tap GEN again for another take; **COMMIT** merges the winner into the layer; ✕ discards free. |
+| **Lasso → GEN → commit** | Free-lasso a region → GEN runs **local ComfyUI SDXL inpaint** (Illustrious-XL-v0.1) that redraws *only* the circled region, painted **in place** as a temp overlay — never a mini-preview. Tap GEN again for another take; **Keep this** merges the winner into the layer (the button still reads `COMMIT → layer` — the §4 wording change is pending); ✕ discards free. |
 | Proven locality | Live receipt: inside-mask pixel Δ167.7/255, outside Δ2.95/255 — it redraws what you circled and preserves the rest |
 | Pen & layers | 4-color pen with thickness, layer stack (base/pen/gen), visibility, bounded undo |
 | Companion chat | A real agent (headless pi runtime, json-mode) wearing a friend-toned creative preset; knows the film's locked constraints; never times out silently (120 s → warm fallback); concurrency-capped |
-| Board lanes | Shots move `set / in dev / unplanned` — glanceable counters, agent-maintained |
+| Board lanes | Shots move `set / in dev / unplanned` — glanceable counters, agent-maintained. Each shot also carries the film's ladder `state` (`breakdown → candidates → picked → polish → fl2va-test → locked`, BOARD.md) — stored, not yet driven by the app (roadmap) |
 | Test discipline | node:test assertions across unit + route suites (`npm test` prints the live count — never hard-code it here); native-Chromium browser journeys (zero mocks) for every major surface; regression tests are **mutation-proven** (we break the code deliberately to prove the test bites — `killproof_deskfit.py`); receipted runs after every mutation |
 
 **Stack (deliberately boring):** zero-dependency Node http backend; vanilla-JS DOM-free canvas core with its own PNG codec; ComfyUI over HTTP only; one-shot headless `pi` turns for the companion. Loopback-bound by default; trusted-network exposure is an explicit launch choice.
@@ -60,6 +62,8 @@ raindesk/            the app (server.js, lib/, public/, tests/, dev/ browser smo
   BUILD_BRIEF.md     mission contract + acceptance criteria
   DEEP_REVIEW.md     closeout review sheet (paste-or-fail)
   DEPLOY.md          deployment template (env options, incident notes)
+  design/architecture/  per-stage shelves (scope/plan/verify CLOSEOUT) for the freeform-desk program
+  docs/reviews/      external GPT Pro review rounds + STAGE1_V4_DEFERRALS
 BOARD.md             shot board state (S01–S07 seeded from the collapse sequence)
 open-design-artifacts/  the UI mockup this app was built from (v1.1, vision-verified)
 check_atr_root.py    working-root integrity check
