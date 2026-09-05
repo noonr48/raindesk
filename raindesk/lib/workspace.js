@@ -483,6 +483,12 @@ function upsertObject(input = {}) {
     delete mapped.visible;
     if (mapped.collapsed === undefined && mapped.state === 'minimised') mapped.collapsed = true;
   }
+  // Server-stamped projection fields ROUND-TRIP: toLegacyObject spreads the stored
+  // window (updatedAt/createdAt) and legacy clients cache that projection and
+  // re-POST it verbatim on their next save (WorkspaceShell persist()). Ignore the
+  // stamps — rejecting them 400'd every SECOND save of a panel on real data
+  // (2026-09-05 live witness: 4x "unsupported field updatedAt" at boot).
+  for (const stamped of ['updatedAt', 'createdAt']) delete mapped[stamped];
   // Legacy clients may send unknown-to-v3 keys implicitly via spread — strip
   // nothing silently for structural fields; allow only the known legacy set.
   const LEGACY_IN = new Set([...WINDOW_FIELDS, 'id', 'visible']);

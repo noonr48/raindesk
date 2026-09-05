@@ -79,3 +79,17 @@ test('A2 invariant: v3-only types (shot, comic_page) map to generic_panel in the
   const v3row = workspaceV3.read().windows.find((w) => w.windowId === 'panel_shot_thing');
   assert.equal(v3row.type, 'shot', 'the v3 store keeps its native type — the stores agree on identity, not on type vocabulary');
 });
+
+test('legacy round-trip: the route accepts its OWN projection (updatedAt stamp) — second saves must not 400 (2026-09-05 live-witness regression)', async () => {
+  const first = await postObject({ id: 'panel_roundtrip', type: 'layers_panel', space: 'screen', x: 22, y: 96, width: 286, height: 430 });
+  assert.equal(first.status, 200, `first (client-built) save succeeds (got ${first.status}: ${JSON.stringify(first.json)})`);
+  const projected = first.json && first.json.object;
+  assert.ok(projected && typeof projected.updatedAt === 'string', 'the projection carries the server stamp — the exact shape old clients cache and re-POST');
+  const second = await postObject({ ...projected, x: 40, visible: true });
+  assert.equal(second.status, 200, `re-POSTing the cached projection must succeed (got ${second.status}: ${JSON.stringify(second.json)})`);
+  assert.equal(second.json.object.x, 40, 'the geometry change landed');
+  // Discriminator: the validator still bites on a genuinely unknown key.
+  const bogus = await postObject({ ...projected, bogus: 1 });
+  assert.equal(bogus.status, 400, 'unknown keys are still rejected');
+  assert.match(String(bogus.json && bogus.json.error), /unsupported field bogus/);
+});
